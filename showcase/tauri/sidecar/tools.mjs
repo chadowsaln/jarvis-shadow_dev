@@ -418,7 +418,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {} }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {}, respanBridgeUrl = '' }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -1328,7 +1328,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       parameters: z.object({}),
       permission: { level: 'observe', requiresApproval: false, description: 'Check local authenticated browser bridge status for Respan' },
       execute: async () => {
-        const st = await respanBridgeStatus({});
+        const st = await respanBridgeStatus({ configUrl: respanBridgeUrl });
         ui({ kind: 'browser', action: 'respan_bridge', status: st, at: Date.now() });
         return st;
       },
@@ -1346,7 +1346,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
         if (!isRespanPlatformUrl(v.url)) {
           throw new Error('Authenticated browser reading is only supported for https://platform.respan.ai/ URLs.');
         }
-        const r = await readRespanAuthenticatedPage(v.url, {});
+        const r = await readRespanAuthenticatedPage(v.url, { configUrl: respanBridgeUrl });
         ui({ kind: 'browser', action: r.ok ? 'read_authenticated' : 'error', source: 'respan_bridge', url: v.url, title: r.title || '', text: String(r.text || '').slice(0, 1200), elements: Array.isArray(r.elements) ? r.elements.slice(0, 20) : undefined, authWall: r.authWall || null, platform: 'respan', authenticated: !!r.authenticated, error: r.error || undefined, note: r.note || undefined, at: Date.now() });
         return r;
       },

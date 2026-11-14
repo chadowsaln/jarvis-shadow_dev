@@ -22,10 +22,10 @@ const RESPAN_PAGE = 'https://platform.respan.ai/projects/demo';
   assert.equal(d.ok, true);
   assert.equal(d.configured, false);
   assert.match(d.url, /^http:\/\/127\.0\.0\.1:18791$/);
-  const good = getRespanBridgeConfig({ ROAMIES_RESPAN_BROWSER_BRIDGE: 'http://localhost:19999/' });
+  const good = getRespanBridgeConfig({ configUrl: 'http://localhost:19999/' });
   assert.equal(good.ok, true);
   assert.equal(good.url, 'http://localhost:19999');
-  const bad = getRespanBridgeConfig({ ROAMIES_RESPAN_BROWSER_BRIDGE: 'https://evil.example/bridge' });
+  const bad = getRespanBridgeConfig({ configUrl: 'https://evil.example/bridge' });
   assert.equal(bad.ok, false);
   assert.equal(bad.configured, true);
   assert.equal(bad.url, null);
@@ -101,11 +101,11 @@ function withBridgeServer(handler) {
   });
   try {
     const env = { ROAMIES_RESPAN_BROWSER_BRIDGE: srv.url };
-    const st = await respanBridgeStatus({ env });
+    const st = await respanBridgeStatus({ configUrl: srv.url });
     assert.equal(st.available, true, 'bridge reported available');
     assert.equal(st.bridgeUrl, srv.url);
 
-    const r = await readRespanAuthenticatedPage(RESPAN_PAGE, { env });
+    const r = await readRespanAuthenticatedPage(RESPAN_PAGE, { configUrl: srv.url });
     assert.equal(r.ok, true);
     assert.equal(r.authenticated, true);
     assert.equal(r.platform, 'respan');
@@ -125,10 +125,10 @@ function withBridgeServer(handler) {
 // --- unavailable bridge: clear failure, no false success
 {
   const env = { ROAMIES_RESPAN_BROWSER_BRIDGE: 'http://127.0.0.1:1' };
-  const st = await respanBridgeStatus({ env });
+  const st = await respanBridgeStatus({ configUrl: 'http://127.0.0.1:1' });
   assert.equal(st.available, false);
   assert.match(String(st.reason || ''), /cannot reach|unavailable|not/i);
-  const r = await readRespanAuthenticatedPage(RESPAN, { env });
+  const r = await readRespanAuthenticatedPage(RESPAN, { configUrl: 'http://127.0.0.1:1' });
   assert.equal(r.ok, false);
   assert.equal(r.platform, 'respan');
   assert.match(String(r.error || ''), /bridge|unavailable/i);

@@ -759,6 +759,14 @@
         BIND_ROWS.filter(([k]) => b[k]).map(([k, label]) => el('div', { className: 'setting' },
           el('span', {}, label, ui.bindShown.has(k) ? el('small', { className: 'cmd', textContent: b[k] }) : null),
           link('Copy', () => send({ type: 'copy_bind', which: k }), { k: `bind-${k}`, aria: `Copy the command for ${label.toLowerCase()}` })))) : null,
+      group('Respan browser bridge', 'Optional: local HTTP bridge for reading authenticated Respan content from your signed-in browser session.', null,
+        el('div', { className: 'setting' },
+          el('span', {}, 'Bridge URL', el('small', { textContent: 'http://localhost:18791 (default) or custom' })),
+          el('span', { className: 'row-btns' },
+            el('span', { className: 'px field' },
+              el('input', { type: 'url', id: 'respan-bridge-url', value: state.respanBridgeUrl ?? '', placeholder: 'http://localhost:18791', 'aria-label': 'Respan browser bridge URL', autocomplete: 'off', spellcheck: false, 'data-k': 'respan-bridge-url', on: { input: (e) => { ui.respanBridgeUrl = e.target.value; } } })),
+            btn(ui.respanBridgeUrl !== undefined ? 'Save' : 'Set', () => { const v = (ui.respanBridgeUrl ?? '').trim(); send({ type: 'panel_respanbridge', url: v }); }, { k: 'respan-bridge-save', aria: v ? 'Save Respan bridge URL' : 'Set Respan bridge URL' }),
+            v ? link('Clear', () => send({ type: 'panel_respanbridge', url: '' }), { k: 'respan-bridge-clear', aria: 'Clear Respan bridge URL' }) : null))),
     ];
   }
   // Who made Roamies: Ken, live (he's drawn like the looks but isn't one), and where to find him.

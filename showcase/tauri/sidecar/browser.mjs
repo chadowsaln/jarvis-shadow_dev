@@ -121,8 +121,10 @@ function normalizeBridgeUrl(raw) {
   return u.toString().replace(/\/$/, '');
 }
 
-export function getRespanBridgeConfig(env = process.env) {
-  const configuredRaw = env?.[RESPAN_BRIDGE_ENV];
+export function getRespanBridgeConfig({ configUrl = null, env = process.env } = {}) {
+  // Priority: config value > env var > default
+  const fromConfig = configUrl != null && String(configUrl).trim() !== '';
+  const configuredRaw = fromConfig ? configUrl : env?.[RESPAN_BRIDGE_ENV];
   const explicit = configuredRaw != null && String(configuredRaw).trim() !== '';
   const normalized = normalizeBridgeUrl(explicit ? configuredRaw : RESPAN_BRIDGE_DEFAULT);
   if (explicit && !normalized) {
@@ -185,8 +187,8 @@ async function fetchBridgeJson(baseUrl, pathName, body, { fetchFn = globalThis.f
   }
 }
 
-export async function respanBridgeStatus({ env = process.env, fetchFn = globalThis.fetch } = {}) {
-  const cfg = getRespanBridgeConfig(env);
+export async function respanBridgeStatus({ configUrl = null, env = process.env, fetchFn = globalThis.fetch } = {}) {
+  const cfg = getRespanBridgeConfig({ configUrl, env });
   if (!cfg.ok) return { available: false, configured: cfg.configured, bridgeUrl: null, reason: cfg.reason };
   try {
     const r = await fetchBridgeJson(cfg.url, '/status', { platform: 'respan' }, { fetchFn, timeoutMs: 2500 });
@@ -208,11 +210,11 @@ export async function respanBridgeStatus({ env = process.env, fetchFn = globalTh
   return { available: false, configured: cfg.configured, bridgeUrl: cfg.url, reason: 'Authenticated browser bridge is not available.' };
 }
 
-export async function readRespanAuthenticatedPage(url, { env = process.env, fetchFn = globalThis.fetch } = {}) {
+export async function readRespanAuthenticatedPage(url, { configUrl = null, env = process.env, fetchFn = globalThis.fetch } = {}) {
   if (!isRespanPlatformUrl(url)) {
     return { ok: false, url: String(url || ''), error: 'Authenticated browser reading via this bridge is supported only for the Respan platform (https://platform.respan.ai/).' };
   }
-  const cfg = getRespanBridgeConfig(env);
+  const cfg = getRespanBridgeConfig({ configUrl, env });
   if (!cfg.ok) return { ok: false, url: String(url || ''), error: cfg.reason, bridge: { available: false } };
   const consentNote = 'User consent required and assumed granted for this approved read: only visible page content (title/url/text/elements) may be shared with Little Boy; no passwords, cookies, or session tokens are extracted or sent.';
   try {

@@ -118,6 +118,9 @@ const DEFAULTS = {
   fishModel: FISH_CHOICES[0].id, // Drama 3 (most expressive) or S2.1 Pro (natural pace, cheaper)
   geminiVoices: {}, // look → the Gemini voice it speaks in, where picked in the setup guide or the panel (else GEMINI_LOOK_VOICES)
   geminiModel: GEMINI_MODEL, // Flash Lite (quick, cheaper) or Flash (studio quality)
+  // Respan authenticated browser bridge URL (optional). When set, enables reading authenticated Respan platform
+  // content from the user's signed-in browser session via a local extension/bridge (http://localhost:18791).
+  respanBridgeUrl: '',
 };
 const LINUX = process.platform === 'linux';
 // Linux: "x11" or "wayland" (the app says which). Wayland keeps apps from seeing the pointer over other apps and
@@ -518,6 +521,7 @@ const { tools, hands, whereNow, ink, nextTurn } = createTools({
   onInkGone: (why) => logLine('ink_gone', { why }),
   askShell: (msg) => shellCall(msg),
   onMemories: () => panel(),
+  respanBridgeUrl: config.respanBridgeUrl,
   // web_search's side search runs on the chat's own Anthropic sign-in; other providers use the keyless engines.
   sideSearch: async () => {
     if (config.provider !== 'anthropic') return null;
@@ -1879,6 +1883,7 @@ function panelState() {
     intro: !!intro,
     // The latest error anyone saw, for Copy last error.
     problem: lastProblem ? { code: lastProblem.code, at: lastProblem.at } : null,
+    respanBridgeUrl: config.respanBridgeUrl,
   };
 }
 
@@ -2394,6 +2399,41 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (storageKeyProvider(id) !== m.provider) return;
     apiKeyLogin(id, m.key.slice(0, 1000)).then(() => panelNote(signedIn.get(m.provider) ? `${label} is connected.` : `That ${label} key didn't work.`, !signedIn.get(m.provider)))
       .catch((e) => { const p = problem('key', e, { store: KEY_STORE }); panelNote(p.text, true, p); });
+  } else if (m.type === 'panel_respanbridge' && typeof m.url === 'string') {
+    const trimmed = m.url.trim();
+    if (trimmed === '' || /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d+)?\/?$/i.test(trimmed)) {
+      config.respanBridgeUrl = trimmed;
+      saveConfig();
+      // Recreate tools to pick up the new bridge URL
+      const { tools: newTools, hands: newHands, whereNow, ink, nextTurn } = createTools({
+        allowActions: () => config.allowActions, ui, ask, openUrl, userName,
+        speak: (line) => { if (!turnVoice) return false; turnVoice.say(line); return true; },
+        onHandoff: (task) => { activity.handoff(task); panel(); },
+        commitmentsText: () => [commitmentsText(), doneTodayText() && `Done today:\n${doneTodayText()}`].filter(Boolean).join('\n'),
+        onCommitments: (c) => { menu(); scheduleReminders(); showList({ flash: c?.id, seconds: 6 }); },
+        showList: () => showList({ seconds: 20 }),
+        showSystem: (out) => { if (out?.data) ui({ kind: 'system_status', ...out.data, text: out.text, at: Date.now() }); },
+        fmtWhen: (ms) => fmtWhen(ms),
+        onPlan: (args) => trail.plan(args),
+        watchClicks: (on) => send({ type: 'watch_clicks', on: !!on }),
+        onInkGone: (why) => logLine('ink_gone', { why }),
+        askShell: (msg) => shellCall(msg),
+        onMemories: () => panel(),
+        respanBridgeUrl: config.respanBridgeUrl,
+        sideSearch: async () => {
+          if (config.provider !== 'anthropic') return null;
+          const cc = await claudeCodeRoute();
+          if (cc) return { cc, cwd: HOME };
+          const c = await credsFor();
+          return c?.accessToken ? { apiKey: c.accessToken, baseUrl: c.baseUrl } : null;
+        },
+      });
+      // Replace the tools array in place
+      tools.splice(0, tools.length, ...newTools);
+      panelNote(trimmed ? `Respan bridge URL saved: ${trimmed}` : 'Respan bridge URL cleared (will use default).');
+    } else {
+      panelNote('Invalid Respan bridge URL. Must be a localhost/127.0.0.1 address.', true);
+    }
   } else if ((m.type === 'panel_fishkey' || m.type === 'panel_geminikey') && typeof m.key === 'string') voiceKeyLogin({ provider: m.type === 'panel_geminikey' ? 'gemini' : 'fish', given: m.key.slice(0, 1000), note: panelNote }).catch((e) => console.error('voice key', e));
   else if (m.type === 'answer') { pending.get(m.id)?.(m.text ?? null); pending.delete(m.id); }
   // An approval from the panel: only the exact request it was shown, once, before it expires.
