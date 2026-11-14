@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_VOICE, FISH_MODELS, FREE_MODEL, FishVoice, RATE, fishAccount } from './fish.mjs';
 import { StudioVoice, studioStatus } from './voicestudio.mjs';
 import { GEMINI_DEFAULT_VOICE, GEMINI_MODEL, GEMINI_MODELS, GEMINI_PITCH, GEMINI_RATE, GeminiVoice, geminiAccount } from './gemini.mjs';
+import { arabicSupport, cleanSpoken, isArabic, languageOf, pickVoice } from './lang.mjs';
 
 // The services that can speak. models: priciest first, the pick and the ones after it are tried in turn; pick:
 // the one used until the user picks (else the first); freeModel: the one for an account with no credit; rate:
@@ -70,6 +71,9 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   const all = { ...PROVIDERS, fish: { ...PROVIDERS.fish, Voice: FishVoiceImpl, account }, ...providers };
   let P = all.fish; // the service in use
   let key = null, voice = P.defaultVoice, pref = P.pick ?? P.models[0], model = pref, seq = 0, current = null, checking = null;
+  // The user's picks per language for the service in use ({ ar, en }); a language with none uses its own voice.
+  let langVoices = {};
+  const voiceFor = (text) => pickVoice(text, { voices: langVoices, fallback: voice }).voice;
   // The pick and the cheaper ones after it (models run from priciest to free).
   const chain = () => P.models.slice(Math.max(0, P.models.indexOf(pref)));
   let beats = new Map(), recent = [], warming = null; // phrase → [base64 PCM], for the current key, voice and model
@@ -162,15 +166,30 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
       emit({ kind: 'speech', id, end: true, ...(chars ? { chars } : {}) });
       if (current === me) current = null;
     };
+    // VoiceStudio's engine decides whether it can say Arabic at all (OmniVoice can; KittenTTS 0.8 and CosyVoice
+    // can't). Sending it Arabic anyway gets a garbled reply read out, so it's reported and the text stays.
+    const support = arabicSupport('voicestudio', local?.engineName ?? local?.engine);
+    let blocked = false;
     const me = {
       id,
-      say(s) { if (done) return; said.push(s); v.say(s); },
+      say(s) {
+        if (done) return;
+        const t = cleanSpoken(s);
+        if (!t) return;
+        if (isArabic(t) && support.arabic === false) {
+          if (!blocked) { blocked = true; onProblem({ provider: 'voicestudio', reason: 'language', message: support.note }); }
+          return;
+        }
+        said.push(t); v.say(t);
+      },
       beat() { return false; },
       end() { if (!done) v.end(); },
       abort() { if (done) return; done = true; v?.abort(); if (current === me) current = null; },
     };
     v = new LocalVoiceImpl({
       voice: localVoice,
+      // No local voice picked is the engine's default, not the look's Fish voice: hence localVoice as the fallback.
+      voiceFor: (t) => pickVoice(t, { voices: langVoices, fallback: localVoice }).voice,
       onAudio: (pcm, rate) => {
         if (done) return;
         if (!heard) { heard = true; log('speech_first_audio', { id, provider: 'voicestudio', ms: Date.now() - t0 }); if (local && !local.ok) checkLocal(); } // working again: refresh the panel's status
@@ -224,10 +243,12 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
       emit({ kind: 'speech', id, end: true, ...(chars ? { chars } : {}) });
       if (current === me) current = null;
     };
+    // Each sentence can use the user's voice for its language, and Fish gets the language for its normalization.
+    const languageFor = (t) => (languageOf(t) === 'ar' ? 'ar' : null);
     const connect = (m) => {
       tries++;
       v = new P.Voice({
-        key, voice, model: m,
+        key, voice, model: m, voiceFor, languageFor,
         onAudio: (pcm) => {
           if (done) return;
           if (!heard) { heard = true; if (m !== model) model = m; log('speech_first_audio', { id, model: m, ms: Date.now() - t0 }); }
@@ -275,6 +296,12 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
     },
     get pick() { return pref; },
     setVoice(v) { if ((v || P.defaultVoice) !== voice) beats = new Map(); voice = v || P.defaultVoice; if (key) warm(); },
+    // The user's voices per language for the service in use ({ ar: id, en: id }): a sentence is read in the voice for
+    // its own language, else the service's (the look's voice, the engine's default).
+    setLangVoices(voices) { langVoices = voices && typeof voices === 'object' ? { ...voices } : {}; },
+    get langVoices() { return { ...langVoices }; },
+    /** Can the service in use say Arabic, as far as its own docs go? { arabic: true|false|null, evidence, note }. */
+    arabic() { return arabicSupport(localOn ? 'voicestudio' : P.id, local?.engineName ?? local?.engine); },
     // Fish Audio, Gemini or VoiceStudio. Starts clean: the key, voice and model are the old service's, so set them again after.
     setProvider(id) {
       const p = all[id];
@@ -287,7 +314,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
       }
       if (!p || (p === P && !localOn)) return;
       if (key || localOn) stopAll(); // nothing can be playing without a key or VoiceStudio (and nothing is sent when the app is just starting)
-      localOn = false; P = p; key = null; checking = null; warming = null; beats = new Map();
+      localOn = false; P = p; key = null; checking = null; warming = null; beats = new Map(); langVoices = {}; // the old service's picks
       voice = p.defaultVoice; pref = p.pick ?? p.models[0]; model = pref;
     },
     get provider() { return localOn ? 'voicestudio' : P.id; },

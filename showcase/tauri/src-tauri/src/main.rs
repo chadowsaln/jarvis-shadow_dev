@@ -60,6 +60,9 @@ struct Voice(Mutex<Option<Child>>, AtomicUsize);
 struct TalkChord(Mutex<Vec<String>>);
 /// Windows: the downloaded speech model's folder (the sidecar owns the download and says where it is).
 struct VoiceModel(Mutex<Option<String>>);
+/// The microphone the user picked for listening (None: the system default). The sidecar owns the setting; the shell
+/// hands it to the voice helper and keeps it for the next start.
+struct MicPick(Mutex<Option<String>>);
 /// macOS: the "drag me into the list" panel the hands helper shows under System Settings.
 struct PermGuide(Mutex<Option<Child>>);
 
@@ -87,6 +90,19 @@ pub(crate) static OVERLAY_HOT: AtomicBool = AtomicBool::new(false);
 
 fn is_overlay(label: &str) -> bool {
     label.starts_with("overlay-")
+}
+
+/// Whether global shortcuts can be held at all: everywhere but a Wayland session, where no app may grab keys
+/// (the same rule the sidecar applies in platform.mjs's hasHotkeys).
+fn hotkeys_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::hotkeys_usable(linux::session())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 fn to_sidecar(app: &AppHandle, msg: &Value) {
@@ -1537,6 +1553,11 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
             }
         }
         Some("panel_show") => show_panel(app, None, false),
+        // The microphones the panel's picker offers (Linux: PipeWire's sources, the ones the desktop lists).
+        Some("microphones") => {
+            let app = app.clone();
+            thread::spawn(move || to_sidecar(&app, &json!({ "type": "microphones", "list": helper_perms(&["--devices"]) })));
+        }
         Some("diagnostics") => {
             let app = app.clone();
             thread::spawn(move || to_sidecar(&app, &diagnostics(&app)));
@@ -1578,7 +1599,8 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
         #[cfg(target_os = "linux")]
         Some("screenshot") => {
             if let Some(file) = msg.get("file").and_then(Value::as_str) {
-                linux::screenshot(app, msg.get("id").cloned().unwrap_or(Value::Null), file.to_owned());
+                let interactive = msg.get("interactive").and_then(Value::as_bool).unwrap_or(false);
+                linux::screenshot(app, msg.get("id").cloned().unwrap_or(Value::Null), file.to_owned(), interactive);
             }
         }
         #[cfg(target_os = "linux")]
@@ -1597,6 +1619,21 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
         Some("voice_config") => {
             if let Some(dir) = msg.get("model").and_then(Value::as_str) {
                 *app.state::<VoiceModel>().0.lock().unwrap() = Some(dir.to_owned());
+            }
+            // The Microphone picker ("" is the system default). A running helper switches over at once.
+            if let Some(mic) = msg.get("mic").and_then(Value::as_str) {
+                let mic = mic.trim();
+                let pick = (!mic.is_empty()).then(|| mic.to_owned());
+                let state = app.state::<MicPick>();
+                let changed = {
+                    let mut slot = state.0.lock().unwrap();
+                    let changed = *slot != pick;
+                    *slot = pick;
+                    changed
+                };
+                if changed {
+                    to_voice(app, &json!({ "cmd": "mic", "name": mic }));
+                }
             }
             if msg.get("enabled").and_then(Value::as_bool) == Some(true) {
                 app.state::<Voice>().1.store(0, Ordering::Relaxed);
@@ -1669,6 +1706,7 @@ fn main() {
         .manage(Voice(Mutex::new(None), AtomicUsize::new(0)))
         .manage(TalkChord(Mutex::new(vec!["control".into(), "option".into()])))
         .manage(VoiceModel(Mutex::new(None)))
+        .manage(MicPick(Mutex::new(None)))
         .manage(PermGuide(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![buddy, ink_wait, set_hot, set_hit_rects, sidecar_send, set_typing, perm_status, perm_request, perm_guide, screen_check, open_settings, onboarding_finish, guide_close, panel_hide, esc_watch, relaunch, focus_guide, guide_aside, drag_window])
         .on_menu_event(|app, e| match e.id.as_ref() {
@@ -1707,12 +1745,19 @@ fn main() {
             }
             tray.build(app)?;
 
-            init_hotkeys(app.handle());
-            if let Err(e) = set_hotkey(0, "Control+Alt+KeyS") {
-                eprintln!("could not register the show/hide shortcut: {e}");
-            }
-            if let Err(e) = set_hotkey(1, "Control+Alt+KeyA") {
-                eprintln!("could not register the area shortcut: {e}");
+            // Wayland: no app may hold global shortcuts (the sidecar reports hotkeys:false and the setup guide
+            // has the user bind `roamies --summon` and friends in the desktop's keyboard settings instead), so
+            // registering X11 grabs here would only half work and log confusing failures.
+            if hotkeys_available() {
+                init_hotkeys(app.handle());
+                if let Err(e) = set_hotkey(0, "Control+Alt+KeyS") {
+                    eprintln!("could not register the show/hide shortcut: {e}");
+                }
+                if let Err(e) = set_hotkey(1, "Control+Alt+KeyA") {
+                    eprintln!("could not register the area shortcut: {e}");
+                }
+            } else {
+                eprintln!("global shortcuts need X11; on this Wayland desktop bind `roamies --summon` and the other commands in your keyboard settings");
             }
             build_overlays(app.handle())?;
             pump_cursor(app.handle().clone());

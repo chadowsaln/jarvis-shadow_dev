@@ -1,0 +1,23 @@
+# Starter config for the sidecar's local gateway. Copy it to gateway/gateway.toml (ignored by git) and
+# keep only the providers whose keys are set: a `key = "env:NAME"` whose variable is unset stops the
+# gateway with a message saying which one. Keys stay references, never literals, in a shared file.
+#
+# Without this file serve.py starts as `respan-gateway` does with no arguments: every provider key in
+# the environment becomes a provider, and a model routes by name (`claude-*` to Anthropic, `gemini-*`
+# to Gemini, `groq/openai/gpt-oss-20b` to Groq).
+listen = "127.0.0.1:0"
+
+[providers.anthropic]
+vendor = "anthropic"
+key = "env:ANTHROPIC_API_KEY"
+
+[providers.openai]
+vendor = "openai"
+key = "env:OPENAI_API_KEY"
+
+# A name the sidecar can ask for (`ROAMIES_GATEWAY_MODEL=roamies-side`): the cheap summary models in
+# turn, so the fold and the memory pass keep working when one account is out of credit. A failed
+# candidate falls back to the next.
+[routes.roamies-side]
+to = ["anthropic/claude-haiku-5-5", "openai/gpt-6-luna"]
+tries = 2

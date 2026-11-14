@@ -210,11 +210,9 @@
     },
     // A voice download that's under way counts: it carries on after the guide closes.
     done() { return this.rows().every((r) => this.status(r.id) === 'granted' || (r.id === 'voice' && state.voiceModel.status === 'downloading')); },
-    fill(list, rows) {
-      // Put the keyboard back where it was: the buttons below are new nodes, so focus would fall back to the page.
-      const had = list.contains(document.activeElement) ? [...list.querySelectorAll('button')].indexOf(document.activeElement) : -1;
-      $('perm-lead').textContent = isMac() ? 'Only used when you ask me something.' : rows.length ? `One download so I can hear you. Your voice never leaves ${thisPC()}.` : 'Nothing to allow here. Just one choice below.';
-      const firstPending = rows.find((r) => this.status(r.id) !== 'granted');
+    // What the row's button does (Allow, Download, Open Settings): the voice model's download, the folders'
+    // prompt, straight to a Settings pane for screen and accessibility, else the system prompt for that one.
+    async allow(r) {
       if (r.id === 'voice') { send({ type: 'ob_voice_model' }); act('hype'); quip('Downloading! Keep going', 3); return; }
       this.waiting = r.id; this.asked[r.id] = true; this.render();
       poseFn = POSE.point(1.7, -0.1);

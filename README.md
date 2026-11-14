@@ -136,6 +136,9 @@ Windows and Linux uses [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvid
    ./build.sh            # release bundle for this OS
    ```
 
+   Optional: the fold and memory side calls can run through a local [Respan Gateway](https://github.com/respanai/respan-gateway)
+   instead of your sign-in — see [docs/gateway.md](docs/gateway.md).
+
 2. Open the app, follow the setup guide, pick your Roamie, and hold ⌃⌥ (Ctrl+Alt on Windows and Linux) to say hi.
 
 <sub>The first time you sign in with Claude, Roamies downloads Claude Code (about 140 MB). On Windows and Linux, the voice model (about 670 MB) downloads once at setup.</sub>

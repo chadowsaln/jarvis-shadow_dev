@@ -343,6 +343,9 @@
       }
       // The parts of a "do this, then that" request, ticking off.
       case 'trail': a.cards?.trail(e); break;
+      case 'system_status': a.cards?.system?.(e); break;
+      case 'screen_capture': a.cards?.screen?.(e); break;
+      case 'browser': a.cards?.browser?.(e); break;
       case 'emote':
         nextMood = MOODS[e.action] ?? null;
         a.act(e.action);

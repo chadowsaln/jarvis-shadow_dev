@@ -108,34 +108,307 @@
     }
   }
 
+  // ---------- system status: live resource snapshot (read-only) ----------
+  class SystemStatus extends Card {
+    set(e, k) {
+      const fresh = !this.open || this.closing;
+      this.show(k);
+      this.data = e || {};
+      this.head = 'system status';
+      this.lay = null;
+      // stays until replaced/closed; auto-close after a while to avoid clutter
+      this.close(k, 30);
+      if (fresh) k.S('page');
+    }
+    width() { return Math.round(clamp(innerWidth * 0.26, 300, 380)); }
+    lines() {
+      const d = this.data || {}, out = [];
+      const b = (n) => {
+        if (!Number.isFinite(n)) return 'n/a';
+        const u = ['B','KB','MB','GB','TB']; let i=0,v=n; while(v>=1024&&i<u.length-1){v/=1024;i++;} const dec=i===0?0:v<10?1:0; return v.toFixed(dec)+' '+u[i];
+      };
+      if (d.cpu) {
+        const p = Number.isFinite(d.cpu.percent) ? `${d.cpu.percent}%` : (d.cpu.reason || 'n/a');
+        const t = d.cpu.temperature?.celsius != null ? ` · ${d.cpu.temperature.celsius}°C` : (d.cpu.temperature ? '' : '');
+        out.push(`CPU: ${p}${t}`);
+      }
+      if (d.memory?.ram) {
+        const r = d.memory.ram; out.push(`RAM: ${b(r.used)} / ${b(r.total)} (${r.percent ?? 'n/a'}%)`);
+      } else if (d.memory?.reason) out.push(`RAM: ${d.memory.reason}`);
+      if (d.memory?.swap) {
+        const s = d.memory.swap;
+        out.push(s.total ? `Swap: ${b(s.used)} / ${b(s.total)} (${s.percent ?? 'n/a'}%)` : 'Swap: none configured');
+      }
+      if (Array.isArray(d.disks) && d.disks.length) {
+        for (const x of d.disks.slice(0, 4)) out.push(`Disk ${x.mount}: ${b(x.used)} / ${b(x.total)} (${x.percent ?? 'n/a'}%)`);
+      } else out.push(`Disks: ${d.disks?.reason || 'not available'}`);
+      if (d.battery) {
+        if (d.battery.present) out.push(`Battery: ${d.battery.percent ?? 'n/a'}% · ${d.battery.status || 'unknown'}`);
+        else out.push(`Battery: ${d.battery.reason || 'not present'}`);
+      }
+      if (d.system) {
+        const u = Number.isFinite(d.system.uptimeSeconds) ? `${Math.floor(d.system.uptimeSeconds/3600)}h ${Math.floor((d.system.uptimeSeconds%3600)/60)}m` : 'n/a';
+        out.push(`Uptime: ${u}${d.system.hostname ? ` · ${d.system.hostname}` : ''}`);
+      }
+      const procs = Array.isArray(d.processes) ? d.processes.slice(0, 5) : [];
+      if (procs.length) {
+        out.push('Top processes:');
+        for (const p of procs) {
+          const cpu = Number.isFinite(p.cpuPercent) ? `${p.cpuPercent}%` : 'n/a';
+          const mem = Number.isFinite(p.memPercent) ? `${p.memPercent}%` : 'n/a';
+          out.push(`  ${p.name || p.pid}  CPU ${cpu}  MEM ${mem}`);
+        }
+      } else out.push('Top processes: not available');
+      return out.length ? out : ['System status unavailable'];
+    }
+    layout() {
+      const w = this.width();
+      if (this.lay?.w === w && this.lay?.n === (this.data?.at || 0)) return this.lay;
+      const tw = w - 28, rows = [];
+      let y = 34;
+      for (const line of this.lines()) {
+        const wrapped = G.wrapRows(line, tw, line.startsWith('  ') ? SMALL : BODY, 3);
+        const h = wrapped.length * (line.startsWith('  ') ? 16 : 19) + 6;
+        rows.push({ lines: wrapped, y, h, small: line.startsWith('  ') }); y += h;
+      }
+      return (this.lay = { w, h: y + 10, rows, n: this.data?.at || 0 });
+    }
+    size() { const L = this.layout(); return { w: L.w, h: L.h }; }
+    box() { return this.open && this.geo ? [this.geo.x, this.geo.y, this.geo.x + this.geo.w, this.geo.y + this.geo.h] : null; }
+    draw(ctx) {
+      if (!this.open || !this.geo) return;
+      const { x, y } = this.geo, L = this.layout(), w = L.w, fade = this.fade();
+      const e = 1 - (1 - clamp(this.age / 0.3, 0, 1)) ** 3, a = this.age - 0.3;
+      ctx.save();
+      ctx.globalAlpha *= fade;
+      G.chrome(ctx, x, y, Math.max(16, w * e), Math.max(16, L.h * e));
+      if (a > 0) {
+        ctx.fillStyle = 'rgba(120,255,226,0.06)'; ctx.fillRect(x + 2, y + 2, w - 4, 24);
+        ctx.fillStyle = G.DEEP; ctx.fillRect(x + 2, y + 26, w - 4, 1);
+        [0,1].forEach((k) => { ctx.fillStyle = k ? G.DEEP : G.ACC; ctx.fillRect(x + 12 + k * 12, y + 11, 5, 5); });
+        G.typed(ctx, this.head, x + w / 2, y + 14, HEAD, G.DIM, a / 0.4, { anchor: 'middle' });
+        ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 27, w - 4, L.h - 29); ctx.clip();
+        L.rows.forEach((r, n) => {
+          const ra = a - 0.08 - n * 0.04; if (ra <= 0) return;
+          const font = r.small ? SMALL : BODY, lh = r.small ? 16 : 19;
+          r.lines.forEach((ln, j) => G.typed(ctx, ln, x + 14, y + r.y + 12 + j * lh, font, r.small ? G.MID : G.TEXT, (ra - 0.05) / 0.35));
+        });
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+
+  // ---------- screen capture: shows the captured image (portal, no persistence) ----------
+  class ScreenCapture extends Card {
+    set(e, k) {
+      this.show(k);
+      this.head = 'screen capture';
+      this.data = e || {};
+      this.img = null; this.imgSrc = null; this.lay = null;
+      const src = e?.image;
+      if (src && src !== this.imgSrc) {
+        this.imgSrc = src;
+        const im = new Image();
+        im.onload = () => { this.img = im; this.lay = null; };
+        im.onerror = () => { this.img = null; };
+        im.src = src;
+      }
+      this.close(k, 40);
+      k.S('page');
+    }
+    width() { return Math.round(clamp(innerWidth * 0.28, 320, 420)); }
+    lines() {
+      const out = [];
+      const o = this.data?.ocr;
+      if (o) {
+        if (o.ok) out.push(o.text ? `OCR (${o.lang || 'local'}): text extracted` : `OCR (${o.lang || 'local'}): no text found`);
+        else out.push(`OCR: ${String(o.error || 'unavailable').slice(0, 120)}`);
+      } else out.push('Captured via desktop portal (not saved).');
+      if (this.data?.question) out.push(`Q: ${String(this.data.question).slice(0, 80)}`);
+      return out;
+    }
+    layout() {
+      const w = this.width();
+      const iw = this.img ? this.img.naturalWidth : 0, ih = this.img ? this.img.naturalHeight : 0;
+      const imgH = iw && ih ? Math.min(220, Math.round((w - 20) * (ih / iw))) : 120;
+      const key = `${w}:${iw}x${ih}:${this.data?.at || 0}:${(this.data?.ocr?.ok)|0}:${(this.data?.ocr?.text||'').length}`;
+      if (this.lay?.key === key) return this.lay;
+      const tw = w - 28; let y = 34 + imgH + 8;
+      const rows = [];
+      for (const line of this.lines()) {
+        const wrapped = G.wrapRows(line, tw, SMALL, 3); const h = wrapped.length * 16 + 4; rows.push({ lines: wrapped, y, h }); y += h;
+      }
+      return (this.lay = { w, h: y + 8, imgH, rows, key });
+    }
+    size() { const L = this.layout(); return { w: L.w, h: L.h }; }
+    box() { return this.open && this.geo ? [this.geo.x, this.geo.y, this.geo.x + this.geo.w, this.geo.y + this.geo.h] : null; }
+    draw(ctx) {
+      if (!this.open || !this.geo) return;
+      const { x, y } = this.geo, L = this.layout(), w = L.w, fade = this.fade();
+      const e = 1 - (1 - clamp(this.age / 0.3, 0, 1)) ** 3, a = this.age - 0.3;
+      ctx.save(); ctx.globalAlpha *= fade;
+      G.chrome(ctx, x, y, Math.max(16, w * e), Math.max(16, L.h * e));
+      if (a > 0) {
+        ctx.fillStyle = 'rgba(120,255,226,0.06)'; ctx.fillRect(x + 2, y + 2, w - 4, 24);
+        ctx.fillStyle = G.DEEP; ctx.fillRect(x + 2, y + 26, w - 4, 1);
+        [0,1].forEach((k) => { ctx.fillStyle = k ? G.DEEP : G.ACC; ctx.fillRect(x + 12 + k * 12, y + 11, 5, 5); });
+        G.typed(ctx, this.head, x + w / 2, y + 14, HEAD, G.DIM, a / 0.4, { anchor: 'middle' });
+        const ix = x + 10, iy = y + 34, iw = w - 20, ih = L.imgH;
+        ctx.save(); ctx.beginPath(); ctx.rect(ix, iy, iw, ih); ctx.clip();
+        if (this.img) {
+          const sw = this.img.naturalWidth, sh = this.img.naturalHeight;
+          const scale = Math.min(iw / sw, ih / sh);
+          const dw = sw * scale, dh = sh * scale;
+          ctx.drawImage(this.img, ix + (iw - dw) / 2, iy + (ih - dh) / 2, dw, dh);
+        } else {
+          ctx.fillStyle = 'rgba(120,255,226,0.04)'; ctx.fillRect(ix, iy, iw, ih);
+          G.typed(ctx, 'capturing…', ix + iw / 2, iy + ih / 2, SMALL, G.DIM, 1, { anchor: 'middle' });
+        }
+        ctx.restore();
+        ctx.strokeStyle = G.DEEP; ctx.strokeRect(ix, iy, iw, ih);
+        ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 27, w - 4, L.h - 29); ctx.clip();
+        L.rows.forEach((r, n) => {
+          const ra = a - 0.08 - n * 0.04; if (ra <= 0) return;
+          r.lines.forEach((ln, j) => G.typed(ctx, ln, x + 14, r.y + 10 + j * 16, SMALL, G.MID, (ra - 0.05) / 0.35));
+        });
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+
+  class BrowserActivity {
+    constructor() { this.open = false; this.at = 0; this.age = 0; this.geo = null; this.head = 'Browser'; this.lines = []; }
+    set(e) {
+      const action = e.action || e.type || 'browser';
+      const title = { discover: 'Browsers', open: 'Opened', search: 'Web search', read: 'Page', navigate: 'Navigate', error: 'Browser error' }[action] || 'Browser';
+      this.head = title;
+      const lines = [];
+      if (action === 'discover') {
+        const inst = (e.installed || []).map((b) => b.name || b.id).filter(Boolean);
+        const run = (e.running || []).map((b) => b.name || b.id).filter(Boolean);
+        lines.push(inst.length ? ('Installed: ' + inst.slice(0, 6).join(', ') + (inst.length > 6 ? '…' : '')) : 'Installed: none detected');
+        lines.push(run.length ? ('Running: ' + run.slice(0, 6).join(', ') + (run.length > 6 ? '…' : '')) : 'Running: none detected');
+        if (e.note) lines.push(String(e.note));
+      } else if (action === 'search') {
+        if (e.query) lines.push('Query: ' + String(e.query).slice(0, 80));
+        const res = (e.results || []).slice(0, 4);
+        if (res.length) res.forEach((r, i) => lines.push((i + 1) + '. ' + String(r.title || r.url || '').slice(0, 60)));
+        else if (e.count != null) lines.push('Results: ' + e.count);
+      } else if (action === 'read') {
+        if (e.title) lines.push('Title: ' + String(e.title).slice(0, 80));
+        if (e.url) lines.push('URL: ' + String(e.url).slice(0, 90));
+        if (e.lang && e.lang !== 'unknown') lines.push('Language: ' + e.lang);
+        if (e.error) lines.push('Cannot read: ' + String(e.error).slice(0, 120));
+        else if (e.text) lines.push(String(e.text).replace(/\s+/g, ' ').slice(0, 140));
+        if (e.truncated) lines.push('More content available (truncated).');
+      } else if (action === 'open') {
+        if (e.url) lines.push('URL: ' + String(e.url).slice(0, 100));
+        if (e.with) lines.push('Opened with: ' + e.with);
+      } else if (action === 'navigate') {
+        if (e.nav) lines.push('Action: ' + e.nav);
+        if (e.url) lines.push('URL: ' + String(e.url).slice(0, 100));
+        if (e.note) lines.push(String(e.note).slice(0, 140));
+      } else if (action === 'error') {
+        lines.push(String(e.error || 'Browser action failed.').slice(0, 160));
+        if (e.url) lines.push('URL: ' + String(e.url).slice(0, 90));
+      } else {
+        if (e.url) lines.push(String(e.url).slice(0, 100));
+      }
+      this.lines = lines.filter(Boolean).slice(0, 6);
+      this.open = true; this.at = 0; this.age = 0;
+    }
+    layout() {
+      const w = 320, pad = 14, lh = 16;
+      let y = 34;
+      const rows = this.lines.map((t) => {
+        const lines = wrap(t, w - pad * 2, SMALL); const h = Math.max(lh, lines.length * lh);
+        const r = { y, h, lines }; y += h + 4; return r;
+      });
+      return { w, h: Math.max(70, y + 10), rows };
+    }
+    fade() { return this.at > 12 ? clamp(1 - (this.at - 12) / 0.45, 0, 1) : 1; }
+    update(dt, k, side, slot = 0) {
+      this.age += dt; if (!this.open) return;
+      this.at += dt; if (this.at > 12.6) { this.open = false; this.geo = null; return; }
+      const L = this.layout(), GAP = 18, TOP = 16, BOT = 16;
+      const left = { left: 0, right: 0 }, safe = R.safe ?? left;
+      const roomR = (innerWidth - safe.right) - (k.pos.x + k.pos.r + GAP);
+      const roomL = (k.pos.x - k.pos.r - GAP) - safe.left;
+      let s = side === 'right' ? 'right' : 'left';
+      if ((s === 'right' ? roomR : roomL) < L.w + 20 && (s === 'right' ? roomL : roomR) > (s === 'right' ? roomR : roomL)) s = s === 'right' ? 'left' : 'right';
+      let x = s === 'right' ? k.pos.x + k.pos.r + GAP : k.pos.x - k.pos.r - GAP - L.w;
+      x = clamp(x, safe.left + 8, innerWidth - safe.right - L.w - 8);
+      let y = clamp(k.pos.y - L.h / 2 + slot, TOP + safe.top, innerHeight - BOT - L.h);
+      this.geo = { x, y, w: L.w, h: L.h };
+    }
+    size() { const L = this.layout(); return { w: L.w, h: L.h }; }
+    box() { return this.open && this.geo ? [this.geo.x, this.geo.y, this.geo.x + this.geo.w, this.geo.y + this.geo.h] : null; }
+    draw(ctx) {
+      if (!this.open || !this.geo) return;
+      const { x, y } = this.geo, L = this.layout(), w = L.w, fade = this.fade();
+      const e = 1 - (1 - clamp(this.age / 0.3, 0, 1)) ** 3, a = this.age - 0.3;
+      ctx.save(); ctx.globalAlpha *= fade;
+      G.chrome(ctx, x, y, Math.max(16, w * e), Math.max(16, L.h * e));
+      if (a > 0) {
+        ctx.fillStyle = 'rgba(120,255,226,0.06)'; ctx.fillRect(x + 2, y + 2, w - 4, 24);
+        ctx.fillStyle = G.DEEP; ctx.fillRect(x + 2, y + 26, w - 4, 1);
+        [0,1].forEach((k) => { ctx.fillStyle = k ? G.DEEP : G.ACC; ctx.fillRect(x + 12 + k * 12, y + 11, 5, 5); });
+        G.typed(ctx, this.head, x + w / 2, y + 14, HEAD, G.DIM, a / 0.4, { anchor: 'middle' });
+        ctx.save(); ctx.beginPath(); ctx.rect(x + 2, y + 27, w - 4, L.h - 29); ctx.clip();
+        L.rows.forEach((r, n) => {
+          const ra = a - 0.04 - n * 0.03; if (ra <= 0) return;
+          r.lines.forEach((ln, j) => G.typed(ctx, ln, x + 14, r.y + 10 + j * 16, SMALL, G.MID, (ra - 0.02) / 0.3));
+        });
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+
   const orig = R.agentPlugin;
   R.agentPlugin = (k) => {
     const p = orig(k);
     if (!p) return p;
     const trail = new Trail();
+    const system = new SystemStatus();
+    const screen = new ScreenCapture();
+    const browser = new BrowserActivity();
     const shown = () => k.presence === 'shown' || (k.presence === 'in' && k.presU > 0.72);
     const { over, update, quiet, extent } = p;
-    p.quiet = () => !!quiet?.() && !trail.open;
+    p.quiet = () => !!quiet?.() && !trail.open && !system.open && !screen.open && !browser.open;
     p.extent = () => {
-      const e = extent?.(), t = shown() ? trail.box() : null;
-      if (!t) return e ?? null;
-      return e ? [Math.min(e[0], t[0]), Math.min(e[1], t[1]), Math.max(e[2], t[2]), Math.max(e[3], t[3])] : t;
+      const e = extent?.();
+      let box = e ?? null;
+      const merge = (b) => { if (!b) return; box = box ? [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.max(box[2], b[2]), Math.max(box[3], b[3])] : b; };
+      if (shown()) { merge(trail.box()); merge(system.box()); merge(screen.box()); merge(browser.box()); }
+      return box;
     };
-    p.over = (ctx, env) => { over(ctx, env); if (shown()) trail.draw(ctx); };
+    p.over = (ctx, env) => { over(ctx, env); if (shown()) { trail.draw(ctx); system.draw(ctx); screen.draw(ctx); browser.draw(ctx); } };
     p.update = (dt, env) => {
       update(dt, env);
-      // The trail on the roomier side, away from a speech bubble beside it.
+      // Cards on the roomier side, away from a speech bubble beside it.
       const S = R.safe ?? { left: 0, right: 0 }, mid = (S.left + innerWidth - S.right) / 2;
       let side = k.m.x < mid ? 'right' : 'left';
       const bs = p.api?.bubble && !p.api.bubble.closing ? p.api.bubble.side : null;
       if (bs === side) side = side === 'right' ? 'left' : 'right';
       trail.update(dt, k, side, 0);
+      let slot = (trail.open && trail.geo) ? (trail.geo.h + 12) : 0;
+      system.update(dt, k, side, slot);
+      if (system.open && system.geo) slot += system.geo.h + 12;
+      screen.update(dt, k, side, slot);
+      if (screen.open && screen.geo) slot += screen.geo.h + 12;
+      browser.update(dt, k, side, slot);
     };
     if (p.api) {
       const keep = () => p.api.show?.({ summoned: true });
       p.api.cards = {
         trail: (e) => { keep(); trail.set(e, k); },
-        get open() { return trail.open; },
+        system: (e) => { keep(); system.set(e, k); },
+        screen: (e) => { keep(); screen.set(e, k); },
+        browser: (e) => { keep(); browser.set(e, k); },
+        get open() { return trail.open || system.open || screen.open || browser.open; },
       };
     }
     return p;

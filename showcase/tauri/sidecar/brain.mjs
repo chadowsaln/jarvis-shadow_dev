@@ -1,7 +1,10 @@
 // Side calls next to the conversation: folding old turns into a summary, and the memory pass that learns
 // lasting facts about the user. One tool-less turn each, on the cheaper summary model, on this computer's
 // own sign-in. What comes back is redacted and checked before anything is stored.
+// With ROAMIES_GATEWAY on, the same turn can go through the local Respan Gateway instead (gateway.mjs),
+// which routes the model to whichever provider has credit; the own sign-in stays as the fallback.
 import { Agent } from '@kenkaiiii/gg-agent';
+import { gatewayComplete } from './gateway.mjs';
 import { REDACTION_MARKER, environmentSecrets, redactText } from '@kenkaiiii/gg-ai';
 import { getLowestThinkingLevel, getModel, getSummaryModel } from '@kenkaiiii/gg-core';
 import { ClaudeCodeAgent } from './claudecode.mjs';
@@ -48,12 +51,25 @@ async function once({ system, text, provider, model, cc, credsFor, cwd, signal, 
 
 /**
  * One tool-less turn: { system, text, provider, model (the current one), cc (Claude Code route or null),
- * credsFor(modelId), cwd, signal, chatThinking (the chat's level, null when off) }. Runs on the summary model, then once more on the current model if that fails.
+ * credsFor(modelId), cwd, signal, chatThinking (the chat's level, null when off),
+ * gateway (gateway.mjs's route, or null/absent for the app's own sign-in) }.
+ * Runs on the summary model, then once more on the current model if that fails.
  * Resolves { text, model }.
  */
 export async function oneShot(o) {
   const signal = AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), ...(o.signal ? [o.signal] : [])]);
   const first = summaryModelFor(o.provider, o.model);
+  if (o.gateway) {
+    const model = o.gateway.model || first;
+    try {
+      return { text: await gatewayComplete({ ...o.gateway, model, system: o.system, text: o.text, signal }), model };
+    } catch (e) {
+      if (signal.aborted) throw e;
+      // A fold or a memory pass must not fail because the gateway is down or has no key for this model:
+      // the sign-in that already works answers instead.
+      console.error(`[brain] gateway ${o.gateway.url} failed for ${model} (${String(e?.message ?? e).slice(0, 120)}); using ${o.provider} directly`);
+    }
+  }
   try {
     return { text: await (o.run ?? once)({ ...o, model: first, signal }), model: first };
   } catch (e) {

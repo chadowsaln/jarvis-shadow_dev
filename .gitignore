@@ -1,5 +1,6 @@
 # Build output
 *.app
+*.AppImage
 showcase/tauri/dist/
 showcase/tauri/sidecar/dist/
 showcase/tauri/src-tauri/target/
@@ -11,6 +12,9 @@ showcase/tauri/src-tauri/gen/
 
 # Dependencies
 node_modules/
+# The sidecar's Python environment (Respan Gateway) and a local gateway config, which may hold keys
+showcase/tauri/sidecar/gateway/.venv/
+showcase/tauri/sidecar/gateway/gateway.toml
 
 # OS / editor / logs
 .DS_Store

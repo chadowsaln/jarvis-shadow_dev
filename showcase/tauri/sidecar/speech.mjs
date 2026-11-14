@@ -3,7 +3,12 @@
 // - prose is spoken; list lines ("- ", "1. "), quotes ("> ", drafts), headings, tables, code blocks and the
 //   "Sources:" line are for the screen only (lists and drafts show on screen, never read out).
 // - markdown, links, URLs, emoji, file paths and long code are dropped from what's said.
-const SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s)/g;
+// - Arabic is spoken as written: its own sentence marks (؟ ۔), no English mood cue in front of it, and the invisible
+//   bidi controls a chat reply can carry are removed (an engine either trips on them or reads nothing).
+import { cleanSpoken, isArabic } from './lang.mjs';
+
+// Arabic sentences end with ؟ (question mark) and ۔ (full stop), as well as the ASCII ones.
+const SENTENCE_END = /[.!?…؟۔]+["'”’)\]]*(?=\s)/g;
 const SCREEN_ONLY = /^\s*(?:[-*•+]\s|\d{1,2}[.)]\s|>|#{1,6}\s|\||sources?\s*:)/i;
 const LONG = 220; // speak a run-on sentence in pieces rather than wait for its end
 
@@ -81,7 +86,7 @@ export class CueFilter {
 }
 
 export function speakable(text) {
-  let s = String(text ?? '');
+  let s = cleanSpoken(text);
   s = s.replace(/\[([^\]]*)\]\((?:https?:|mailto:)[^)]*\)/g, '$1') // [name](url) → name
     .replace(/<?\b(?:https?:\/\/|www\.)\S+/gi, (u) => u.match(/[.,!?;:)>]*$/)[0].replace(/>/g, '')) // bare URLs (keep the full stop)
     .replace(/`([^`]*)`/g, (_, c) => (c.length > 24 || /[/\\{}();=<>]|^\S+\.[a-z0-9]{1,5}$/i.test(c) ? '' : c)) // code: short words only
@@ -90,7 +95,7 @@ export function speakable(text) {
     .replace(/\[([^\]]{1,40})\]/g, (m, inner, at, all) => (IS_CUE.test(m) || (LOOSE.test(m) && SENTENCE_START.test(all.slice(0, at))) ? m.toLowerCase() : inner)) // voice cues stay; [placeholders] lose their brackets (Fish would act them out)
     .replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{FE0F}\u{200D}\u{20E3}]/gu, '')
     .replace(/\(\s*\)|\[\s*\]/g, '')
-    .replace(/\s+([,.!?;:])/g, '$1')
+    .replace(/\s+([,.!?;:،؛؟])/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
   return /[\p{L}\p{N}]/u.test(s.replace(CUE, '')) ? s : '';
@@ -117,7 +122,9 @@ export class SpeechText {
   out(s) {
     let t = speakable(s);
     if (!t) return;
-    if (this.tone) { if (!/^\[/.test(t)) t = `${this.tone} ${t}`; this.tone = null; }
+    // The mood cues are English ([excited], [warm]): on Arabic they'd either be read out or ignored, so they're not
+    // put there at all (English style notes are documented for English; nothing promises them for Arabic).
+    if (this.tone) { if (!/^\[/.test(t) && !isArabic(t)) t = `${this.tone} ${t}`; this.tone = null; }
     this.emit(t);
   }
 
@@ -148,7 +155,10 @@ export class SpeechText {
       let cut = -1, m;
       while ((m = SENTENCE_END.exec(line))) { if (m.index + m[0].length < line.length || nl >= 0) { cut = m.index + m[0].length; break; } }
       if (cut < 0 && nl >= 0) cut = nl;
-      if (cut < 0 && line.length > LONG) { const sp = line.lastIndexOf(', ', LONG); cut = sp > 40 ? sp + 1 : line.lastIndexOf(' ', LONG); }
+      if (cut < 0 && line.length > LONG) {
+        const sp = Math.max(line.lastIndexOf(', ', LONG), line.lastIndexOf('، ', LONG));
+        cut = sp > 40 ? sp + 1 : line.lastIndexOf(' ', LONG);
+      }
       if (cut <= 0) {
         if (all) { this.out(this.buf); this.buf = ''; }
         return;
@@ -169,5 +179,5 @@ export function endsWithQuestion(text) {
     .replace(/\[[a-z]+(?:[ ,-]+[a-z]+){0,3}\]\s*$/, '') // a free-form cue at the very end
     .replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{FE0F}\u{200D}\u{20E3}]/gu, '')
     .replace(/[\s*_~`"'”’»)\]]+$/u, '');
-  return /[?？]$/.test(s);
+  return /[?？؟]$/.test(s);
 }

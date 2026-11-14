@@ -19,13 +19,45 @@ export function describe(name, args = {}) {
     case 'read_file': return [`Reading ${short(base(args.path))}`, `Read ${short(base(args.path))}`];
     case 'list_files': return [`Looking in ${short(base(args.dir))}`, `Looked in ${short(base(args.dir))}`];
     case 'search_files': return ['Searching your files', 'Searched your files'];
+    case 'file_info': return [`Checking ${short(base(args.path))}`, `Checked ${short(base(args.path))}`];
+    case 'find_files': return [`Searching for files in ${short(base(args.dir))}`, `Searched for files in ${short(base(args.dir))}`];
+    case 'create_directory': return [`Creating folder ${short(base(args.path))}`, `Created folder ${short(base(args.path))}`];
+    case 'copy_file': return [`Copying ${short(base(args.from))}`, `Copied ${short(base(args.from))}`];
+    case 'move_file': return [`Moving ${short(base(args.from))}`, `Moved ${short(base(args.from))}`];
+    case 'rename_file': return [`Renaming ${short(base(args.path))}`, `Renamed ${short(base(args.path))}`];
     case 'write_file': return [`Saving ${short(base(args.path))}`, `Saved ${short(base(args.path))}`];
     case 'run_command': return ['Running a command', 'Ran a command'];
-    case 'web_fetch': return [`Opening ${host(args.url)}`, `Read ${host(args.url)}`];
-    case 'web_search': return ['Searching the web', 'Searched the web'];
+    // The terminal only ever runs safety.mjs's fixed list, so its name and flags are safe to show (never a path).
+    case 'run_diagnostic': { const c = short([args.command, ...(Array.isArray(args.args) ? args.args : [])].filter(Boolean).join(' '), 24); return [`Checking ${c}`, `Checked ${c}`]; }
+    // Apps: installed, searched, running, and started by the name the menus show.
+    case 'list_apps': return ['Looking at the installed apps', 'Looked at the installed apps'];
+    case 'find_app': return [`Looking for the app ${short(args.name, 18)}`, `Looked for the app ${short(args.name, 18)}`];
+    case 'running_apps': return ['Checking what apps are open', 'Checked what apps are open'];
+    case 'launch_app': return [`Opening ${short(args.app, 18)}`, `Opened ${short(args.app, 18)}`];
+    case 'web_fetch': return [`Reading ${host(args.url)}`, `Read ${host(args.url)}`];
+    case 'web_search': return args.query ? [`Searching the web: ${short(args.query, 24)}`, `Searched the web`] : ['Searching the web', 'Searched the web'];
+    case 'browser_discover': return ['Checking browsers', 'Checked browsers'];
+    case 'browser_open': return [`Opening ${host(args.url)}`, `Opened ${host(args.url)}`];
+    case 'browser_read_page': return [`Reading ${host(args.url)}`, `Read ${host(args.url)}`];
+    case 'browser_respan_bridge_status': return ['Checking Respan browser bridge', 'Checked browser bridge'];
+    case 'browser_read_respan_authenticated': return [`Reading Respan (${host(args?.url) || 'page'})`, `Read Respan`];
+    case 'browser_navigate': {
+      const a = short(args.action || 'navigate', 12);
+      return args.url ? [`Navigating: ${a} ${host(args.url)}`, `Navigated: ${a}`] : [`Navigating: ${a}`, `Navigated: ${a}`];
+    }
+    case 'browser_discover': return ['Checking browsers', 'Checked browsers'];
+    case 'browser_open_url': return [`Opening ${host(args.url || args.target)}`, `Opened ${host(args.url || args.target)}`];
+    case 'browser_read_page': return [`Reading ${host(args.url)}`, `Read ${host(args.url)}`];
+    case 'browser_search_web': return ['Searching the web', 'Searched the web'];
+    case 'browser_navigate': return ['Navigating browser', 'Browser navigation checked'];
     case 'remember_commitment': return ['Adding a reminder', 'Added a reminder'];
     case 'update_commitment': return ['Updating a reminder', 'Updated a reminder'];
     case 'forget_fact': return ['Forgetting it', 'Forgot it'];
+    case 'memory_save': return ['Saving to memory', 'Saved to memory'];
+    case 'memory_search': return ['Searching memory', 'Searched memory'];
+    case 'memory_list': return ['Checking memory', 'Checked memory'];
+    case 'memory_update': return ['Updating memory', 'Updated memory'];
+    case 'memory_delete': return ['Deleting memory', 'Deleted memory'];
     case 'open': {
       const t = String(args.target ?? '');
       const what = /^https?:\/\//i.test(t) ? host(t) : short(base(t));

@@ -9,9 +9,11 @@
 // (sent for `roamies --talk`, which people bind to a key) starts a take, and sends it when it comes again or on a
 // pause. Exits when stdin closes.
 //
-// roamies-voice --model <dir> [--chord control,option]   normal use (Roamies starts it)
+// roamies-voice --model <dir> [--chord control,option] [--mic NAME]   normal use (Roamies starts it)
 // roamies-voice --perms                                   prints {"type":"perms","mic":…}
 // roamies-voice --devices                                 prints {"type":"devices",…}: every mic, the default, formats
+// roamies-voice --record 2 [--out mic.wav] [--mic NAME]   dev: records the mic and says which device it used
+// {"cmd":"mic","name":"…"} (stdin, "" for the default) switches the microphone while it runs
 // roamies-voice --model <dir> --transcribe <wav>          dev: transcribe a file and exit
 // roamies-voice --model <dir> --test-audio <wav>          dev: a file stands in for the mic ({"cmd":"listen"} starts)
 
@@ -162,6 +164,9 @@ struct Voice {
     // Each session gets a new take number; results for older takes are ignored.
     take: u64,
     buf: Arc<Mutex<Vec<f32>>>,
+    // The microphone the user picked (None: the system default). It's asked for by name on every take, so a device
+    // that comes back is used again, and one that's gone falls back to the default instead of breaking listening.
+    mic: Option<String>,
     source: Option<Source>,
     engine: Option<Sender<Job>>,
     engine_error: Option<String>,
@@ -177,7 +182,7 @@ struct Voice {
 }
 
 impl Voice {
-    fn new(engine: Option<Sender<Job>>, test_audio: Option<PathBuf>, tx: Sender<Ev>) -> Voice {
+    fn new(engine: Option<Sender<Job>>, test_audio: Option<PathBuf>, tx: Sender<Ev>, mic: Option<String>) -> Voice {
         Voice {
             phase: Phase::Idle,
             chord: keys::mask(&["control".into(), "option".into()]).expect("default chord"),
@@ -194,6 +199,7 @@ impl Voice {
             best: String::new(),
             take: 0,
             buf: Arc::new(Mutex::new(Vec::new())),
+            mic,
             source: None,
             engine,
             engine_error: None,
@@ -361,17 +367,44 @@ impl Voice {
     fn start_audio(&mut self) {
         self.buf.lock().unwrap().clear();
         let sink = Sink::new(self.buf.clone(), self.tx.clone());
+        let picked = self.mic.clone();
         let started = match &self.test_audio {
             Some(p) => audio::play_file(p, sink).map_err(|e| MicError::new("failed", e)),
-            None => audio::open_mic(sink),
+            None => audio::open_mic(sink, picked.as_deref()),
         };
         match started {
-            Ok(s) => self.source = Some(s),
+            Ok((s, info)) => {
+                // Which microphone is really recording, and whether it's the one picked (the panel shows this).
+                emit(json!({
+                    "type": "mic",
+                    "state": if info.wanted.is_none() { "default" } else if info.fallback { "fallback" } else { "picked" },
+                    "name": info.used, "wanted": info.wanted,
+                }));
+                self.source = Some(s);
+            }
             Err(e) => {
                 log(&format!("audio: {} ({})", e.detail, e.reason));
                 emit(mic_error(&e));
                 self.cancel();
             }
+        }
+    }
+
+    /// The panel picked another microphone ("" for the system default). A take under way moves to it at once.
+    fn set_mic(&mut self, name: Option<String>) {
+        let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+        if name == self.mic {
+            return;
+        }
+        log(&format!("mic: {}", name.as_deref().unwrap_or("default")));
+        self.mic = name;
+        if matches!(self.phase, Phase::Armed | Phase::Holding | Phase::HandsFree) && self.source.is_some() {
+            // The take keeps what it has; the rest comes from the new device.
+            self.stop_audio();
+            self.start_audio();
+        } else {
+            // Not listening: nothing to open, but the panel's status should say what will be used.
+            emit(json!({ "type": "mic", "state": if self.mic.is_none() { "default" } else { "saved" }, "name": self.mic.clone().unwrap_or_default(), "wanted": self.mic.clone() }));
         }
     }
 
@@ -548,6 +581,7 @@ impl Voice {
                     let mods: Vec<String> = msg.get("mods").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
                     self.set_chord(&mods);
                 }
+                Some("mic") => self.set_mic(msg.get("name").and_then(Value::as_str).map(str::to_owned)),
                 // Muting the speakers while listening is macOS-only for now.
                 _ => {}
             },
@@ -586,6 +620,19 @@ fn main() {
         emit(v);
         return;
     }
+    // Which microphone a take would record from, and how loud it was: the whole input path, no model, no window.
+    if let Some(secs) = arg(&args, "--record") {
+        let secs: f64 = secs.parse().unwrap_or(2.0);
+        let out = arg(&args, "--out").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("roamies-mic.wav"));
+        match audio::record(secs, arg(&args, "--mic").as_deref(), &out) {
+            Ok(v) => emit(v),
+            Err(e) => {
+                emit(json!({ "type": "record", "error": e.detail, "reason": e.reason }));
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let model = arg(&args, "--model").map(PathBuf::from);
     // Cursor positions and captures in real pixels on every monitor (ink.rs turns them into screen points).
     #[cfg(windows)]
@@ -615,7 +662,7 @@ fn main() {
             (None, None)
         }
     };
-    let mut voice = Voice::new(engine, arg(&args, "--test-audio").map(PathBuf::from), tx.clone());
+    let mut voice = Voice::new(engine, arg(&args, "--test-audio").map(PathBuf::from), tx.clone(), arg(&args, "--mic"));
     if let Some(c) = arg(&args, "--chord") {
         voice.set_chord(&c.split(',').map(str::to_owned).collect::<Vec<_>>());
     }
@@ -672,7 +719,7 @@ mod tests {
         w.finalize().expect("wav written");
         let (jobs, jrx) = mpsc::channel();
         let (tx, _events) = mpsc::channel();
-        (Voice::new(Some(jobs), Some(wav.clone()), tx), jrx, wav)
+        (Voice::new(Some(jobs), Some(wav.clone()), tx, None), jrx, wav)
     }
 
     #[test]
@@ -705,7 +752,7 @@ mod tests {
     #[test]
     fn toggle_without_a_speech_model_stays_idle() {
         let (tx, _events) = mpsc::channel();
-        let mut v = Voice::new(None, None, tx);
+        let mut v = Voice::new(None, None, tx, None);
         v.toggle();
         assert_eq!(v.phase, Phase::Idle);
         assert!(v.source.is_none());
@@ -721,6 +768,17 @@ mod tests {
         assert!(jobs.try_recv().is_err(), "silence isn't read (Parakeet makes words up from it)");
         assert_eq!(v.phase, Phase::Idle);
         let _ = std::fs::remove_file(wav);
+    }
+
+    // The panel's pick: kept for the next take, blank means the system default again, and it's trimmed.
+    #[test]
+    fn the_mic_pick_is_kept_and_cleared() {
+        let (tx, _events) = mpsc::channel();
+        let mut v = Voice::new(None, None, tx, Some("Pro 10s".into()));
+        v.handle(Ev::Cmd(json!({ "cmd": "mic", "name": " Unknown Studio Mic " })));
+        assert_eq!(v.mic.as_deref(), Some("Unknown Studio Mic"));
+        v.handle(Ev::Cmd(json!({ "cmd": "mic", "name": "  " })));
+        assert_eq!(v.mic, None, "blank means the system default");
     }
 
     #[test]

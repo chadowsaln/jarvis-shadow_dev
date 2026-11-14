@@ -6,13 +6,17 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createWebFetchTool, createWebSearchTool, runSideWebSearch, runSideWebSearchViaClaudeCode } from '@kenkaiiii/ggcoder/web';
+import { getSystemStatus } from './sysinfo.mjs';
+import { captureViaPortal, detectTesseract, ocrImage, readImageDataUrl, removeTemp, screenAnswerText } from './screen.mjs';
+import { BROWSER_ACTIONS, browserDiscover, browserOpenUrl, browserStatusText, detectAuthOrCaptchaWall, detectPageLang, fetchReadablePage, filterBrowserApps, getDefaultBrowserInfo, isRespanPlatformUrl, readRespanAuthenticatedPage, respanBridgeStatus, respanReadNote, summarizeSearchResults } from './browser.mjs';
 import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
-import { ASK, BLOCK, checkDrawAction, checkFetch, checkOpen, checkRead, checkWrite, classifyCommand, isRiskyClick, isYes, riskyKind } from './safety.mjs';
+import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
 import { addCommitment, forgetFact, parseDue, parseRepeat, repeatLabel, updateCommitment } from './store.mjs';
+import { CATEGORIES, formatMemories, memoryDelete, memoryList, memorySave, memorySearch, memoryUpdate } from './memory.mjs';
 
 const HOME = os.homedir();
 export const expand = (p) => path.resolve(String(p).replace(/^~(?=$|\/|\\)/, HOME));
@@ -39,6 +43,51 @@ export const shellFor = (command, platform = process.platform, env = process.env
   ? ['cmd.exe', ['/d', '/s', '/c', `"${command}"`], { windowsVerbatimArguments: true }]
   : [env.SHELL || (platform === 'linux' ? '/bin/bash' : '/bin/zsh'), ['-lc', command], {}]);
 const THIS_COMPUTER = process.platform === 'darwin' ? 'this Mac' : 'this computer';
+// run_diagnostic's limits: a short check, and never more output than a bubble can show.
+export const DIAGNOSTIC_LIMITS = Object.freeze({ timeoutMs: 5_000, maxBytes: 256 * 1024, maxChars: 8_000 });
+/** One allowlisted read-only command (safety.mjs's list), run directly with no shell, a 5 s limit and a cap on its
+ *  output. `spawnFile` is for tests: it is handed the same argv the real spawn gets, never a command line. */
+export function runDiagnostic({ command, args = [] } = {}, { cwd = HOME, spawnFile = spawn, now = Date.now, limits = DIAGNOSTIC_LIMITS } = {}) {
+  const v = checkDiagnosticCommand(command, args);
+  if (v.level === BLOCK) return Promise.reject(new Error(`Blocked for safety: ${v.reason} Don't look for another way; tell the user what you wanted to do instead.`));
+  const line = [v.command, ...v.argv].join(' ');
+  const started = now();
+  return new Promise((resolve, reject) => {
+    let out = [], errOut = [], size = 0, cut = false, timedOut = false, settled = false;
+    let child;
+    try { child = spawnFile(v.command, v.argv, { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } }); }
+    catch (e) { reject(new Error(`Couldn't run ${line}: ${String(e?.message || e)}`)); return; }
+    const take = (chunk, toErr) => {
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      if (size >= limits.maxBytes) { cut = true; return; }
+      const room = limits.maxBytes - size;
+      const part = b.length > room ? (cut = true, b.subarray(0, room)) : b;
+      size += part.length;
+      (toErr ? errOut : out).push(part);
+    };
+    const stop = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value); };
+    // Its own failure, not the child's word: a child that never reports back would hang the call otherwise.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGKILL'); } catch {}
+      stop(reject, new Error(`${line} was still running after ${limits.timeoutMs / 1000} s, so I stopped it.`));
+    }, limits.timeoutMs);
+    child.stdout?.on('data', (c) => take(c, false));
+    child.stderr?.on('data', (c) => take(c, true));
+    child.on('error', (e) => stop(reject, new Error(e?.code === 'ENOENT'
+      ? `${v.command} isn't on ${THIS_COMPUTER}, so there's nothing to show for it.`
+      : `Couldn't run ${line}: ${String(e?.message || e)}`)));
+    child.on('close', (code, signal) => {
+      // Whole buffers, so a character split across two chunks (Arabic, an emoji) still reads right.
+      const text = Buffer.concat([...out, ...errOut]).toString('utf8').trim();
+      const ms = Math.max(0, now() - started);
+      if (timedOut) return; // already answered by the timer
+      const body = clip(text || '(no output)', limits.maxChars) + (cut ? `\n…(output cut at ${limits.maxBytes} bytes)` : '');
+      if (code !== 0) return stop(reject, new Error(`Exit ${code ?? signal} · ${line}\n${body}`));
+      stop(resolve, `$ ${line}\nexit 0 in ${ms} ms\n${body}`);
+    });
+  });
+}
 const LINUX = process.platform === 'linux';
 // A Wayland session hides the pointer and clicks in other apps, so a drawing can't wait for them (platform.mjs).
 const POINTER_OK = seesPointer(process.platform, LINUX ? linuxSession() : '');
@@ -82,11 +131,16 @@ export function findDesktopApp(apps, name) {
   return null;
 }
 
-/** Every app in the XDG application folders (the user's own first, so theirs wins over a system one of the same id). */
-async function desktopApps() {
-  const dataHome = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share');
-  const dirs = [dataHome, ...(process.env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(':'), path.join(HOME, '.local/share/flatpak/exports/share'), '/var/lib/flatpak/exports/share', '/var/lib/snapd/desktop']
+/** The folders apps are installed in (the XDG application folders). */
+export function applicationDirs(env = process.env, home = HOME) {
+  const dataHome = env.XDG_DATA_HOME || path.join(home, '.local', 'share');
+  return [dataHome, ...(env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(':'), path.join(home, '.local/share/flatpak/exports/share'), '/var/lib/flatpak/exports/share', '/var/lib/snapd/desktop']
     .filter(Boolean).map((d) => path.join(d, 'applications'));
+}
+
+/** Every app in the XDG application folders (the user's own first, so theirs wins over a system one of the same id). */
+export async function desktopApps({ env = process.env, home = HOME } = {}) {
+  const dirs = applicationDirs(env, home);
   const seen = new Set(), apps = [];
   for (const dir of dirs) {
     const files = await fs.readdir(dir).catch(() => []);
@@ -99,6 +153,142 @@ async function desktopApps() {
     }
   }
   return apps;
+}
+
+/** An entry that can be started: an Application with a command, and not one the menus hide. */
+const startable = ({ entry: e }) => (e.Type ?? 'Application') === 'Application' && !!e.Exec && e.NoDisplay !== 'true' && e.Hidden !== 'true';
+
+/** The apps the menus show, sorted by the name they show. */
+export function appCatalog(apps = []) {
+  return apps.filter(startable)
+    .map((a) => ({ ...a, name: a.entry.Name || a.id, generic: a.entry.GenericName || '' }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id)));
+}
+
+/** One line for an app: the name the menus show, then its id (what launch_app takes). */
+export const appLine = (a) => `${a.name ?? a.entry?.Name ?? a.id} — ${a.id}`;
+
+/** Apps matching what was asked for, best first: the exact name, the id (or its last part: "nautilus"), the kind of
+ *  app ("Web Browser"), a name starting with it, a name holding every word ("chrome" finds "Google Chrome"), then
+ *  any of those words anywhere in the entry (its keywords too). */
+export function searchApps(apps, query, { limit = 12 } = {}) {
+  const want = String(query ?? '').trim().toLowerCase().replace(/\.desktop$/, '');
+  if (!want) return [];
+  const words = want.split(/\s+/).filter(Boolean);
+  const low = (s) => String(s ?? '').toLowerCase();
+  const rank = (a) => {
+    const name = low(a.name), id = low(a.id), tail = id.split('.').pop(), generic = low(a.generic), key = low(a.entry.Keywords);
+    if (name === want) return 0;
+    if (id === want || tail === want) return 1;
+    if (generic === want) return 2;
+    if (name.startsWith(want)) return 3;
+    if (words.every((w) => name.split(/[^a-z0-9+]+/).includes(w))) return 4;
+    if (words.every((w) => `${name} ${id} ${generic} ${key}`.includes(w))) return 5;
+    return null;
+  };
+  return appCatalog(apps).map((a) => ({ a, r: rank(a) })).filter((x) => x.r != null)
+    .sort((x, y) => x.r - y.r || String(x.a.name).localeCompare(String(y.a.name)))
+    .slice(0, limit).map((x) => x.a);
+}
+
+/** The installed app a name means, or the candidates when it is ambiguous ({ app: null, matches }). Only apps in the
+ *  list can ever come out of here: a path or a file has no entry to match. */
+export function resolveApp(apps, target) {
+  const want = String(target ?? '').trim().toLowerCase();
+  const all = appCatalog(apps);
+  const exact = all.filter((a) => a.id.toLowerCase() === want || String(a.name).toLowerCase() === want);
+  // One name, one app: two apps that call themselves the same thing are answered with both, never with a guess.
+  if (exact.length === 1) return { app: exact[0], matches: exact };
+  if (exact.length > 1) return { app: null, matches: exact };
+  const hits = searchApps(apps, target, { limit: 8 });
+  if (hits.length === 1) return { app: hits[0], matches: hits };
+  return { app: null, matches: hits };
+}
+
+// Programs whose own name says nothing about the app: the app is the id after them, or nowhere.
+const INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'dash', 'env', 'python', 'python3', 'perl', 'ruby', 'node', 'wine', 'mono']);
+
+/** The command names a .desktop entry starts (Exec's program, past env assignments and placeholders, plus TryExec), as
+ *  /proc names it. `flatpak run org.foo.Bar` is "org.foo.Bar": a flatpak's own process says nothing. */
+export function appExecNames(entry = {}) {
+  const out = new Set();
+  for (const raw of [entry.Exec, entry.TryExec]) {
+    const parts = String(raw ?? '').trim().split(/\s+/).filter(Boolean);
+    while (parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) parts.shift();
+    if (parts[0] === 'env') { parts.shift(); while (parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) parts.shift(); }
+    const prog = parts[0];
+    if (!prog || prog.startsWith('%')) continue;
+    const base = path.basename(prog);
+    if (INTERPRETERS.has(base)) continue;
+    if (base === 'flatpak') {
+      const id = parts.slice(1).find((p) => /^[A-Za-z][\w-]*(\.[\w-]+){2,}$/.test(p));
+      if (id) out.add(id);
+      continue;
+    }
+    out.add(base);
+  }
+  return [...out];
+}
+
+/** The installed apps that are running now, from /proc (a process whose command is an app's, or a flatpak's id). One
+ *  entry per app: its first pid, named as the menus name it. */
+export async function runningApps(apps, { procDir = '/proc', fsApi = fs, limit = 40 } = {}) {
+  const byName = new Map();
+  for (const a of appCatalog(apps)) for (const n of appExecNames(a.entry)) if (!byName.has(n)) byName.set(n, a);
+  if (!byName.size) return [];
+  const entries = await fsApi.readdir(procDir).catch(() => []);
+  const found = [];
+  for (const pid of entries) {
+    if (!/^\d+$/.test(pid)) continue;
+    const [cmdline, comm] = await Promise.all([
+      fsApi.readFile(path.join(procDir, pid, 'cmdline')).catch(() => null),
+      fsApi.readFile(path.join(procDir, pid, 'comm'), 'utf8').catch(() => ''),
+    ]);
+    const argv = cmdline && cmdline.length ? cmdline.toString('utf8').split('\0').filter(Boolean) : [];
+    const argv0 = argv[0] ? path.basename(argv[0]) : '';
+    const names = [argv0, String(comm).trim()].filter(Boolean);
+    // A flatpak's app id is one of its arguments, not the program it runs (all flatpaks run "flatpak").
+    const flatpakId = argv0 === 'flatpak' ? argv.find((p) => byName.has(p)) : null;
+    const app = flatpakId ? byName.get(flatpakId) : names.map((n) => byName.get(n)).find(Boolean);
+    if (!app) continue;
+    found.push({ app, pid: Number(pid), exec: argv0 || String(comm).trim() });
+  }
+  const seen = new Set(), out = [];
+  for (const f of found.sort((a, b) => a.pid - b.pid)) if (!seen.has(f.app.id)) { seen.add(f.app.id); out.push(f); }
+  return out.sort((a, b) => String(a.app.name).localeCompare(String(b.app.name))).slice(0, limit);
+}
+
+/** Runs a launcher (gio, gtk-launch) until it exits, without a shell and without ever writing to its input: it only
+ *  gets the .desktop file or the app's id, never arguments of the model's choosing. */
+const startLauncher = (cmd, args, { spawnFile = spawn, timeoutMs = 15_000 } = {}) => new Promise((resolve) => {
+  let child, stderr = '', done = false;
+  const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
+  const timer = setTimeout(() => { try { child?.kill(); } catch { /* already gone */ } finish({ code: 'ETIMEDOUT', stderr }); }, timeoutMs);
+  try { child = spawnFile(cmd, args, { shell: false, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true }); }
+  catch (e) { finish({ code: e?.code ?? 'ESPAWN', stderr: String(e?.message || e) }); return; }
+  child.stderr?.on('data', (d) => { stderr += String(d); });
+  child.on('error', (e) => finish({ code: e?.code ?? 'ESPAWN', stderr: String(e?.message || e) }));
+  child.on('exit', (code, signal) => finish({ code: code === 0 ? 0 : code ?? signal, stderr }));
+});
+
+/** Starts one installed app on Linux: gio launches its .desktop file, else gtk-launch starts it by id. Only what is in
+ *  the installed list is ever started, by name, with no shell, no arguments and no file of anyone's choosing. */
+export async function launchInstalledApp(target, { apps = null, spawnFile = spawn, timeoutMs = 15_000 } = {}) {
+  const v = checkAppTarget(target);
+  if (v.level === BLOCK) throw new Error(`Blocked for safety: ${v.reason} Don't look for another way; tell the user what you wanted to open instead.`);
+  const list = apps ?? await desktopApps();
+  const { app, matches } = resolveApp(list, target);
+  if (!app) {
+    if (matches.length > 1) throw new Error(`There's more than one app like "${target}": ${matches.slice(0, 6).map(appLine).join(', ')}. Ask which one, then start it by its id.`);
+    throw new Error(`There's no app called "${target}" on this computer (not installed, or it has another name). Don't look for it another way; tell the user and carry on.`);
+  }
+  let r = await startLauncher('gio', ['launch', app.file], { spawnFile, timeoutMs });
+  let via = 'gio';
+  if (r.code === 'ENOENT') { via = 'gtk-launch'; r = await startLauncher('gtk-launch', [app.id], { spawnFile, timeoutMs }); }
+  if (r.code === 'ENOENT') throw new Error(`Found ${app.name}, but this computer has neither gio nor gtk-launch to start it.`);
+  if (r.code === 'ETIMEDOUT') throw new Error(`${app.name} didn't start within ${Math.round(timeoutMs / 1000)} s, so I stopped waiting.`);
+  if (r.code !== 0) throw new Error(`${app.name} didn't start (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().slice(0, 300)}` : '.'}`);
+  return { app, via };
 }
 
 /** Runs a launcher (gio, gtk-launch, xdg-open) and resolves when it exits, like run(). Not when its output closes:
@@ -227,7 +417,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {} }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -722,6 +912,8 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
       {
         name: 'list_windows', description: 'List the open app windows (app, title, id), front to back.',
         parameters: z.object({}),
+        // Agent core: asks the hands helper for the window list and changes nothing.
+        permission: { level: 'observe', requiresApproval: false, description: 'Read the open windows' },
         execute: async () => {
           const res = await hands('windows');
           return res.windows.map((w) => `window:${w.id}  ${w.app}${w.title ? ` — ${w.title}` : ''}${w.frontApp ? '  (frontmost app)' : ''}`).join('\n') || 'No windows open.';
@@ -858,23 +1050,30 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
     },
     {
-      name: 'read_file', description: 'Read a text file. Paths may start with ~. Files with passwords or keys (.ssh, .env, auth.json, keychains) are off limits.',
+      name: 'read_file', description: 'Read a text file (UTF-8) inside your allowed folders. Paths may start with ~. Files with passwords or keys are off limits.',
       parameters: z.object({ path: z.string() }),
-      execute: async ({ path: p }) => clip(await fs.readFile(allowed(checkRead(at(p), HOME)), 'utf8'), 60_000),
+      permission: { level: 'observe', requiresApproval: false, description: 'Read a text file' },
+      execute: async ({ path: p }) => clip(await fs.readFile(allowed(checkFileRead(at(p), HOME)), 'utf8'), 60_000),
     },
     {
-      name: 'list_files', description: 'List the files and folders in a directory.',
+      name: 'list_files', description: 'Browse the files and folders in a directory inside your allowed folders. Folders end with /. Supports Arabic and English names.',
       parameters: z.object({ dir: z.string() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Browse files and folders' },
       execute: async ({ dir }) => {
-        const ents = await fs.readdir(allowed(checkRead(at(dir), HOME)), { withFileTypes: true });
-        return ents.slice(0, 300).map((e) => (e.isDirectory() ? e.name + '/' : e.name)).join('\n') + (ents.length > 300 ? `\n…and ${ents.length - 300} more` : '');
+        const d = allowed(checkFileRead(at(dir), HOME));
+        const ents = await fs.readdir(d, { withFileTypes: true });
+        const lines = ents.slice(0, 400).map((e) => (e.isDirectory() ? e.name + '/' : e.isSymbolicLink() ? e.name + '@' : e.name));
+        return (lines.join('\n') || '(empty)') + (ents.length > 400 ? `\n…and ${ents.length - 400} more` : '');
       },
     },
     {
-      name: 'search_files', description: `Search file contents under a specific folder for a text pattern (regex). Not your whole home folder: that trips macOS privacy prompts. To find files by name anywhere, use run_command with ${process.platform === 'darwin' ? 'mdfind' : LINUX ? 'find or locate' : 'dir /s'}.`,
+      name: 'search_files', description: 'Search file contents under a specific folder inside your allowed folders for a text pattern (regex). To find files by name or extension, use find_files.',
       parameters: z.object({ pattern: z.string(), dir: z.string() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Search inside file contents' },
       execute: async ({ pattern, dir }) => {
-        const d = allowed(checkRead(at(dir), HOME, { recursive: true }));
+        const d = allowed(checkFileRead(at(dir), HOME));
+        // Preserve the "no whole-home recursive search" guard (privacy prompts) while staying in allowed folders.
+        allowed(checkRead(at(dir), HOME, { recursive: true }));
         // -e and -- keep a pattern like "--pre=cmd" from being read as an option (rg --pre runs programs).
         let r = await run('rg', ['-n', '--max-count', '5', '--max-columns', '200', '-e', pattern, '--', d]);
         if (r.err?.code === 'ENOENT') r = await run('grep', ['-rnI', '-m', '5', '-E', '-e', pattern, '--', d]);
@@ -882,17 +1081,20 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
     },
     {
-      name: 'write_file', description: 'Create or overwrite a text file with the given content (missing folders are made). Use this, not run_command, to create or change files: a new file needs no yes from the user; overwriting asks them. Several new files: one write_file call each, all in the same turn (a shell loop that makes files has to ask).',
+      name: 'write_file', description: 'Create or overwrite a text file (UTF-8) inside your allowed folders (missing folders are made). Overwriting an existing file asks first. Requires explicit approval for each operation.',
       parameters: z.object({ path: z.string(), content: z.string() }), executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Create or overwrite a text file' },
       execute: async ({ path: p, content }, ctx) => {
         if (!allowActions()) throw new Error(actionsOff);
         p = at(p);
+        // Must stay inside allowed user folders and be symlink-safe.
+        allowed(checkFileDest(p, HOME, { allowReplace: true }));
         const exists = await fs.stat(expand(p)).then(() => true, () => false);
         const v = checkWrite(p, HOME, { exists, own });
         const f = allowed(v);
         if (v.level === ASK && !(await confirm(v.reason, ctx))) throw new Error(`${userName} said no, so I didn't write ${p}.`);
         await fs.mkdir(path.dirname(f), { recursive: true });
-        await fs.writeFile(f, content);
+        await fs.writeFile(f, content, 'utf8');
         return `Wrote ${content.length} characters to ${f}.`;
       },
     },
@@ -913,12 +1115,270 @@ A drawing stays until the user clears it or the window changes; your next drawin
         return out;
       },
     },
-    // GG Coder's own web tools: search with a side search or keyless engines, pages as Markdown with offset to read on.
-    createWebSearchTool(undefined, async (req) => {
-      const side = sideSearchFor(await Promise.resolve().then(sideSearch).catch(() => null));
-      return side ? side(req) : null;
-    }),
-    createWebFetchTool(undefined, { guardUrl: guardFetch }),
+    // A terminal that can only look: one allowlisted read-only command, run with no shell, under a time and size limit.
+    {
+      name: 'run_diagnostic', description: `Check ${THIS_COMPUTER} with one read-only command and show ${userName} the command with its output. Only these run: pwd, whoami, uptime, uname (-a -s -r -m -n), df (-h -k -P), free (-h -m -g), ls (-l -a -h -1 -la -al -lh -lah), ps (-e -f -A -ef -ax). There is no shell: no pipes, redirects, chaining, scripts or sudo, no paths, and nothing is changed. Use it for a quick look at the system (version, disk, memory, uptime, processes); for files use list_files or read_file. In your reply: one short sentence on what it means, then a line starting with "- " naming the command, then its output exactly as it came back inside a \`\`\` block (so the command and its result show on the answer card); add nothing to the output. A command that isn't on this computer says so: say that, don't try another way. It is stopped after 5 seconds and returns at most 8,000 characters.`,
+      parameters: z.object({ command: z.enum(DIAGNOSTIC_NAMES), args: z.array(z.string().max(12)).max(3).optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Run one read-only diagnostic command' },
+      execute: async ({ command, args }) => runDiagnostic({ command, args }, { cwd: workdir }),
+    },
+    // Applications on Linux: what's installed, which one a name means, what's running, and starting a known one.
+    // Reading is free (observe); starting is trusted and always asks first, and only an installed app can be named.
+    ...(LINUX ? [
+      {
+        name: 'list_apps',
+        description: `List the apps installed on this computer (Linux), with the name each shows in the menus and its id. Use it when ${userName} asks what's installed, or to find the exact name or id for launch_app. Background helpers and apps the menus hide are left out.`,
+        parameters: z.object({ limit: z.number().int().min(1).max(500).optional() }),
+        permission: { level: 'observe', requiresApproval: false, description: 'List the installed applications' },
+        execute: async ({ limit = 150 } = {}) => {
+          const all = appCatalog(await desktopApps());
+          if (!all.length) return 'No apps are installed in the places this computer keeps them.';
+          const shown = all.slice(0, limit);
+          return `${all.length} apps installed:\n${shown.map(appLine).join('\n')}${all.length > shown.length ? `\n…and ${all.length - shown.length} more.` : ''}`;
+        },
+      },
+      {
+        name: 'find_app',
+        description: `Find an installed app by name (part of the name is enough, in any language it's listed in) and get its id for launch_app. Read-only: it starts nothing.`,
+        parameters: z.object({ name: z.string().max(80) }),
+        permission: { level: 'observe', requiresApproval: false, description: 'Search the installed applications by name' },
+        execute: async ({ name } = {}) => {
+          const hits = searchApps(await desktopApps(), name);
+          if (!hits.length) return `No installed app matches "${String(name ?? '').slice(0, 60)}". Call list_apps to see what is installed.`;
+          return `${hits.length === 1 ? 'One app matches' : `${hits.length} apps match`}:\n${hits.map(appLine).join('\n')}`;
+        },
+      },
+      {
+        name: 'running_apps',
+        description: `List the installed apps that are open right now on this computer (Linux), with their process ids. Read-only: it starts, focuses and closes nothing.`,
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: "List the installed apps that are running" },
+        execute: async () => {
+          const list = await runningApps(await desktopApps());
+          if (!list.length) return 'Nothing from the app menus is running right now.';
+          return `Running now:\n${list.map((r) => `${appLine(r.app)} (pid ${r.pid})`).join('\n')}`;
+        },
+      },
+      {
+        name: 'launch_app',
+        description: `Start an app that is installed on this computer (Linux), by the name the menus show or its id (find_app or list_apps gives it). Only installed apps start this way: never a file, a path, a script or a command, and there are no arguments to pass. ${userName} is asked first, every time. For a website, a file or a folder use open instead.`,
+        parameters: z.object({ app: z.string().max(80) }),
+        executionMode: 'sequential',
+        permission: { level: 'trusted', requiresApproval: true, description: 'Start an installed application' },
+        execute: async ({ app: wanted }, ctx) => {
+          // Checked before asking, so nobody is asked to allow a command or a path.
+          const v = checkAppTarget(wanted);
+          if (v.level === BLOCK) throw new Error(`Blocked for safety: ${v.reason} Don't look for another way; tell ${userName} what you wanted to open instead.`);
+          const list = await desktopApps();
+          const { app, matches } = resolveApp(list, wanted);
+          if (!app) {
+            if (matches.length > 1) throw new Error(`There's more than one app like "${wanted}": ${matches.slice(0, 6).map(appLine).join(', ')}. Ask which one, then start it by its id.`);
+            throw new Error(`There's no app called "${wanted}" on ${THIS_COMPUTER} (not installed, or it has another name). Don't look for it another way; tell ${userName} and carry on.`);
+          }
+          if (!(await confirm(`Open ${app.name}?`, ctx))) throw new Error(`${userName} said no, so ${app.name} wasn't opened.`);
+          const wasOpen = (await runningApps(list)).some((r) => r.app.id === app.id);
+          const { via } = await launchInstalledApp(app.id, { apps: list });
+          return `Launched ${app.name} (${app.id})${via === 'gtk-launch' ? ' with gtk-launch' : ''}.${wasOpen ? ' It was already open, so this brought another window or moved it forward.' : ''}`;
+        },
+      },
+      {
+        name: 'system_status',
+        description: `Read the current status of ${THIS_COMPUTER} (Linux): CPU use and temperature (if a sensor reports it), RAM and swap, disk space, battery and charging (if there is one), system/uptime, and the processes using the most CPU and memory. Read-only; nothing is changed, started or stopped. If something can't be read (no battery, no temperature sensor), it says so clearly.`,
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'Read system status and resource usage' },
+        execute: async () => {
+          const out = await getSystemStatus();
+          showSystem(out);
+          return out.text;
+        },
+      },
+      {
+        name: 'screen_capture',
+        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal. The desktop asks the user to allow or choose what to share before every capture (no hidden or background capture). Shows the captured image in Little Boy, optionally extracts text with local OCR if available (Arabic/English when installed), and returns the image and extracted text so you can analyze what's on screen and answer questions about it. Images and extracted text are not saved by default (temporary capture is deleted after use). If the portal or OCR is unavailable, it explains why clearly.`,
+        parameters: z.object({
+          interactive: z.boolean().optional().describe('If true (default), the portal lets the user choose screen, window, or area and consent. If false, requests a non-interactive capture when the desktop allows it.'),
+          ocr: z.boolean().optional().describe('If true (default), try to extract on-screen text using local OCR when available.'),
+          question: z.string().optional().describe('Optional: the specific question to answer about what is shown (used to focus your analysis of the returned image/text).'),
+        }),
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen or window via desktop portal (user consent required each time)' },
+        execute: async ({ interactive = true, ocr = true, question } = {}) => {
+          const cap = await captureViaPortal({ askShell, interactive: interactive !== false });
+          if (!cap.ok) throw new Error(cap.error || 'Screen capture failed.');
+          let ocrResult = null;
+          let dataUrl = null;
+          try {
+            dataUrl = await readImageDataUrl(cap.file, 'image/jpeg');
+            if (ocr) ocrResult = await ocrImage(cap.file, { preferred: ['ara', 'eng'] });
+          } finally {
+            await removeTemp(cap.file);
+          }
+          ui({ kind: 'screen_capture', image: dataUrl, ocr: ocrResult, question: question || null, at: Date.now() });
+          const parts = [
+            'Captured screen image is shown in Little Boy and included below for analysis.',
+            question ? `Question: ${question}` : null,
+            screenAnswerText({ ocr: ocrResult, ocrEnabled: !!ocr }),
+            'Do not save the image or extracted text. Use them only to answer the user about what is shown.',
+          ].filter(Boolean);
+          const content = [{ type: 'text', text: parts.join('\n\n') }];
+          if (dataUrl) content.push({ type: 'image', url: dataUrl });
+          return { content };
+        },
+      },
+      {
+        name: 'screen_ocr',
+        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal and extract visible text locally (OCR). Uses local tesseract when installed (Arabic/English when language packs are available). The desktop asks the user to allow or choose what to share before every capture. Shows the capture in Little Boy. Nothing is saved by default. If portal or OCR is unavailable, returns a clear reason.`,
+        parameters: z.object({
+          interactive: z.boolean().optional().describe('If true (default), let the user choose screen, window, or area.'),
+        }),
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen via portal and extract text locally (OCR)' },
+        execute: async ({ interactive = true } = {}) => {
+          const det = await detectTesseract();
+          const cap = await captureViaPortal({ askShell, interactive: interactive !== false });
+          if (!cap.ok) throw new Error(cap.error || 'Screen capture failed.');
+          let ocrResult = null;
+          let dataUrl = null;
+          try {
+            dataUrl = await readImageDataUrl(cap.file, 'image/jpeg');
+            ocrResult = det.ok ? await ocrImage(cap.file, { preferred: ['ara', 'eng'] }) : { ok: false, error: det.reason };
+          } finally {
+            await removeTemp(cap.file);
+          }
+          ui({ kind: 'screen_capture', image: dataUrl, ocr: ocrResult, at: Date.now() });
+          return screenAnswerText({ ocr: ocrResult, ocrEnabled: true });
+        },
+      },
+    ] : []),
+    // GG Coder's own web tools (observe): search with a side search or keyless engines, pages as Markdown.
+    // Wrapped to surface browser/web activity in Little Boy. No tokens, no CAPTCHA/login bypass.
+    ...(() => {
+      const baseSearch = createWebSearchTool(undefined, async (req) => {
+        const side = sideSearchFor(await Promise.resolve().then(sideSearch).catch(() => null));
+        return side ? side(req) : null;
+      });
+      const baseFetch = createWebFetchTool(undefined, { guardUrl: guardFetch });
+      const wrap = (tool, kind) => ({
+        ...tool,
+        execute: async (args) => {
+          try {
+            const r = await tool.execute(args);
+            if (kind === 'web_search') ui({ kind: 'browser', action: 'search', query: String(args?.query || ''), results: r?.results || [], count: (r?.results || []).length, at: Date.now() });
+            else ui({ kind: 'browser', action: 'read', url: String(args?.url || r?.url || ''), title: r?.title || '', text: String(r?.text || r?.markdown || '').slice(0, 1200), truncated: !!r?.truncated, at: Date.now() });
+            return r;
+          } catch (e) {
+            ui({ kind: 'browser', action: 'error', source: kind, query: String(args?.query || ''), url: String(args?.url || ''), error: String(e?.message || e), at: Date.now() });
+            throw e;
+          }
+        },
+      });
+      return [wrap(baseSearch, 'web_search'), wrap(baseFetch, 'web_fetch')];
+    })(),
+    {
+      name: 'browser_discover',
+      description: `Discover installed and running web browsers on ${THIS_COMPUTER} and report default-browser open capability. On Linux it inspects desktop entries and running processes; on other platforms it reports default-browser availability. Read-only (observe), no approval, no network access, no saved credentials/cookies/session data. Use with browser_open/browser_navigate to access supported platforms such as Respan (https://platform.respan.ai/) while preserving existing browser login sessions.`,
+      parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'Discover installed and running browsers' },
+      execute: async () => {
+        const info = await browserDiscover({ desktopApps, runningApps });
+        ui({ kind: 'browser', action: 'discover', installed: info.installed, running: info.running, defaultBrowser: info.defaultBrowser, note: info.note, at: Date.now() });
+        return info;
+      },
+    },
+    {
+      name: 'browser_open',
+      description: `Open a user-specified URL in the system default browser on ${THIS_COMPUTER} (observe). Use when the user asks to open a link, search result, or a supported platform page such as Respan (https://platform.respan.ai/). Opening in the default browser preserves any existing browser login session; this tool never extracts passwords, cookies, or session tokens. Does not fill forms, submit, post, purchase, publish, modify, bypass CAPTCHA/login, or change account data. If you need to read visible page content, follow with browser_read_page or web_fetch.`,
+      parameters: z.object({ url: z.string().min(1).describe('The http(s) URL to open in the default browser.') }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Open a URL in the default browser' },
+      execute: async ({ url }) => {
+        const v = checkFetch(String(url));
+        if (v.level === 'block') throw new Error(v.reason || 'That URL cannot be opened.');
+        const r = await browserOpenUrl(v.url, { execFile: (cmd, args) => new Promise((res, rej) => execFile(cmd, args, { windowsHide: true, timeout: 15000 }, (err, stdout, stderr) => err ? rej(Object.assign(err, { stderr })) : res({ stdout, stderr }))) });
+        ui({ kind: 'browser', action: 'open', url: v.url, with: r.with, at: Date.now() });
+        const respan = isRespanPlatformUrl(v.url);
+        return { ok: true, opened: v.url, with: r.with, platform: respan ? 'respan' : undefined, note: respan ? 'Opened Respan platform in the default browser (existing browser login session is preserved; no credentials/cookies/tokens accessed). Use browser_read_page/web_fetch for visible public text, but authenticated account content must be viewed in your browser session; no account actions without explicit approval.' : 'Opened in the default browser. Use browser_read_page/web_fetch to read visible page text when needed.' };
+      },
+    },
+    {
+      name: 'browser_read_page',
+      description: `Read a web page's visible text, title and URL (observe). Use when the user asks what a page says or to read/open-and-summarize a link, including supported platform pages such as Respan (https://platform.respan.ai/). Fetches the page safely as Markdown/text via the built-in web reader (unauthenticated: no browser session, no cookies/passwords/tokens, no login/CAPTCHA bypass). Existing browser login sessions remain in the user's browser; if content requires login/CAPTCHA or is inaccessible, it reports that clearly instead of guessing or bypassing. For authenticated Respan content visible in the user's signed-in browser session, check browser_respan_bridge_status and, with explicit user consent/approval, use browser_read_respan_authenticated (if a local bridge is connected).`,
+      parameters: z.object({
+        url: z.string().min(1).describe('The http(s) URL to read.'),
+        offset: z.number().int().min(0).optional().describe('Character offset to continue reading a long page.'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Read visible page text and metadata' },
+      execute: async ({ url, offset = 0 }) => {
+        const fetchTool = createWebFetchTool(undefined, { guardUrl: (u) => checkFetch(u) });
+        try {
+          const r = await fetchReadablePage(String(url), { fetchTool, offset });
+          const info = { ok: true, url: r.url, title: r.title || '', text: r.text, truncated: !!r.truncated, nextOffset: r.nextOffset ?? null, lang: r.lang, authWall: r.authWall || null, platform: isRespanPlatformUrl(r.url) ? 'respan' : undefined, note: r.note || undefined };
+          ui({ kind: 'browser', action: 'read', url: info.url, title: info.title, text: String(r.text || '').slice(0, 1200), truncated: info.truncated, lang: info.lang, authWall: info.authWall, platform: info.platform, note: info.note, at: Date.now() });
+          return info;
+        } catch (e) {
+          const msg = String(e?.message || e);
+          const respan = isRespanPlatformUrl(url);
+          const note = respan ? respanReadNote(url, {}) : 'I cannot access login-protected, CAPTCHA, or otherwise inaccessible content, and I will not bypass protections.';
+          ui({ kind: 'browser', action: 'error', source: 'read', url: String(url), error: msg, note, at: Date.now() });
+          return { ok: false, url: String(url), platform: respan ? 'respan' : undefined, error: `Could not read page content: ${msg}`, note };
+        }
+      },
+    },
+    {
+      name: 'browser_respan_bridge_status',
+      description: `Check whether a safe local authenticated browser bridge/extension is available for Respan platform reading (observe, read-only). The bridge, if connected by the user, can expose only visible page content (title/url/text/elements) from the user's signed-in browser session on https://platform.respan.ai/ without sending passwords, cookies, or session tokens to Little Boy. This does not connect to or share any page content; it only reports bridge availability/configuration status.`,
+      parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'Check local authenticated browser bridge status for Respan' },
+      execute: async () => {
+        const st = await respanBridgeStatus({});
+        ui({ kind: 'browser', action: 'respan_bridge', status: st, at: Date.now() });
+        return st;
+      },
+    },
+    {
+      name: 'browser_read_respan_authenticated',
+      description: `Read the visible content of a Respan platform page (https://platform.respan.ai/...) from the user's current signed-in browser session via a safe local browser bridge/extension, when available (observe). Requires explicit user approval before sharing page content with Little Boy. Returns only visible page title, URL, text, and displayed elements; never extracts or transmits passwords, cookies, or session tokens, never bypasses login/CAPTCHA, and never performs account changes/submissions/publishing. If no connected bridge is available, it reports that clearly and does not claim success.`,
+      parameters: z.object({
+        url: z.string().min(1).describe('A https://platform.respan.ai/ URL to read from the authenticated browser session.'),
+      }),
+      permission: { level: 'observe', requiresApproval: true, description: 'Share visible authenticated Respan page content with Little Boy via local bridge (explicit consent required)' },
+      execute: async ({ url }) => {
+        const v = checkFetch(String(url));
+        if (v.level === 'block') throw new Error(v.reason || 'That URL cannot be read.');
+        if (!isRespanPlatformUrl(v.url)) {
+          throw new Error('Authenticated browser reading is only supported for https://platform.respan.ai/ URLs.');
+        }
+        const r = await readRespanAuthenticatedPage(v.url, {});
+        ui({ kind: 'browser', action: r.ok ? 'read_authenticated' : 'error', source: 'respan_bridge', url: v.url, title: r.title || '', text: String(r.text || '').slice(0, 1200), elements: Array.isArray(r.elements) ? r.elements.slice(0, 20) : undefined, authWall: r.authWall || null, platform: 'respan', authenticated: !!r.authenticated, error: r.error || undefined, note: r.note || undefined, at: Date.now() });
+        return r;
+      },
+    },
+    {
+      name: 'browser_navigate',
+      description: `Navigate browser history/state for a page you are working with (observe). Supports: open (open a URL in default browser), back/forward/reload as explicit user-requested actions reported for clarity. Works with supported platform pages such as Respan (https://platform.respan.ai/) by opening/reopening in the default browser (preserving existing browser login session; no credentials/cookies/tokens accessed). Back/forward/reload cannot be driven inside an external default browser session without control APIs; this tool performs best-effort and clearly reports limitations. Never submits forms, posts, publishes, purchases, or changes user/account data.`,
+      parameters: z.object({
+        action: z.enum(['open', 'back', 'forward', 'reload']),
+        url: z.string().optional().describe('URL to open or (re)load. Required for open/reload; recommended for back/forward as fallback target.'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Navigate or open a page in the default browser' },
+      execute: async ({ action, url }) => {
+        const act = String(action || '').toLowerCase();
+        if (!BROWSER_ACTIONS.includes(act)) throw new Error('Unsupported navigation action.');
+        if ((act === 'open' || act === 'reload') && !url) throw new Error('url is required for open/reload.');
+        if (act === 'open' || act === 'reload' || (url && (act === 'back' || act === 'forward'))) {
+          const v = checkFetch(String(url));
+          if (v.level === 'block') throw new Error(v.reason || 'That URL cannot be opened.');
+          const r = await browserOpenUrl(v.url, { execFile: (cmd, args) => new Promise((res, rej) => execFile(cmd, args, { windowsHide: true, timeout: 15000 }, (err, stdout, stderr) => err ? rej(Object.assign(err, { stderr })) : res({ stdout, stderr }))) });
+          const respan = isRespanPlatformUrl(v.url);
+          const baseNote = (act === 'back' || act === 'forward')
+            ? `True in-browser ${act} is not available for an external default browser session; opened the provided URL instead.`
+            : (act === 'reload' ? 'Reload performed by reopening the URL in the default browser.' : 'Opened in the default browser.');
+          const note = respan ? `${baseNote} Respan platform: existing browser login session is preserved in the browser; no credentials/cookies/tokens accessed and no account actions performed.` : baseNote;
+          ui({ kind: 'browser', action: 'navigate', nav: act, url: v.url, with: r.with, note, platform: respan ? 'respan' : undefined, at: Date.now() });
+          return { ok: true, action: act, url: v.url, with: r.with, platform: respan ? 'respan' : undefined, note };
+        }
+        const note = `Cannot perform ${act} without browser session control and no URL was provided. Ask the user for the URL or to use their browser controls.`;
+        ui({ kind: 'browser', action: 'navigate', nav: act, url: url || null, note, at: Date.now() });
+        return { ok: false, action: act, url: url || null, note };
+      },
+    },
     {
       name: 'open', description: 'Open a website, a file or folder, or an app by name (e.g. "Safari", "https://skool.com", "~/Documents"). Links open in the default browser; set app to open one in a particular browser or app (e.g. app "Safari" when the user says "in Safari").',
       parameters: z.object({ target: z.string(), app: z.string().optional() }),
@@ -944,6 +1404,126 @@ A drawing stays until the user clears it or the window changes; your next drawin
         if (r.err) throw new Error(r.stderr.trim() || `Couldn't open ${t}.`);
         if (lastShot) lastShot.used = true;
         return `Opened ${t}${inApp.length ? ` in ${app}` : ''}.`;
+      },
+    },
+    {
+      name: 'file_info', description: 'Show information about a file or folder inside your allowed folders (type, size, modified time, readable text hint). Supports Arabic and English names. Paths may start with ~.',
+      parameters: z.object({ path: z.string() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Read file or folder information' },
+      execute: async ({ path: p }) => {
+        const f = allowed(checkFileRead(at(p), HOME));
+        const st = await fs.lstat(f);
+        const kind = st.isDirectory() ? 'directory' : st.isSymbolicLink() ? 'symlink' : st.isFile() ? 'file' : 'other';
+        let textHint = '';
+        if (st.isFile() && st.size <= 512 * 1024) {
+          try {
+            const buf = await fs.readFile(f);
+            const sample = buf.subarray(0, Math.min(buf.length, 8192));
+            textHint = sample.includes(0) ? 'binary (not a text file)' : 'text (UTF-8 readable)';
+          } catch { textHint = 'unreadable'; }
+        } else if (st.isFile()) textHint = 'large file';
+        const lines = [
+          `path: ${f}`,
+          `name: ${path.basename(f)}`,
+          `type: ${kind}`,
+          `size: ${st.size} bytes`,
+          `modified: ${st.mtime.toISOString()}`,
+          `created: ${st.birthtime ? st.birthtime.toISOString() : ''}`,
+        ];
+        if (st.isSymbolicLink()) { try { lines.push(`link: ${await fs.readlink(f)}`); } catch {} }
+        if (textHint) lines.push(`content: ${textHint}`);
+        return lines.join('\n');
+      },
+    },
+    {
+      name: 'find_files', description: 'Search for files and folders by name or extension inside a folder in your allowed folders (not by content). Supports Arabic and English names. name: part of the name to match (case-insensitive for Latin). ext: extension like ".txt" or "txt". max: max results (default 200).',
+      parameters: z.object({ dir: z.string(), name: z.string().optional(), ext: z.string().optional(), max: z.number().int().min(1).max(1000).optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Search files and folders by name or extension' },
+      execute: async ({ dir, name, ext, max = 200 }) => {
+        const root = allowed(checkFileRead(at(dir), HOME));
+        const wantName = name ? String(name).toLocaleLowerCase() : null;
+        let wantExt = ext ? String(ext).toLocaleLowerCase() : null;
+        if (wantExt && !wantExt.startsWith('.')) wantExt = '.' + wantExt;
+        const out = [];
+        const walk = async (d, depth) => {
+          if (out.length >= max || depth > 12) return;
+          let ents;
+          try { ents = await fs.readdir(d, { withFileTypes: true }); } catch { return; }
+          for (const e of ents) {
+            if (out.length >= max) return;
+            const full = path.join(d, e.name);
+            const lower = e.name.toLocaleLowerCase();
+            const matchName = !wantName || lower.includes(wantName);
+            const matchExt = !wantExt || lower.endsWith(wantExt);
+            if (matchName && matchExt) out.push(e.isDirectory() ? full + '/' : full);
+            if (e.isDirectory() && !e.isSymbolicLink()) await walk(full, depth + 1);
+          }
+        };
+        await walk(root, 0);
+        return (out.join('\n') || 'No matches.') + (out.length >= max ? `\n…(stopped at ${max})` : '');
+      },
+    },
+    {
+      name: 'create_directory', description: 'Create a new directory (and missing parents) inside your allowed folders. Requires explicit approval for each operation.',
+      parameters: z.object({ path: z.string() }), executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Create a directory' },
+      execute: async ({ path: p }) => {
+        if (!allowActions()) throw new Error(actionsOff);
+        p = at(p);
+        const v = checkFileCreate(p, HOME);
+        if (v.level === BLOCK && /already exists/.test(v.reason)) {
+          const st = await fs.stat(allowed(checkFileRead(p, HOME))).catch(() => null);
+          if (st?.isDirectory()) return `Directory already exists: ${v.path}.`;
+          throw new Error(`Blocked for safety: ${v.reason}`);
+        }
+        const d = allowed(v);
+        await fs.mkdir(d, { recursive: true });
+        return `Created directory ${d}.`;
+      },
+    },
+    {
+      name: 'copy_file', description: 'Copy a file or folder to a new location inside your allowed folders. Requires explicit approval for each operation. Does not overwrite existing destinations.',
+      parameters: z.object({ from: z.string(), to: z.string() }), executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Copy a file or folder' },
+      execute: async ({ from, to }) => {
+        if (!allowActions()) throw new Error(actionsOff);
+        from = at(from); to = at(to);
+        const src = allowed(checkFileSource(from, HOME));
+        const dst = allowed(checkFileDest(to, HOME));
+        const st = await fs.lstat(src);
+        if (st.isDirectory()) await fs.cp(src, dst, { recursive: true, errorOnExist: true, dereference: false });
+        else if (st.isSymbolicLink()) { const target = await fs.readlink(src); await fs.symlink(target, dst); }
+        else await fs.copyFile(src, dst, fs.constants.COPYFILE_EXCL);
+        return `Copied ${src} to ${dst}.`;
+      },
+    },
+    {
+      name: 'move_file', description: 'Move a file or folder to a new location inside your allowed folders. Requires explicit approval for each operation. Does not overwrite existing destinations.',
+      parameters: z.object({ from: z.string(), to: z.string() }), executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Move a file or folder' },
+      execute: async ({ from, to }) => {
+        if (!allowActions()) throw new Error(actionsOff);
+        from = at(from); to = at(to);
+        const src = allowed(checkFileSource(from, HOME, { forWrite: true }));
+        const dst = allowed(checkFileDest(to, HOME));
+        await fs.mkdir(path.dirname(dst), { recursive: true });
+        await fs.rename(src, dst);
+        return `Moved ${src} to ${dst}.`;
+      },
+    },
+    {
+      name: 'rename_file', description: 'Rename a file or folder inside your allowed folders. Requires explicit approval for each operation. Does not overwrite existing names.',
+      parameters: z.object({ path: z.string(), newName: z.string() }), executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Rename a file or folder' },
+      execute: async ({ path: p, newName }) => {
+        if (!allowActions()) throw new Error(actionsOff);
+        p = at(p);
+        if (!newName || /[\\/]/.test(newName) || newName === '.' || newName === '..') throw new Error('newName must be a plain name (no path separators).');
+        const src = allowed(checkFileSource(p, HOME, { forWrite: true }));
+        const dstPath = path.join(path.dirname(src), newName);
+        const dst = allowed(checkFileDest(dstPath, HOME));
+        await fs.rename(src, dst);
+        return `Renamed to ${dst}.`;
       },
     },
     {
@@ -1000,8 +1580,60 @@ A drawing stays until the user clears it or the window changes; your next drawin
       execute: async () => { showList(); return 'The list is on screen.'; },
     },
     {
+      name: 'memory_save',
+      description: `Save a lasting memory for ${userName} in Little Boy's local persistent memory (SQLite on this device). Use categories: preferences, projects, conversations, tasks. Never store passwords, API keys, cookies or session tokens. Do not save a memory automatically unless ${userName} asked you to remember something lasting or it is clearly needed for future help; when in doubt, ask first.`,
+      parameters: z.object({ category: z.enum(['preferences', 'projects', 'conversations', 'tasks']), content: z.string().min(2).max(8000), title: z.string().max(200).optional() }),
+      executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Save a memory entry locally' },
+      execute: async ({ category, content, title }) => {
+        const m = memorySave({ category, content, title });
+        onMemories(m);
+        return `Saved memory ${m.id} [${m.category}]${m.title ? `: ${m.title}` : ''}.`;
+      },
+    },
+    {
+      name: 'memory_search',
+      description: 'Search Little Boy\'s local persistent memory by text (SQLite local search, no AI models). Returns matching memories across titles and content, optionally filtered by category.',
+      parameters: z.object({ query: z.string().min(1).max(200), category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional(), limit: z.number().int().min(1).max(100).optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Search local persistent memory' },
+      execute: async ({ query, category, limit }) => formatMemories(memorySearch({ query, category, limit })),
+    },
+    {
+      name: 'memory_list',
+      description: 'List saved persistent memories from local storage (SQLite), newest first. Optionally filter by category (preferences, projects, conversations, tasks).',
+      parameters: z.object({ category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional(), limit: z.number().int().min(1).max(200).optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'List local persistent memory entries' },
+      execute: async ({ category, limit }) => formatMemories(memoryList({ category, limit })),
+    },
+    {
+      name: 'memory_update',
+      description: 'Update an existing persistent memory entry by id. You can change category, title and/or content. Never store passwords, API keys, cookies or session tokens.',
+      parameters: z.object({ id: z.string(), category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional(), title: z.string().max(200).nullable().optional(), content: z.string().min(2).max(8000).optional() }),
+      executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Update a local memory entry' },
+      execute: async ({ id, category, title, content }) => {
+        const m = memoryUpdate({ id, category, title: title === null ? '' : title, content });
+        onMemories(m);
+        return `Updated memory ${m.id}.`;
+      },
+    },
+    {
+      name: 'memory_delete',
+      description: 'Delete a persistent memory entry by id from local storage.',
+      parameters: z.object({ id: z.string() }),
+      executionMode: 'sequential',
+      permission: { level: 'trusted', requiresApproval: true, description: 'Delete a local memory entry' },
+      execute: async ({ id }) => {
+        const r = memoryDelete({ id });
+        onMemories({ deleted: id });
+        return `Deleted memory ${r.id}.`;
+      },
+    },
+    {
       name: 'list_commitments', description: "List the open commitments you're keeping track of.",
       parameters: z.object({}),
+      // Agent core: this only reads the commitments Roamies already keeps, and never writes anything.
+      permission: { level: 'observe', requiresApproval: false, description: 'Read the open commitments from memory' },
       execute: async () => commitmentsText() || 'Nothing open.',
     },
   ];

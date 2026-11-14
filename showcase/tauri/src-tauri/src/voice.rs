@@ -43,6 +43,11 @@ pub(crate) fn start_voice(app: &AppHandle) {
     if let Some(dir) = app.state::<VoiceModel>().0.lock().unwrap().clone() {
         cmd.arg("--model").arg(dir);
     }
+    // The microphone picked in the panel (none: the system default). A pick that isn't connected falls back to the
+    // default, and the helper says so, so listening never breaks over an unplugged headset.
+    if let Some(mic) = app.state::<MicPick>().0.lock().unwrap().clone() {
+        cmd.arg("--mic").arg(mic);
+    }
     // Debug builds: ROAMIES_TEST_AUDIO=<wav> stands in for the microphone, to test talking with no mic (CI, Docker).
     #[cfg(debug_assertions)]
     if let Some(wav) = std::env::var_os("ROAMIES_TEST_AUDIO") {
@@ -291,6 +296,8 @@ fn handle_voice(app: &AppHandle, msg: Value) {
             to_overlays(app, &ui);
             to_sidecar(app, &json!({ "type": "voice_state", "state": msg.get("state") }));
         }
+        // Which microphone is really recording (and whether a pick fell back to the default): the panel says so.
+        Some("mic") => to_sidecar(app, &json!({ "type": "voice_mic", "state": msg.get("state"), "name": msg.get("name"), "wanted": msg.get("wanted") })),
         Some("partial") | Some("level") => to_overlays(app, &ui),
         Some("final") => {
             to_overlays(app, &ui);

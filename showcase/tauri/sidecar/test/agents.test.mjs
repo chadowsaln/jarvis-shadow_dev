@@ -30,10 +30,10 @@ for (const t of ['what is an AI agent?', 'how do I create an agent in LangChain'
   assert.ok(!wantsAgent(t), `not a request for one: ${t}`);
 
 // Tools: never the screen or the user's lists.
-const all = ['take_screenshot', 'read_file', 'write_file', 'run_command', 'web_search', 'web_fetch', 'list_files', 'search_files', 'draw', 'act_in_app', 'open', 'remember_commitment'].map((name) => ({ name }));
+const all = ['take_screenshot', 'read_file', 'write_file', 'run_command', 'web_search', 'web_fetch', 'browser_discover', 'browser_open', 'browser_read_page', 'browser_navigate', 'browser_respan_bridge_status', 'browser_read_respan_authenticated', 'list_files', 'search_files', 'draw', 'act_in_app', 'open', 'remember_commitment', 'find_files', 'file_info', 'create_directory', 'copy_file', 'move_file', 'rename_file'].map((name) => ({ name }));
 for (const type of AGENT_TYPES) {
   const names = toolsFor(type, all).map((t) => t.name);
-  assert.deepEqual(names.sort(), ['list_files', 'read_file', 'run_command', 'search_files', 'web_fetch', 'web_search', 'write_file']);
+  assert.deepEqual(names.sort(), ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_read_respan_authenticated', 'browser_respan_bridge_status', 'copy_file', 'create_directory', 'file_info', 'find_files', 'list_files', 'move_file', 'read_file', 'rename_file', 'run_command', 'search_files', 'web_fetch', 'web_search', 'write_file']);
   assert.ok(!names.some((n) => SCREEN_TOOLS.includes(n)));
 }
 assert.deepEqual(toolsFor('hacker', all), [], 'an unknown type gets nothing');

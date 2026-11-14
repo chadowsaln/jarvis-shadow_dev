@@ -43,7 +43,7 @@ assert.deepEqual(log.filter((l) => l.isError), [], 'every tool call worked');
 assert.equal(a.dir, path.join(tmp, 'data', 'Roamies', 'Agents', a.folder), 'its folder is under ROAMIES_DATA_DIR');
 // What the model was given: its brief, only its tools, a prompt about its folder.
 assert.match(log[0].prompt, /Brief from Ken:\nMake a landing page for Woof Co\./);
-assert.deepEqual([...log[0].tools].sort(), ['finish', 'list_files', 'plan', 'read_file', 'run_command', 'search_files', 'web_fetch', 'web_search', 'write_file']);
+assert.deepEqual([...log[0].tools].sort(), ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_read_respan_authenticated', 'browser_respan_bridge_status', 'copy_file', 'create_directory', 'file_info', 'find_files', 'finish', 'list_files', 'move_file', 'plan', 'read_file', 'rename_file', 'run_command', 'search_files', 'web_fetch', 'web_search', 'write_file']);
 assert.ok(log[0].system.includes(`Your folder is ${a.dir}.`));
 // It asked once (the command), not for overwriting its own file.
 const asks = events.filter((e) => e.type === 'ask');

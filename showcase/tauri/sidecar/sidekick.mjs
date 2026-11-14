@@ -7,6 +7,7 @@
 import { Agent } from '@kenkaiiii/gg-agent';
 import { ClaudeCodeAgent, closeSpare } from './claudecode.mjs';
 import { SAFE, checkDrawAction, checkLink, checkOpen, checkRead, checkWrite, redactArgs } from './safety.mjs';
+import { agentCorePreflight } from './agentcore/preflight.mjs';
 import { agentsRoot, createAgents, holdAfterLaunch, newsDesk, wantsAgent } from './agents.mjs';
 import { agentEvents, stallWatch } from './agentstream.mjs';
 import {
@@ -14,7 +15,7 @@ import {
   getModelsForProvider, loginChatGPT, ollamaServedContext, parseLocalModelId, registerRuntimeModels, resolveClaudeCodeBinary, revokeChatGPTSignIn, signInWithClaudeCode,
   signOutOfClaudeCode, storageKeyProvider,
 } from '@kenkaiiii/gg-core';
-import { discoverOpenRouterModels } from './openrouter.mjs';
+import { discoverOpenRouterModels, openRouterModelInfo, validateOpenRouterKey } from './openrouter.mjs';
 import { execFile, execFileSync, fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -28,15 +29,19 @@ import {
   touchFacts, forDisk, forProvider, loadLatestSession, newSession, openCommitments, pruneSessions, readJson, saveSession, takeDueReminders, updateCommitment, writeJson,
 } from './store.mjs';
 import { foldInput, foldPrompt, memoryInput, memoryPrompt, oneShot, parseBrain, transcript } from './brain.mjs';
+import { CATEGORIES as MEMORY_CATEGORIES, memoryDelete as memDelete, memoryList as memList, memorySave as memSave, memoryUpdate as memUpdate } from './memory.mjs';
+import { gatewayRoute } from './gateway.mjs';
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
 import { downloadModel, isReady, modelDir, sizeLabel, totalBytes } from './voicemodel.mjs';
 import { copyText, createTools, expand, fitImage, imageBlock, winOpen } from './tools.mjs';
 import { describeMarks } from './marks.mjs';
 import { faviconFor } from './draw.mjs';
 import { talkKeyState } from './talkkey.mjs';
+import { createAgentCore, createAgentCoreRuntime, createApprovalChannel, isAgentCoreEnabled } from './agentcore/index.mjs';
 import { QUESTIONS, openNote, answerTurn, wantsSkip, endsChat, splitTurn, plain, stripNote, tourBeats, goalFrom, showcaseBeats } from './intro.mjs';
 import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mjs';
 import { createSpeaker } from './speaker.mjs';
+import { arabicSupport } from './lang.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { GEMINI_CHOICES, GEMINI_DEFAULT_VOICE, GEMINI_LOOK_VOICES, GEMINI_MODEL, GEMINI_VOICES } from './gemini.mjs';
 import { createSecrets, retryLoad, runInput } from './secrets.mjs';
@@ -65,6 +70,10 @@ const ui = (msg) => {
     if (guideVoices.has(msg.id)) { if (msg.end) guideVoices.delete(msg.id); return send({ type: 'onboard', msg }); }
   }
   if (intro && msg.kind === 'agent') return send({ type: 'onboard', msg: { kind: 'chat', e: msg.e } });
+  // Browser/screen/system UI cards travel as agent events to the overlay.
+  if (msg.kind === 'browser' || msg.kind === 'screen_capture' || msg.kind === 'system_status') {
+    return send({ type: 'ui', msg: { kind: 'agent', e: { type: msg.kind, ...msg } } });
+  }
   send({ type: 'ui', msg });
 };
 const ob = (msg) => send({ type: 'onboard', msg });
@@ -99,6 +108,12 @@ const DEFAULTS = {
   onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, autoListen: false, wakeWord: false, setupVersion: 0, size: 'default', look: 'classic', introDone: false,
   replies: 'text', // 'voice': spoken (with Fish Audio or Gemini) as well as shown
   tts: 'fish', // which one speaks: 'fish' (Fish Audio), 'gemini' or 'voicestudio' (the VoiceStudio app on this computer)
+  // The microphone to listen from ('' is the system default). Linux: a PipeWire source name, so a Bluetooth headset
+  // whose HFP profile is off or an unplugged USB mic can never leave listening on the wrong device.
+  mic: '',
+  // A voice per language, per service ({ fish: { ar: id }, gemini: { ar: 'Kore' } }): a sentence is read in the voice
+  // for its own language, and one with none uses the service's own (the look's voice, the engine's default).
+  voiceLangs: {},
   studioVoices: {}, // look → its VoiceStudio voice (a saved profile id; none: the selected engine's default voice)
   fishModel: FISH_CHOICES[0].id, // Drama 3 (most expressive) or S2.1 Pro (natural pace, cheaper)
   geminiVoices: {}, // look → the Gemini voice it speaks in, where picked in the setup guide or the panel (else GEMINI_LOOK_VOICES)
@@ -216,9 +231,12 @@ async function syncGeminiVoiceKey() {
   if (tts().id === 'gemini') await useTts('gemini');
   else ttsKeys.gemini = (await voiceKey('gemini').catch(() => [null, false]))[1];
 }
+// The voices picked for each language with a service ({} when none were).
+const langVoicesFor = (id) => (config.voiceLangs && typeof config.voiceLangs[id] === 'object' && config.voiceLangs[id]) || {};
 // Point the speaker at a service, with its voice and model. Its key is set after (a change of service clears it).
 function aimSpeaker(id) {
   speech.setProvider(id);
+  speech.setLangVoices(langVoicesFor(id));
   if (TTS[id]?.local) speech.setLocalVoice(studioVoice());
   else if (id === 'gemini') { speech.setVoice(geminiVoice()); speech.setModel(config.geminiModel); }
   else { speech.setVoice(lookVoice()); speech.setModel(config.fishModel); }
@@ -231,6 +249,56 @@ async function useTts(id, key) {
   if (speech.provider === id) speech.setKey(key);
 }
 aimSpeaker(tts().id);
+
+// ---------- microphone (which one listens) ----------
+// The list comes from the shell's voice helper (`--devices`: PipeWire's sources on Linux, the system's mics on
+// Windows), and the helper says which one it is really recording from (the picked one, or the default when the pick
+// isn't connected).
+let mics = { status: 'idle', list: null };
+let micNow = null; // { state: 'default' | 'picked' | 'fallback' | 'saved', name, wanted }
+let micsAt = 0;
+function requestMics(force = false) {
+  const now = Date.now();
+  if (!force && now - micsAt < 5000) return;
+  micsAt = now;
+  mics = { status: mics.list ? 'ready' : 'loading', list: mics.list };
+  send({ type: 'microphones' });
+}
+const micName = () => (typeof config.mic === 'string' ? config.mic.trim() : '');
+const micLabel = (name) => {
+  const hit = (mics.list?.inputs ?? []).find((m) => m?.name === name);
+  return hit?.description || hit?.name || name;
+};
+// The panel's pick: saved, and the running helper switches over at once (the shell passes it on).
+function setMic(name) {
+  const next = String(name ?? '').trim().slice(0, 200);
+  if (next === micName()) return;
+  config.mic = next; saveConfig(); voiceConfig(); menu(); panel();
+  logLine('mic', { pick: next.slice(0, 80) || 'default' });
+  say(next ? `Listening from ${micLabel(next)} now.` : `Listening from the default microphone, ${micLabel(micNow?.name ?? '') || 'as the system sets it'}.`, 'happy');
+}
+// A voice for one language with the service in use (null: the service's own). Gemini's ids are its voice names;
+// VoiceStudio's are saved profile ids; Fish's voices are the looks' own, so it has no picker.
+function setVoiceLang(lang, id) {
+  if (lang !== 'ar' && lang !== 'en') return;
+  const p = tts().id;
+  const name = String(id ?? '').trim();
+  const voice = name && name !== 'default' ? name : null;
+  if (voice) {
+    if (p === 'fish') return;
+    if (p === 'gemini' && !GEMINI_VOICES.some((v) => v.id === voice)) return;
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(voice) || voice.includes('..')) return;
+    // VoiceStudio: once its voices are known, only those (one deleted there isn't kept here).
+    const known = speech.local?.voices;
+    if (p === 'voicestudio' && known?.length && !known.some((v) => v.id === voice)) return;
+  }
+  const cur = langVoicesFor(p);
+  if ((cur[lang] ?? null) === voice) return;
+  config.voiceLangs = { ...config.voiceLangs, [p]: { ...cur, [lang]: voice } };
+  saveConfig(); speech.setLangVoices(langVoicesFor(p)); menu(); if (onboarding) obState();
+  if (VOICE_ON()) speakLine(lang === 'ar' ? 'هذه طريقتي في الكلام بالعربية.' : 'This is how I sound.');
+}
+
 // Read once, and again later if the keychain couldn't be read yet (locked at login, or its prompt unanswered): before,
 // one failed read left spoken replies off until the app restarted.
 const voiceKeysLoaded = retryLoad(async () => {
@@ -344,9 +412,9 @@ async function refreshOpenRouterModels() {
     const msg = String(e?.message ?? e);
     openrouterModels.models = [];
     openrouterModels.status = 'failed';
-    openrouterModels.error = msg === 'openrouter_invalid_key' ? 'invalid_key'
-      : msg.startsWith('openrouter_') ? 'network'
-      : msg === 'openrouter_api_key_missing' ? 'invalid_key'
+    // A missing key is a key problem, not a network one (it used to fall through to 'network' and send the
+    // user looking at their connection).
+    openrouterModels.error = msg === 'openrouter_invalid_key' || msg === 'openrouter_api_key_missing' ? 'invalid_key'
       : 'network';
   }
   menu(); panel();
@@ -423,11 +491,13 @@ const { tools, hands, whereNow, ink, nextTurn } = createTools({
   commitmentsText: () => [commitmentsText(), doneTodayText() && `Done today:\n${doneTodayText()}`].filter(Boolean).join('\n'),
   onCommitments: (c) => { menu(); scheduleReminders(); showList({ flash: c?.id, seconds: 6 }); },
   showList: () => showList({ seconds: 20 }),
+  showSystem: (out) => { if (out?.data) ui({ kind: 'system_status', ...out.data, text: out.text, at: Date.now() }); },
   fmtWhen: (ms) => fmtWhen(ms),
   onPlan: (args) => trail.plan(args),
   watchClicks: (on) => send({ type: 'watch_clicks', on: !!on }),
   onInkGone: (why) => logLine('ink_gone', { why }),
   askShell: (msg) => shellCall(msg),
+  onMemories: () => panel(),
   // web_search's side search runs on the chat's own Anthropic sign-in; other providers use the keyless engines.
   sideSearch: async () => {
     if (config.provider !== 'anthropic') return null;
@@ -458,6 +528,34 @@ const agents = createAgents({
 tools.push(...agents.tools);
 let requestNo = 0; // the request being answered (nextTurn), for holdAfterLaunch
 holdAfterLaunch(tools, () => requestNo);
+
+// ---------- agent core (ROAMIES_AGENT_CORE) ----------
+// Off (the default): the chat's tool list is untouched and nothing here runs. On: the same list is replaced,
+// in place, by wrappers that authorize every call first - router and permission manager (level, allow/deny
+// lists), the existing safety checks, then a real approval in the panel when the policy asks for one, bound
+// to that exact action. The model cannot reach a tool's execute() any other way. The safety hook itself lives in
+// agentcore/preflight.mjs, where it is tested.
+let agentCoreApprovals = null, agentCore = null;
+if (isAgentCoreEnabled()) {
+  agentCoreApprovals = createApprovalChannel({
+    send,
+    showPanel: () => send({ type: 'panel_show' }),
+    ttlMs: 60_000,
+    logger: (e) => logLine(`agentcore_${e.type}`, e),
+  });
+  agentCore = createAgentCoreRuntime({
+    tools,
+    approvalChannel: agentCoreApprovals,
+    safety: { preflight: agentCorePreflight },
+    logger: (e) => logLine(`agentcore_${e.type}`, e),
+  });
+  // The chat gets only what may run: the tools that declare what they do. Nothing else is offered, and every offer
+  // still goes through the router, the safety checks and (when the policy asks) the panel.
+  tools.splice(0, tools.length, ...agentCore.tools);
+  console.error(`[agentcore] on: level ${agentCore.grantedLevel ?? 'none'}, tools ${tools.map((t) => t.name).join(', ') || 'none'}`
+    + ` (${agentCore.skipped} without permission metadata left out${agentCore.asked.length ? `, asking first for ${agentCore.asked.join(', ')}` : ''})`
+    + `${agentCore.levelError ? ` ${agentCore.levelError}` : ''}`);
+}
 
 // The step trail: plan_steps names the parts; a part marked "now" ticks off when the other tool calls of that
 // turn succeed, or shows the first error (in plain words) when one fails. No extra round trips for progress.
@@ -509,10 +607,22 @@ function anim(name, args = {}) {
     case 'plan_steps': return null; // drawn as the step trail, not a tool prop
     case 'see_photo': return { tool: 'look', variant: 'window', label: 'looking at', detail: args.url ? host(args.url) : 'a picture' };
     case 'read_file': return { tool: 'read', variant: 'file', label: 'reading', detail: base(args.path) };
+    case 'file_info': return { tool: 'read', variant: 'one', label: 'checking', detail: base(args.path) };
+    case 'find_files': return { tool: 'read', variant: 'many', label: 'finding files in', detail: base(args.dir) + '/' };
+    case 'create_directory': return { tool: 'write', variant: 'one', label: 'creating folder', detail: base(args.path) };
+    case 'copy_file': return { tool: 'write', variant: 'one', label: 'copying', detail: base(args.from) };
+    case 'move_file': return { tool: 'write', variant: 'one', label: 'moving', detail: base(args.from) };
+    case 'rename_file': return { tool: 'write', variant: 'one', label: 'renaming', detail: base(args.path) };
     case 'list_files': return { tool: 'read', variant: 'many', label: 'looking in', detail: base(args.dir) + '/' };
     case 'search_files': return { tool: 'read', variant: 'search', label: 'searching for', detail: `"${String(args.pattern).slice(0, 24)}"` };
     case 'write_file': { const edit = existsSync(expand(args.path ?? '')); return { tool: 'write', variant: edit ? 'edit' : 'create', label: edit ? 'editing' : 'creating', detail: base(args.path) }; }
     case 'run_command': return { tool: 'run', variant: 'progress', label: 'running', detail: String(args.command).slice(0, 40) };
+    // The exact command on screen while it runs (never a path, never a secret: safety's list has no arguments).
+    case 'run_diagnostic': return { tool: 'run', variant: 'progress', label: 'checking', detail: [args.command, ...(Array.isArray(args.args) ? args.args : [])].filter(Boolean).join(' ').slice(0, 40) };
+    case 'list_apps': return { tool: 'read', variant: 'many', label: 'listing apps', detail: 'installed' };
+    case 'find_app': return { tool: 'read', variant: 'search', label: 'looking for', detail: String(args.name ?? '').slice(0, 40) };
+    case 'running_apps': return { tool: 'read', variant: 'many', label: 'checking open apps', detail: 'running' };
+    case 'launch_app': return { tool: 'run', variant: 'progress', label: 'opening', detail: String(args.app ?? '').slice(0, 40) };
     case 'web_fetch': return { tool: 'web', variant: 'fetch', label: 'reading', detail: host(args.url) };
     case 'web_search': return { tool: 'web', variant: 'search', label: 'searching', detail: 'the web' };
     case 'remember_commitment': return { tool: 'write', variant: 'create', label: 'saving', detail: 'a reminder' };
@@ -535,7 +645,7 @@ function anim(name, args = {}) {
 // system prompt would re-bill the whole conversation every time memory changed; at the end, only the new message
 // is fresh. The live block is never saved.
 // Tools that take long enough to need a spoken beat first.
-const SLOW_TOOLS = new Set(['web_search', 'web_fetch', 'see_photo', 'take_screenshot', 'read_window', 'act_in_app', 'run_command', 'search_files', 'list_windows']);
+const SLOW_TOOLS = new Set(['web_search', 'web_fetch', 'see_photo', 'take_screenshot', 'read_window', 'act_in_app', 'run_command', 'run_diagnostic', 'search_files', 'list_windows']);
 // How replies are written: for bubbles (text only), or for the ear (spoken with Fish Audio or Gemini, details on screen).
 const VOICE_ON = () => config.replies === 'voice' && speech.on;
 // VoiceStudio's engines would read voice cues out, so its prompt has no cue paragraph (and any cue left is removed).
@@ -869,7 +979,7 @@ function applyPendingFold() {
 // ---------- the memory pass ----------
 // Facts come only from here: what the fold call returns, and a pass over a conversation as it ends.
 async function sideRoute() {
-  return { provider: config.provider, model: config.model, cc: await claudeCodeRoute(), credsFor: (m) => credsFor(config.provider, m), cwd: HOME, chatThinking: CHAT_THINKING };
+  return { provider: config.provider, model: config.model, cc: await claudeCodeRoute(), credsFor: (m) => credsFor(config.provider, m), cwd: HOME, chatThinking: CHAT_THINKING, gateway: gatewayRoute() };
 }
 async function learnFacts(facts) {
   const added = [];
@@ -1297,6 +1407,19 @@ async function apiKeyLogin(id, given) {
   const key = given ?? (await ask({ prompt: `Paste your ${PROVIDER_LABELS[provider] ?? provider} API key`, placeholder: 'API key', mask: true }));
   if (!key?.trim()) return;
   const baseUrl = variant?.baseUrl ?? meta.apiKeyBaseUrl;
+  // OpenRouter's key can be checked for free: its model catalog is one authenticated GET, no paid tokens.
+  // Checking before saving means a typo never replaces a working key, and the setup guide can say it right
+  // away (it used to be saved first and reported as connected, with only the Model page showing the error).
+  if (provider === 'openrouter') {
+    const check = await validateOpenRouterKey(key.trim());
+    if (!check.ok) {
+      logLine('openrouter_key_rejected', { reason: check.reason, status: check.status ?? null });
+      throw new Error(check.reason === 'key' ? 'openrouter_invalid_key'
+        : check.reason === 'network' ? 'openrouter_network'
+        : `openrouter_${check.status ?? 0}`);
+    }
+    logLine('openrouter_key_ok', { models: check.models.length, skipped: check.skipped });
+  }
   await auth.setCredentials(variant?.key ?? provider, { accessToken: key.trim(), refreshToken: '', expiresAt: Date.now() + 100 * 365 * 864e5, ...(baseUrl ? { baseUrl } : {}) });
   await refreshAuth(); ensureModel(); agent = null;
   // Discover OpenRouter's models once its key is saved, so they show in the Model page right away.
@@ -1700,6 +1823,7 @@ function panelState() {
     usage: usageToday.requests ? { requests: usageToday.requests, tokens: usageToday.tokens } : null,
     facts: listFacts().slice().reverse().map((f) => ({ id: f.id, text: f.text })),
     commitments: openCommitments().map((c) => ({ id: c.id, text: c.text, due: c.due ?? null, when: c.due ? `${fmtWhen(c.due)}${c.repeat ? ` · repeats ${repeatLabel(c.repeat)}` : ''}` : '', overdue: !!(c.due && c.due < Date.now()), repeat: c.repeat ?? null })),
+    memories: memList({ limit: 200 }).map((m) => ({ id: m.id, category: m.category, title: m.title || '', content: m.content, updatedAt: m.updatedAt, createdAt: m.createdAt })),
     look: config.look ?? 'classic', looks: LOOKS.map(([id, label]) => [id, label]), name: lookName(),
     size: sizeNow(), sizes: SIZES,
     replies: VOICE_ON() ? 'voice' : 'text', tts: tts().id, fishKey: hasVoiceKey('fish'), geminiKey: hasVoiceKey('gemini'),
@@ -1707,6 +1831,22 @@ function panelState() {
     geminiVoice: geminiVoice(), geminiVoices: GEMINI_VOICES, geminiShared: ttsKeys.gemini === 'shared',
     geminiModel: config.geminiModel, geminiModels: GEMINI_CHOICES,
     studio: tts().local ? studioState() : null,
+    // Which microphone listens: the picker's list, the pick, and which device is really recording (and whether a pick
+    // fell back to the default because it isn't connected).
+    mic: {
+      status: mics.status, pick: micName(), using: micNow?.name ?? null, state: micNow?.state ?? null,
+      capture: mics.list?.capture ?? null, why: mics.list?.why ?? null,
+      inputs: (mics.list?.inputs ?? []).filter((m) => m?.name && !m.monitor).map((m) => ({ name: m.name, description: m.description ?? m.name, default: !!m.default })),
+    },
+    // Arabic: whether the service in use can say it (from its own docs), and the voice picked for it.
+    arabic: (() => {
+      const id = tts().id;
+      const support = arabicSupport(id, speech.local?.engineName ?? speech.local?.engine);
+      return {
+        support: support.arabic, evidence: support.evidence, note: support.note, voice: langVoicesFor(id).ar ?? null,
+        voices: id === 'gemini' ? GEMINI_VOICES : id === 'voicestudio' ? (speech.local?.voices ?? []) : null,
+      };
+    })(),
     voice: VOICE_OK ? {
       on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, talkKey: keys().talkKey, ready: voiceReady(), mac: MAC, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, wakeWord: !!config.wakeWord,
       // Whether the key works right now, and the words the panel shows for it (talkkey.mjs).
@@ -1723,7 +1863,7 @@ function panelState() {
 }
 
 
-const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
+const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, mic: micName(), ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
 
 // Progress goes to the setup guide often and to the tray menu now and then.
 let modelShownAt = 0, modelMenuAt = 0;
@@ -1860,6 +2000,9 @@ async function onMenu(id, via) {
   else if (id === 'forgetall') {
     const ok = await ask({ placeholder: 'Type FORGET to erase everything I remember' });
     if (ok?.trim().toUpperCase() === 'FORGET') { const n = await clearFacts(); menu(); say(`Done. I forgot ${n} thing${n === 1 ? '' : 's'} about you.`, 'concerned'); }
+  } else if (id.startsWith('memory_delete:')) {
+    const mid = id.slice('memory_delete:'.length);
+    try { memDelete({ id: mid }); menu(); panelNote('Memory deleted.'); } catch (e) { panelNote(String(e?.message || e), true); }
   } else if (id.startsWith('done:') || id.startsWith('drop:')) {
     const done = id.startsWith('done:');
     updateCommitment(id.slice(5), { status: done ? 'done' : 'dropped' }).then((c) => {
@@ -1870,12 +2013,19 @@ async function onMenu(id, via) {
   }
   else if (id.startsWith('model:')) {
     const [, p, ...rest] = id.split(':');
-    config.provider = p; config.model = rest.join(':'); agent = null; saveConfig(); menu();
+    const picked = rest.join(':');
+    // OpenRouter: an id typed by hand may not be in the catalog (a model added since, or one without tool
+    // support). Its capabilities are never guessed — an unknown one is recorded, not treated as tool-capable.
+    if (p === 'openrouter') {
+      const info = openRouterModelInfo(picked);
+      if (!info.known) logLine('openrouter_model_unverified', { model: picked });
+    }
+    config.provider = p; config.model = picked; agent = null; saveConfig(); menu();
     say(`Switched to ${getModel(config.model)?.name ?? config.model}.`, 'happy');
     if (p === 'local') measureLocal(config.model).catch(() => {});
   } else if (id === 'openrouter_retry') { await refreshOpenRouterModels(); say('OpenRouter models refreshed.', 'happy'); }
   else if (id.startsWith('login:')) oauthLogin(id.slice(6));
-  else if (id.startsWith('key:')) apiKeyLogin(id.slice(4));
+  else if (id.startsWith('key:')) apiKeyLogin(id.slice(4)).catch((e) => { const p = problem('key', e, { store: KEY_STORE }); panelNote(p.text, true, p); });
   else if (id.startsWith('signout:')) signOut(id.slice(8));
   else if (id === 'local:connect') connectOllama();
   else if (id.startsWith('size:') && SIZES.some(([s]) => s === id.slice(5))) { config.size = id.slice(5); saveConfig(); ui({ kind: 'size', size: config.size }); menu(); }
@@ -1890,6 +2040,9 @@ async function onMenu(id, via) {
   else if (id === 'geminikey') voiceKeyLogin({ provider: 'gemini' });
   else if (id === 'geminikey_remove') removeVoiceKey('gemini');
   else if (id.startsWith('tts:')) setTts(id.slice(4));
+  else if (id.startsWith('mic:')) setMic(id.slice(4));
+  else if (id === 'mics') requestMics(true);
+  else if (id.startsWith('arvoice:')) setVoiceLang('ar', id.slice(8));
   else if (id.startsWith('geminivoice:')) setGeminiVoice(id.slice(12));
   else if (id.startsWith('studiovoice:')) setStudioVoice(id.slice(12));
   else if (id.startsWith('talkkey:')) {
@@ -2164,13 +2317,57 @@ async function onGuide(m) {
 }
 
 // ---------- main ----------
+let agentCoreMonitor;
+function observeAgentCore(m) {
+  try {
+    if (!isAgentCoreEnabled()) return;
+    if (!agentCoreMonitor) agentCoreMonitor = createAgentCore();
+    const text = m?.type === 'voice' ? m.text : m?.type === 'chat_answer' ? m.text : null;
+    if (typeof text === 'string' && text.trim()) agentCoreMonitor.observe({ text, context: { messageType: m.type } });
+  } catch {}
+}
+
 createInterface({ input: process.stdin }).on('line', (line) => {
   let m;
   try { m = JSON.parse(line); } catch { return; }
+  observeAgentCore(m);
   if (m.type === 'menu') onMenu(m.id, m.via).catch((e) => console.error('menu', e));
-  else if (m.type === 'panel_open') { panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); Promise.all([refreshAuth(), signedIn.get('local') && syncLocal(), tts().local && speech.checkLocal()]).then(() => { if (signedIn.get('openrouter')) return refreshOpenRouterModels(); }).catch(() => {}).finally(() => panel()); }
+  else if (m.type === 'memory_save' && m.entry && typeof m.entry === 'object') {
+    try {
+      memSave({ category: String(m.entry.category ?? ''), title: String(m.entry.title ?? ''), content: String(m.entry.content ?? '') });
+      menu(); panel(); panelNote('Memory saved.');
+    } catch (e) { panelNote(String(e?.message || e), true); }
+  }
+  else if (m.type === 'memory_update' && typeof m.id === 'string' && m.entry && typeof m.entry === 'object') {
+    try {
+      memUpdate({ id: m.id, category: m.entry.category != null ? String(m.entry.category) : undefined, title: m.entry.title != null ? String(m.entry.title) : undefined, content: m.entry.content != null ? String(m.entry.content) : undefined });
+      menu(); panel(); panelNote('Memory updated.');
+    } catch (e) { panelNote(String(e?.message || e), true); }
+  }
+  else if (m.type === 'memory_delete' && typeof m.id === 'string') {
+    try { memDelete({ id: m.id }); menu(); panel(); panelNote('Memory deleted.'); } catch (e) { panelNote(String(e?.message || e), true); }
+  }
+  else if (m.type === 'panel_open') {
+    panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); requestMics();
+    Promise.all([refreshAuth(), signedIn.get('local') && syncLocal(), tts().local && speech.checkLocal()]).then(() => { if (signedIn.get('openrouter')) return refreshOpenRouterModels(); }).catch(() => {}).finally(() => panel());
+    // A new panel page has no memory of a dialog that was asked for while it was closed: show it again, as it is.
+    if (agentCoreApprovals?.pendingCount()) setImmediate(() => { if (panelOpen) agentCoreApprovals.resend(); });
+  }
   else if (m.type === 'diagnostics') { shellInfo?.(m); shellInfo = null; }
-  else if (m.type === 'panel_closed') { panelOpen = false; logLine('panel_closed', { why: String(m.why ?? ''), ms: Date.now() - panelAt }); }
+  // The shell's answer to requestMics(): every microphone the voice helper lists (or why it can't list any).
+  else if (m.type === 'microphones') { mics = { status: 'ready', list: m.list ?? null }; if (panelOpen) panel(); }
+  // Which microphone the helper is really recording from (a pick that isn't connected says so).
+  else if (m.type === 'voice_mic') {
+    micNow = { state: m.state ?? null, name: m.name ?? null, wanted: m.wanted ?? null };
+    if (m.state === 'fallback') logLine('mic_fallback', { wanted: String(m.wanted ?? '').slice(0, 80), used: String(m.name ?? '').slice(0, 80) });
+    if (panelOpen) panel();
+  }
+  else if (m.type === 'panel_closed') {
+    panelOpen = false;
+    logLine('panel_closed', { why: String(m.why ?? ''), ms: Date.now() - panelAt });
+    // The dialog went away without an answer: closing never means yes, so anything waiting is denied.
+    if (agentCoreApprovals?.pendingCount()) agentCoreApprovals.denyAll('the approval dialog closed');
+  }
   else if (m.type === 'panel_key' && typeof m.provider === 'string' && typeof m.key === 'string') {
     const id = typeof m.kind === 'string' ? m.kind : m.provider;
     const label = PROVIDER_LABELS[m.provider] ?? m.provider;
@@ -2179,6 +2376,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       .catch((e) => { const p = problem('key', e, { store: KEY_STORE }); panelNote(p.text, true, p); });
   } else if ((m.type === 'panel_fishkey' || m.type === 'panel_geminikey') && typeof m.key === 'string') voiceKeyLogin({ provider: m.type === 'panel_geminikey' ? 'gemini' : 'fish', given: m.key.slice(0, 1000), note: panelNote }).catch((e) => console.error('voice key', e));
   else if (m.type === 'answer') { pending.get(m.id)?.(m.text ?? null); pending.delete(m.id); }
+  // An approval from the panel: only the exact request it was shown, once, before it expires.
+  else if (m.type === 'agentcore_approval') { agentCoreApprovals?.answer(m); }
   else if (m.type === 'ui_ready') {
     retired.then((notes) => { if (notes.length) { retired = Promise.resolve([]); say(`${notes.join(' ')} Do it on the Model page in ${PANEL}.`, 'concerned'); } });
     ui({ kind: 'sound', on: config.sound });

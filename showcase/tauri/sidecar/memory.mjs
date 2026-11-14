@@ -1,0 +1,168 @@
+// Persistent local memory for Little Boy (Batch 10): SQLite-backed, no local AI/models/embeddings.
+// Stored in the sidecar data directory (ROAMIES_DATA_DIR/sidecar or ~/.gg/sidecar) so it survives restarts.
+// All access should flow through Agent Core tools (permissioned) or explicit UI actions; this module is pure storage.
+
+import { DatabaseSync } from 'node:sqlite';
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+export const CATEGORIES = Object.freeze(['preferences', 'projects', 'conversations', 'tasks']);
+export const MEMORY_DB_PATH = () => process.env.ROAMIES_DATA_DIR
+  ? path.join(process.env.ROAMIES_DATA_DIR, 'sidecar', 'memory.sqlite')
+  : path.join(os.homedir(), '.gg', 'sidecar', 'memory.sqlite');
+
+let db = null;
+
+function ensureDir(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+}
+
+function open() {
+  if (db) return db;
+  const file = MEMORY_DB_PATH();
+  ensureDir(file);
+  db = new DatabaseSync(file);
+  try { db.exec('PRAGMA journal_mode=WAL'); } catch {}
+  db.exec(`CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS memories_category_idx ON memories(category)');
+  db.exec('CREATE INDEX IF NOT EXISTS memories_updated_idx ON memories(updated_at DESC)');
+  return db;
+}
+
+function normalizeCategory(cat) {
+  const c = String(cat ?? '').toLowerCase().trim();
+  if (!CATEGORIES.includes(c)) throw new Error(`Invalid category "${cat}". Use one of: ${CATEGORIES.join(', ')}.`);
+  return c;
+}
+
+function cleanText(v, name, max = 4000) {
+  const s = String(v ?? '').trim();
+  if (!s) throw new Error(`${name} is required.`);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function cleanOptionalText(v, max = 200) {
+  const s = String(v ?? '').trim();
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function maybeSecret(value) {
+  const s = String(value ?? '');
+  if (!s) return null;
+  // High-signal secret material we must never auto-store.
+  const rules = [
+    [/\b(password|passwd|pwd)\b\s*[:=]/i, 'password'],
+    [/\b(api[_ -]?key|secret[_ -]?key|private[_ -]?key|access[_ -]?token|bearer)\b\s*[:=]/i, 'API key/token'],
+    [/\b(cookie|cookies|set-cookie)\b\s*[:=]/i, 'cookie'],
+    [/\b(session[_ -]?id|session[_ -]?token|sid)\b\s*[:=]/i, 'session token'],
+    [/(?:sk-[A-Za-z0-9]{16,}|AIza[0-9A-Za-z\-_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/, 'credential-like token'],
+  ];
+  for (const [re, label] of rules) if (re.test(s)) return label;
+  return null;
+}
+
+function assertNoSecrets(fields) {
+  for (const [name, value] of Object.entries(fields)) {
+    const hit = maybeSecret(value);
+    if (hit) throw new Error(`Refusing to store ${name}: looks like it contains a ${hit}. Passwords, API keys, cookies and session tokens must not be saved in memory.`);
+  }
+}
+
+function rowToMemory(r) {
+  if (!r) return null;
+  return { id: r.id, category: r.category, title: r.title || '', content: r.content, createdAt: r.created_at, updatedAt: r.updated_at };
+}
+
+export function memorySave({ category, title = '', content }) {
+  const cat = normalizeCategory(category);
+  const body = cleanText(content, 'content', 8000);
+  const head = cleanOptionalText(title, 200);
+  assertNoSecrets({ title: head, content: body });
+  const d = open();
+  const id = `m${randomBytes(4).toString('hex')}`;
+  const now = Date.now();
+  d.prepare('INSERT INTO memories (id, category, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, cat, head, body, now, now);
+  return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(id));
+}
+
+export function memoryList({ category = null, limit = 50 } = {}) {
+  const d = open();
+  const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+  if (category != null && String(category).trim() !== '') {
+    const cat = normalizeCategory(category);
+    return d.prepare('SELECT * FROM memories WHERE category = ? ORDER BY updated_at DESC, created_at DESC LIMIT ?').all(cat, lim).map(rowToMemory);
+  }
+  return d.prepare('SELECT * FROM memories ORDER BY updated_at DESC, created_at DESC LIMIT ?').all(lim).map(rowToMemory);
+}
+
+export function memorySearch({ query, category = null, limit = 20 } = {}) {
+  const q = cleanText(query, 'query', 200).toLowerCase();
+  const d = open();
+  const lim = Math.max(1, Math.min(100, Number(limit) || 20));
+  const like = `%${q}%`;
+  if (category != null && String(category).trim() !== '') {
+    const cat = normalizeCategory(category);
+    return d.prepare(`SELECT * FROM memories WHERE category = ? AND (lower(content) LIKE ? OR lower(title) LIKE ? OR lower(category) LIKE ?)
+      ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(cat, like, like, like, lim).map(rowToMemory);
+  }
+  return d.prepare(`SELECT * FROM memories WHERE (lower(content) LIKE ? OR lower(title) LIKE ? OR lower(category) LIKE ?)
+    ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(like, like, like, lim).map(rowToMemory);
+}
+
+export function memoryGet({ id }) {
+  const key = String(id ?? '').trim();
+  if (!key) throw new Error('id is required.');
+  const d = open();
+  return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(key));
+}
+
+export function memoryUpdate({ id, category = null, title = null, content = null }) {
+  const key = String(id ?? '').trim();
+  if (!key) throw new Error('id is required.');
+  const d = open();
+  const cur = d.prepare('SELECT * FROM memories WHERE id = ?').get(key);
+  if (!cur) throw new Error(`No memory with id ${key}.`);
+  const cat = category != null ? normalizeCategory(category) : cur.category;
+  const head = title != null ? cleanOptionalText(title, 200) : (cur.title || '');
+  const body = content != null ? cleanText(content, 'content', 8000) : cur.content;
+  assertNoSecrets({ title: head, content: body });
+  const now = Date.now();
+  d.prepare('UPDATE memories SET category = ?, title = ?, content = ?, updated_at = ? WHERE id = ?').run(cat, head, body, now, key);
+  return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(key));
+}
+
+export function memoryDelete({ id }) {
+  const key = String(id ?? '').trim();
+  if (!key) throw new Error('id is required.');
+  const d = open();
+  const cur = d.prepare('SELECT * FROM memories WHERE id = ?').get(key);
+  if (!cur) throw new Error(`No memory with id ${key}.`);
+  d.prepare('DELETE FROM memories WHERE id = ?').run(key);
+  return { ok: true, id: key };
+}
+
+export function formatMemory(m) {
+  if (!m) return '';
+  const when = new Date(m.updatedAt || m.createdAt).toISOString();
+  const title = m.title ? ` — ${m.title}` : '';
+  return `${m.id} [${m.category}]${title} (updated ${when}): ${m.content}`;
+}
+
+export function formatMemories(list) {
+  if (!Array.isArray(list) || !list.length) return 'No saved memories.';
+  return list.map(formatMemory).join('\n');
+}
+
+export function closeMemoryDb() {
+  try { db?.close(); } catch {}
+  db = null;
+}

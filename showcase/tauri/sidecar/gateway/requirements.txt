@@ -1,0 +1,5 @@
+# The sidecar's Python environment: the Respan Gateway, served on loopback by serve.py.
+# Python 3.10+; wheels only, so nothing is built here.
+#   python3 -m venv gateway/.venv
+#   gateway/.venv/bin/pip install --only-binary=:all: -r gateway/requirements.txt
+respan-gateway==0.3.0

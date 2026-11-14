@@ -393,6 +393,68 @@ export function classifyCommand(cmd, home, { exists, cwd: start = null, own = nu
   return verdict(level, reason);
 }
 
+// ---------- terminal: read-only diagnostics, and nothing else ----------
+// The whole of what the terminal may run: these programs, each with the flags listed and no other argument at
+// all. It is never a shell, so a command can't be a pipeline, a redirect, a chain or a script; and no path can be
+// passed, so it can't be pointed at secrets, at another folder or at the system. Anything else is refused.
+export const DIAGNOSTIC_COMMANDS = Object.freeze({
+  pwd: Object.freeze([]),
+  whoami: Object.freeze([]),
+  uptime: Object.freeze([]),
+  uname: Object.freeze(['-a', '-s', '-r', '-m', '-n']),
+  df: Object.freeze(['-h', '-k', '-P']),
+  free: Object.freeze(['-h', '-m', '-g']),
+  ls: Object.freeze(['-l', '-a', '-h', '-1', '-la', '-al', '-lh', '-lah']),
+  ps: Object.freeze(['-e', '-f', '-A', '-ef', '-ax']),
+});
+export const DIAGNOSTIC_NAMES = Object.freeze(Object.keys(DIAGNOSTIC_COMMANDS));
+// What a shell would read as more than one word, a redirect, a substitution or a script.
+const SHELLY = /[;&|<>$`'"\\(){}[\]*?~!#\s]/;
+
+/** run_diagnostic: one allowlisted read-only command. SAFE with its argv; BLOCK for anything else, including a
+ *  command name, a flag or a path it doesn't list. The name must be a key here: it is never a string run as is. */
+export function checkDiagnosticCommand(command, args = []) {
+  const name = String(command ?? '').trim();
+  if (!name) return verdict(BLOCK, 'No command was given.');
+  if (!Object.hasOwn(DIAGNOSTIC_COMMANDS, name)) {
+    return verdict(BLOCK, `"${name.slice(0, 40)}" isn't a command I can run. The only ones I can run are ${DIAGNOSTIC_NAMES.join(', ')}.`);
+  }
+  if (args != null && !Array.isArray(args)) return verdict(BLOCK, 'Arguments must be a list of flags.');
+  const list = args ?? [];
+  if (list.length > 3) return verdict(BLOCK, 'That is more flags than a diagnostic takes.');
+  for (const a of list) {
+    if (typeof a !== 'string' || !a) return verdict(BLOCK, 'Each argument must be a flag.');
+    if (SHELLY.test(a)) {
+      return verdict(BLOCK, `"${a.slice(0, 40)}" has shell characters in it. These commands run directly, with no shell: no pipes, redirects, chains, substitutions or scripts.`);
+    }
+    if (!DIAGNOSTIC_COMMANDS[name].includes(a)) {
+      return verdict(BLOCK, `${name} doesn't take "${a}" here. It takes ${DIAGNOSTIC_COMMANDS[name].join(', ') || 'no flags'}, and no paths.`);
+    }
+  }
+  return { ...verdict(SAFE), command: name, argv: [...list] };
+}
+
+// ---------- apps: start one that is installed, by name, and nothing else ----------
+// An app is named the way the menus name it ("Firefox", "org.gnome.Nautilus"). A path, a file, a shell string or a
+// system tool is never an app: the installed-app list in tools.mjs is the only thing this can ever start.
+const NOT_AN_APP = /^(?:sudo|su|doas|pkexec|bash|sh|zsh|dash|fish|ksh|csh|python|python2|python3|perl|ruby|node|deno|bun|npm|npx|yarn|pnpm|apt|apt-get|aptitude|dpkg|dnf|yum|rpm|pacman|zypper|snap|flatpak|pip|pip3|gem|cargo|go|make|gcc|cc|g\+\+|clang|curl|wget|ssh|scp|sftp|rsync|systemctl|service|journalctl|mount|umount|chmod|chown|kill|killall|pkill|shutdown|reboot|poweroff|halt|dd|mkfs|fdisk|parted|rm|rmdir|mv|cp|ln|tee|xargs|eval|exec|env|source|install|uninstall|update|xterm|konsole|gnome-terminal|alacritty|kitty|tmux|screen|gdb|strace|ltrace)$/i;
+const APP_FILE = /\.(sh|bash|zsh|fish|py|pyc|pl|rb|js|mjs|cjs|ts|exe|bat|cmd|ps1|vbs|jar|appimage|run|bin|deb|rpm|pkg|dmg|msi|desktop|service|timer|socket|conf|so|dylib|dll|iso|img|tar|gz|xz|zip|7z)$/i;
+
+/** launch_app: one installed app, named the way the menus name it. BLOCK for a path, an executable file, a shell
+ *  string or a system tool; the name still has to be in the installed-app list before anything starts. */
+export function checkAppTarget(target) {
+  const t = String(target ?? '').trim();
+  if (!t) return verdict(BLOCK, 'No app was named.');
+  if (t.length > 80) return verdict(BLOCK, 'That is too long to be an app name.');
+  if (/[/\\~]/.test(t)) return verdict(BLOCK, `"${t.slice(0, 40)}" is a path, not an app name. Apps are started by the name the menus show, never by a file.`);
+  // Spaces are fine ("Google Chrome"); nothing a shell would act on is.
+  if (/[;&|<>$`'"\\(){}[\]*?~!#\n\r\t]/.test(t)) return verdict(BLOCK, `"${t.slice(0, 40)}" has shell characters in it. An app name is one name, not a command.`);
+  if (t.startsWith('-')) return verdict(BLOCK, `"${t.slice(0, 40)}" starts with a dash, which is a flag, not an app name.`);
+  if (APP_FILE.test(t)) return verdict(BLOCK, `"${t.slice(0, 40)}" is a file or an installer, not an app. Only installed apps are started here.`);
+  if (NOT_AN_APP.test(t)) return verdict(BLOCK, `"${t.slice(0, 40)}" is a program or a system tool, not an installed app. I only start apps that are in the computer's menus.`);
+  return verdict(SAFE);
+}
+
 // ---------- opening things and fetching pages ----------
 
 const RUNNABLE = /\.(app|command|sh|bash|zsh|tool|terminal|scpt|scptd|applescript|workflow|action|pkg|mpkg|dmg|jar|py|rb|pl|js|mjs|exe|bat|cmd|ps1|shortcut|mobileconfig|kext|plugin|prefPane|saver|desktop|appimage|deb|rpm|run|flatpakref|flatpak|snap)\/?$/i;
@@ -475,6 +537,117 @@ export function checkLink(url) {
 
 /** A yes from the user, typed or spoken. */
 export const isYes = (text) => /^\s*(y|yes|yeah|yep|yup|ok|okay|sure|go|go ahead|do it|run it|allow|confirm)\b/i.test(String(text ?? ''));
+
+
+// ---------- file management (Batch 4 / Little Boy) ----------
+// User-allowed folders for file tools: the home directory (and everything in it).
+const inHome = (abs, home) => {
+  const h = slash(home), rh = realOf(h);
+  return [h, rh].some((base) => abs === base || abs.startsWith(base + '/'));
+};
+
+// Resolve a path and ensure it stays inside the user's allowed area (home). Blocks path traversal
+// that escapes home and symlink escapes (a link inside home pointing out). For a path that does not
+// exist yet, checks its nearest existing ancestor's real location plus the remaining segments.
+export function resolveInUserArea(p, home) {
+  home = slash(home);
+  const h = slash(home), rh = realOf(h);
+  const abs = norm(p, home);
+  const all = bothOf(abs);
+  if (!all.every((a) => inHome(a, home))) return { ...verdict(BLOCK, `Access to ${p} is outside your allowed folders.`), path: abs };
+  // Walk up ancestors while within home to catch a symlinked directory component escaping home.
+  let cur = abs;
+  for (let i = 0; i < 256; i++) {
+    if (cur === '/' || /^[a-z]:$/i.test(cur)) break;
+    const r = realOf(cur);
+    const inside = inHome(r, home) || /^\/(private\/)?tmp\//.test(r);
+    if (!inside) return { ...verdict(BLOCK, `Access to ${p} is outside your allowed folders.`), path: abs };
+    // Stop once we've checked the home boundary itself.
+    if (cur === h || cur === rh || r === h || r === rh) break;
+    const up = path.dirname(cur);
+    if (up === cur) break;
+    // If parent is already above/outside home, stop - we only care about components inside home.
+    if (!(up === h || up === rh || up.startsWith(h + '/') || up.startsWith(rh + '/'))) break;
+    cur = up;
+  }
+  return { ...verdict(SAFE), path: abs, real: realOf(abs) };
+}
+
+/** Read-only file access for file-management tools: inside home, not secret/private, symlink-safe. */
+export function checkFileRead(p, home) {
+  const base = checkRead(p, home);
+  if (base.level === BLOCK) return base;
+  const inArea = resolveInUserArea(p, home);
+  if (inArea.level === BLOCK) return inArea;
+  return { ...verdict(SAFE), path: base.path };
+}
+
+/** A new file or directory inside home (no overwrite). */
+export function checkFileCreate(p, home) {
+  home = slash(home);
+  const abs = norm(p, home);
+  const inArea = resolveInUserArea(p, home);
+  if (inArea.level === BLOCK) return inArea;
+  // Block secrets/protected paths and writes outside home rules via checkWrite-like guards on the path itself.
+  const all = bothOf(abs);
+  if (all.some((a) => [...SECRET, ...NO_WRITE].some((re) => re.test(rel(a, home)) || re.test(a)))) {
+    return { ...verdict(BLOCK, `${p} is a protected file, so I won't create it there.`), path: abs };
+  }
+  if (!all.every((a) => inHome(a, home) || /^\/(private\/)?tmp\//.test(a))) {
+    return { ...verdict(BLOCK, `I only create files inside your allowed folders, not ${p}.`), path: abs };
+  }
+  if (existsSyncSafe(abs)) return { ...verdict(BLOCK, `${p} already exists.`), path: abs };
+  // Also ensure the target's resolved location (for symlinked parent paths) is inside home.
+  const parent = path.dirname(abs);
+  const parentReal = realOf(parent);
+  if (!inHome(parentReal, home) && !/^\/(private\/)?tmp\//.test(parentReal)) {
+    return { ...verdict(BLOCK, `${p} would be created outside your allowed folders.`), path: abs };
+  }
+  return { ...verdict(SAFE), path: abs };
+}
+
+function existsSyncSafe(p) { try { return fs.existsSync(p); } catch { return false; } }
+function lstatSafe(p) { try { return fs.lstatSync(p); } catch { return null; } }
+
+/** Mutate an existing path (copy source, move/rename source or target location): must be inside home and not secret. */
+export function checkFileSource(p, home, { forWrite = false } = {}) {
+  const abs = norm(p, home);
+  const inArea = resolveInUserArea(p, home);
+  if (inArea.level === BLOCK) return inArea;
+  const all = bothOf(abs);
+  if (all.some((a) => SECRET.some((re) => re.test(rel(a, home)) || re.test(a)))) {
+    return { ...verdict(BLOCK, `${p} holds passwords or keys, so I never touch it.`), path: abs };
+  }
+  if (forWrite && all.some((a) => [...SECRET, ...NO_WRITE].some((re) => re.test(rel(a, home)) || re.test(a)))) {
+    return { ...verdict(BLOCK, `${p} is a protected file, so I won't change it.`), path: abs };
+  }
+  if (!all.every((a) => inHome(a, home))) {
+    return { ...verdict(BLOCK, `Access to ${p} is outside your allowed folders.`), path: abs };
+  }
+  if (!existsSyncSafe(abs)) return { ...verdict(BLOCK, `${p} does not exist.`), path: abs };
+  return { ...verdict(SAFE), path: abs, real: realOf(abs) };
+}
+
+/** Destination for copy/move/rename/create: inside home, not protected, not replacing existing unless allowed. */
+export function checkFileDest(p, home, { allowReplace = false } = {}) {
+  home = slash(home);
+  const abs = norm(p, home);
+  const inArea = resolveInUserArea(p, home);
+  if (inArea.level === BLOCK) return inArea;
+  const all = bothOf(abs);
+  if (all.some((a) => [...SECRET, ...NO_WRITE].some((re) => re.test(rel(a, home)) || re.test(a)))) {
+    return { ...verdict(BLOCK, `${p} is a protected location, so I won't write there.`), path: abs };
+  }
+  if (!all.every((a) => inHome(a, home))) {
+    return { ...verdict(BLOCK, `I only write inside your allowed folders, not ${p}.`), path: abs };
+  }
+  if (existsSyncSafe(abs) && !allowReplace) return { ...verdict(BLOCK, `${p} already exists.`), path: abs };
+  // Parent must resolve inside home (symlinked parent escape).
+  const parent = path.dirname(abs);
+  if (!inHome(realOf(parent), home)) return { ...verdict(BLOCK, `${p} would be placed outside your allowed folders.`), path: abs };
+  return { ...verdict(SAFE), path: abs };
+}
+
 
 // ---------- drawing on screen ----------
 

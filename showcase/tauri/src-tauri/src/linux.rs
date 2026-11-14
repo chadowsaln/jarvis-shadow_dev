@@ -40,6 +40,13 @@ pub(crate) fn session() -> Session {
     *SESSION.get().unwrap_or(&Session::X11)
 }
 
+/// Whether global shortcuts can be held in this session. X11 only: Wayland gives apps no global key grabs, so
+/// there the user binds `roamies --summon` and the other commands in the desktop's keyboard settings instead
+/// (the sidecar reports the same rule as hotkeys:false and the setup guide shows the commands).
+pub(crate) fn hotkeys_usable(session: Session) -> bool {
+    matches!(session, Session::X11)
+}
+
 /// First thing in main, before GTK starts and before any other thread exists.
 pub(crate) fn init() {
     let env = |k: &str| std::env::var(k).ok();
@@ -302,9 +309,10 @@ fn grab_root() -> Result<gtk::gdk_pixbuf::Pixbuf, String> {
     root.pixbuf(0, 0, root.width(), root.height()).ok_or_else(|| "the X server didn't hand over the screen".to_string())
 }
 
-/// Wayland: only the desktop's own portal may read the screen. It writes a picture and answers with a link to
-/// it; some desktops ask the user first, each time or once.
-fn portal_screenshot() -> Result<PathBuf, String> {
+/// Wayland/XDG: only the desktop's own portal may read the screen. It writes a picture and answers with a link to
+/// it; some desktops ask the user first, each time or once. interactive=true lets the user pick screen/window/area
+/// when the portal supports it.
+fn portal_screenshot(interactive: bool) -> Result<PathBuf, String> {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
     use zbus::blocking::{Connection, Proxy};
@@ -321,8 +329,8 @@ fn portal_screenshot() -> Result<PathBuf, String> {
     let portal = Proxy::new(&conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Screenshot").map_err(err)?;
     let mut options: HashMap<&str, V> = HashMap::new();
     options.insert("handle_token", V::from(token.as_str()));
-    options.insert("interactive", V::from(false));
-    options.insert("modal", V::from(false));
+    options.insert("interactive", V::from(interactive));
+    options.insert("modal", V::from(interactive));
     let _handle: OwnedObjectPath = portal.call("Screenshot", &("", options)).map_err(|e| match e {
         zbus::Error::MethodError(..) | zbus::Error::InterfaceNotFound => NO_PORTAL.to_string(),
         e => format!("{NO_PORTAL} ({e})"),
@@ -332,7 +340,8 @@ fn portal_screenshot() -> Result<PathBuf, String> {
     std::thread::spawn(move || {
         let _ = tx.send(answers.next());
     });
-    let msg = rx.recv_timeout(Duration::from_secs(60)).map_err(|_| "The desktop didn't answer the screenshot request.".to_string())?.ok_or("The screenshot request was dropped.")?;
+    let timeout = if interactive { 120 } else { 60 };
+    let msg = rx.recv_timeout(Duration::from_secs(timeout)).map_err(|_| "The desktop didn't answer the screenshot request.".to_string())?.ok_or("The screenshot request was dropped.")?;
     let (code, results): (u32, HashMap<String, OwnedValue>) = msg.body().deserialize().map_err(err)?;
     if code != 0 {
         return Err(if code == 1 { "The screenshot wasn't allowed (the desktop asked, and the answer was no).".into() } else { "The desktop couldn't take the screenshot.".into() });
@@ -354,10 +363,10 @@ fn fade_overlays(app: &AppHandle, opacity: f64) {
     }
 }
 
-/// The sidecar's take_screenshot: the whole desktop into `file` (a JPEG, shrunk to Claude's cap). Replies
-/// screenshot_done with the picture's size in pixels and the part of the desktop it covers (in the overlay's
-/// points), or with what went wrong. Main thread only.
-pub(crate) fn screenshot(app: &AppHandle, id: Value, file: String) {
+/// The sidecar's screenshot: into `file` (a JPEG, shrunk to Claude's cap). Replies screenshot_done with the
+/// picture's size in pixels and the part of the desktop it covers, or with what went wrong.
+/// On Wayland/XDG sessions this uses the Screenshot portal (interactive lets the user pick screen/window/area when supported).
+pub(crate) fn screenshot(app: &AppHandle, id: Value, file: String, interactive: bool) {
     let done = |app: &AppHandle, id: &Value, r: Result<(i32, i32), String>| {
         let msg = match r {
             Ok((w, h)) => json!({ "type": "screenshot_done", "id": id, "ok": true, "pixels": [w, h], "bounds": desktop_bounds(app) }),
@@ -369,7 +378,7 @@ pub(crate) fn screenshot(app: &AppHandle, id: Value, file: String) {
     const CLEAR: Duration = Duration::from_millis(150);
     fade_overlays(app, 0.0);
     let app = app.clone();
-    if session() == Session::X11 {
+    if session() == Session::X11 && !interactive {
         gtk::glib::timeout_add_local_once(CLEAR, move || {
             let shot = grab_root();
             fade_overlays(&app, 1.0);
@@ -379,7 +388,8 @@ pub(crate) fn screenshot(app: &AppHandle, id: Value, file: String) {
     }
     std::thread::spawn(move || {
         std::thread::sleep(CLEAR);
-        let shot = portal_screenshot();
+        // Prefer portal on Wayland and for interactive/window picks; also works on X11 sessions with a portal.
+        let shot = portal_screenshot(interactive);
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || fade_overlays(&app2, 1.0));
         let r = shot.and_then(|path| {
@@ -507,6 +517,12 @@ pub(crate) fn open_releases_page() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_shortcuts_are_x11_only() {
+        assert!(hotkeys_usable(Session::X11));
+        assert!(!hotkeys_usable(Session::Wayland), "a Wayland app gets no global key grabs");
+    }
 
     #[test]
     fn x11_key_state_maps_to_the_tap_bits() {

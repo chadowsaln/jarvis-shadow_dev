@@ -15,7 +15,7 @@ export const RETURNS = ['files', 'answer'];
 export const DEFAULT_RETURNS = { maker: 'files', researcher: 'answer', organizer: 'answer' };
 const returnsOf = (a) => (RETURNS.includes(a?.returns) ? a.returns : DEFAULT_RETURNS[a?.type] ?? 'files');
 // Every type works with files, commands and the web; the screen and the user's lists stay the chat's.
-const WORK_TOOLS = ['read_file', 'list_files', 'search_files', 'write_file', 'run_command', 'web_search', 'web_fetch'];
+const WORK_TOOLS = ['read_file', 'list_files', 'search_files', 'find_files', 'file_info', 'write_file', 'create_directory', 'copy_file', 'move_file', 'rename_file', 'run_command', 'web_search', 'web_fetch', 'browser_discover', 'browser_open', 'browser_read_page', 'browser_navigate', 'browser_respan_bridge_status', 'browser_read_respan_authenticated'];
 export const TYPE_TOOLS = { maker: WORK_TOOLS, researcher: WORK_TOOLS, organizer: WORK_TOOLS };
 export const SCREEN_TOOLS = ['take_screenshot', 'list_windows', 'read_window', 'act_in_app', 'draw', 'open', 'see_photo',
   'remember_commitment', 'update_commitment', 'forget_fact', 'plan_steps', 'show_list', 'list_commitments', 'about_roamies'];
@@ -234,7 +234,7 @@ Today is ${now.toDateString()}.`;
 
 // ---------- the manager ----------
 const LIMITS = { running: 3, local: 1, workMs: 30 * 60_000, turns: 80, beatMs: 60_000, stuckMs: 3 * 60_000, killMs: 3000 };
-const GLYPH = { write_file: 'pen', web_fetch: 'lens', web_search: 'lens', run_command: 'gear', read_file: 'eye', list_files: 'eye', search_files: 'eye' };
+const GLYPH = { write_file: 'pen', web_fetch: 'lens', web_search: 'lens', run_command: 'gear', read_file: 'eye', list_files: 'eye', search_files: 'eye', find_files: 'eye', file_info: 'eye', create_directory: 'pen', copy_file: 'pen', move_file: 'pen', rename_file: 'pen' };
 const IMAGE = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const one = (s, n) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const exists = (p) => fs.promises.stat(p).then(() => true, () => false);

@@ -16,7 +16,7 @@
   let state = null, tab = 'home', deferred = false;
   // What's open in the panel itself: a key field (provider id, 'fish' or 'gemini'), the row action waiting for its
   // Confirm, each long list's page (pg) and how many rows fit on one (per, measured), Memory's tab and its search.
-  const ui = { key: null, kind: {}, arm: null, pg: {}, per: {}, mtab: 'facts', q: '', manual: '', recordTalk: false, bindShown: new Set() };
+  const ui = { key: null, kind: {}, arm: null, pg: {}, per: {}, mtab: 'facts', q: '', qm: '', manual: '', recordTalk: false, bindShown: new Set(), editMem: null, newMem: false };
   let armTimer = 0;
   const disarm = () => { clearTimeout(armTimer); if (ui.arm) { ui.arm = null; return true; } return false; };
   // Waiting for a talk key: it must end as soon as this page or the panel stops being the thing in front. A cancel
@@ -408,9 +408,9 @@
     }, label);
     return [
       el('div', { className: 'mhead' },
-        el('div', { className: 'tabs', role: 'tablist', 'aria-label': 'Memory' }, tabBtn('facts', 'What I remember'), tabBtn('commits', 'Commitments')),
+        el('div', { className: 'tabs', role: 'tablist', 'aria-label': 'Memory' }, tabBtn('facts', 'What I remember'), tabBtn('commits', 'Commitments'), tabBtn('saved', 'Saved memory')),
         link('Get to know me', () => act('intro', true), { k: 'intro', disabled: state.intro })),
-      ...(on === 'commits' ? commitList() : factList()),
+      ...(on === 'commits' ? commitList() : on === 'saved' ? savedMemoryList() : factList()),
     ];
   }
   function factList() {
@@ -447,7 +447,55 @@
     return [el('div', { className: 'group paged', role: 'tabpanel', id: 'mem-panel', 'aria-labelledby': 'tab-commits' }, box), foot(n ? el('p', { className: 'usage', textContent: `${n} open` }) : null, nav)];
   }
   // A page arrow: the search field (if it has focus) is kept by redrawing only the list.
-  const refresh = (focusKey) => (tab === 'memory' && ui.mtab === 'facts' && document.activeElement?.id === 'find-facts' ? refreshFacts() : render(focusKey));
+  const refreshSaved = () => { const pane = $('mem-panel'); if (!pane) return render(); const [panel] = savedMemoryList(); const box = pane.querySelector('#saved-box'); if (box) box.replaceWith(panel.querySelector('#saved-box')); else render(); if (fit()) refreshSaved(); };
+  const refresh = (focusKey) => (tab === 'memory' && ui.mtab === 'facts' && document.activeElement?.id === 'find-facts' ? refreshFacts() : tab === 'memory' && ui.mtab === 'saved' && (document.activeElement?.id === 'find-saved' || document.activeElement?.closest?.('#saved-box')) ? refreshSaved() : render(focusKey));
+
+
+  function memText(m) { return [m.title, m.content, m.category].filter(Boolean).join(' '); }
+  function savedMemoryForm(entry = null, isNew = false) {
+    const m = entry || { id: null, category: 'preferences', title: '', content: '' };
+    const cat = el('select', { 'aria-label': 'Category', 'data-k': `memcat:${m.id || 'new'}` },
+      ['preferences','projects','conversations','tasks'].map((c) => el('option', { value: c, textContent: c, selected: c === m.category })));
+    const title = el('input', { type: 'text', value: m.title || '', placeholder: 'Title (optional)', 'aria-label': 'Memory title', maxLength: 200 });
+    const content = el('textarea', { placeholder: 'Memory content', 'aria-label': 'Memory content', rows: 3, maxLength: 8000 });
+    content.value = m.content || '';
+    const save = () => {
+      const entryOut = { category: cat.value, title: title.value.trim(), content: content.value.trim() };
+      if (!entryOut.content) return content.focus();
+      if (isNew) send({ type: 'memory_save', entry: entryOut });
+      else send({ type: 'memory_update', id: m.id, entry: entryOut });
+      ui.editMem = null; ui.newMem = false;
+    };
+    const cancel = () => { ui.editMem = null; ui.newMem = false; render(); };
+    return el('div', { className: 'keykinds memedit' },
+      el('div', { className: 'setting' }, el('span', {}, 'Category'), cat),
+      el('span', { className: 'px field' }, title),
+      el('span', { className: 'px field' }, content),
+      el('div', { className: 'row-btns' }, btn('Save', save, { kind: 'primary', k: `memsave:${m.id || 'new'}` }), link('Cancel', cancel, { k: `memcancel:${m.id || 'new'}` })));
+  }
+  function savedMemoryList() {
+    const all = Array.isArray(state.memories) ? state.memories : [];
+    const q = (ui.qm || '').trim().toLowerCase();
+    const hits = q ? all.filter((x) => memText(x).toLowerCase().includes(q)) : all;
+    const editRow = (x) => ui.editMem === x.id ? el('li', { className: 'item mem open' }, savedMemoryForm(x, false)) : el('li', { className: 'item mem' },
+      el('span', { className: 'text', title: `${x.category}: ${x.content}` },
+        el('b', { textContent: `[${x.category}] ` }),
+        x.title ? `${x.title} — ` : '',
+        x.content,
+        el('small', { textContent: new Date(x.updatedAt || x.createdAt).toLocaleString() })),
+      el('span', { className: 'row-btns icons' },
+        btn('Edit', () => { ui.editMem = ui.editMem === x.id ? null : x.id; ui.newMem = false; render(`memedit:${x.id}`); }, { kind: 'ghost mini', k: `memedit:${x.id}`, aria: `Edit memory ${x.id}` }),
+        iconArmed('x', 'Delete', `memdel:${x.id}`, `memory_delete:${x.id}`, `Delete memory ${x.id}`)));
+    const { box, nav } = paged('saved', hits, editRow, { label: 'Saved memory', empty: q ? `No match for "${(ui.qm||'').trim()}".` : 'No saved memories yet.', id: 'saved-box' });
+    const search = all.length > (ui.per.saved ?? 8) || q ? el('div', { className: 'find' }, el('span', { className: 'px field' },
+      el('input', { type: 'search', id: 'find-saved', value: ui.qm || '', placeholder: `Search ${all.length} saved memories`, 'aria-label': 'Search saved memory', autocomplete: 'off', spellcheck: false,
+        on: { input: (e) => { ui.qm = e.target.value; ui.pg.saved = 0; refreshSaved(); }, keydown: (e) => { if (e.key === 'Escape' && ui.qm) { e.preventDefault(); e.stopPropagation(); e.target.value = ui.qm = ''; refreshSaved(); } } } }))) : null;
+    const add = ui.newMem ? savedMemoryForm(null, true) : el('div', { className: 'links' }, btn(ui.newMem ? 'Cancel' : 'Add memory', () => { ui.newMem = !ui.newMem; ui.editMem = null; render('memnew'); }, { k: 'memnew', aria: 'Add a saved memory' }));
+    return [
+      el('div', { className: 'group paged', role: 'tabpanel', id: 'mem-panel', 'aria-labelledby': 'tab-saved' }, search, ui.newMem ? add : null, box, ui.newMem ? null : add),
+      foot(all.length ? el('p', { className: 'usage', textContent: `${all.length} saved` }) : null, nav, 'saved-foot'),
+    ];
+  }
 
   // ---------------------------------------------------------------- Settings
   // A masked key field that opens in place. id: a provider, or a voice service ('fish', 'gemini'). kinds: the kinds of key it takes
@@ -602,6 +650,20 @@
     const tts = TTS_NAMES[state.tts] ? state.tts : 'fish', T = TTS_NAMES[tts], local = tts === 'voicestudio', hasKey = local || !!state[`${tts}Key`];
     // Gemini can speak with the key the AI already has (the Model page), until the voice gets one of its own.
     const shared = tts === 'gemini' && hasKey && !!state.geminiShared;
+    // Arabic: whether this service can say it (its own docs, not a guess), and the voice picked for it when it has
+    // a list to pick from (Gemini's voices, VoiceStudio's saved ones). Fish's voices are the looks' own: no picker.
+    const ar = state.arabic ?? {};
+    const arVoices = ar.voices ?? [];
+    const m = state.mic ?? { status: 'idle', inputs: [], pick: '' };
+    const inputs = m.inputs ?? [];
+    const def = inputs.find((x) => x.default);
+    const micLabel = (name) => inputs.find((x) => x.name === name)?.description || name;
+    const micStatus = m.state === 'fallback'
+      ? `${micLabel(m.wanted ?? m.pick) || 'That microphone'} isn't connected: recording from ${m.using ?? 'the default'}.`
+      : m.using ? `Recording from ${micLabel(m.using)}.`
+        : m.why ? m.why
+          : m.status === 'loading' ? 'Asking the system which microphones there are…'
+            : m.pick ? "Saved: this one when it's connected." : "The system's default microphone (the one your desktop uses).";
     return [
       group('Spoken replies', 'Hear me as well as read me.', null,
         picks('Replies', [['text', 'Text only'], ['voice', 'Voice and text']], state.replies, (x) => {
@@ -637,7 +699,26 @@
           el('span', { className: 'row-btns' },
             link(ui.key === tts ? 'Cancel' : shared ? 'Use another' : hasKey ? 'Change' : 'Add', () => toggleKey(tts), { k: `addkey:${tts}`, aria: hasKey ? `Change the ${T} key` : `Add a ${T} key` }),
             hasKey && !shared && ui.key !== tts ? armed('Remove', 'Confirm', `${tts}key-remove`, `${tts}key_remove`, `Remove the ${T} key`) : null)),
-        local ? null : keyForm(tts, T, (key) => send({ type: `panel_${tts}key`, key }))),
+        local ? null : keyForm(tts, T, (key) => send({ type: `panel_${tts}key`, key })),
+        // Arabic follows the reply's own text (never a setting to remember): this is the voice it's read in.
+        el('div', { className: 'setting' },
+          el('span', {}, 'Arabic'),
+          arVoices.length ? el('span', { className: 'px field select' },
+            el('select', { 'aria-label': 'Voice for Arabic', 'data-k': 'arvoice', on: { change: (e) => act(`arvoice:${e.target.value}`) } },
+              el('option', { value: 'default', textContent: tts === 'gemini' ? `Same as English (${state.geminiVoice})` : "The engine's default", selected: !ar.voice }),
+              arVoices.map((x) => el('option', { value: x.id, textContent: x.name ?? `${x.id} · ${x.style ?? ''}`, selected: x.id === ar.voice })))) : null),
+        ar.note ? el('p', { className: `why wrap${ar.support === false ? ' late' : ''}`, textContent: ar.note }) : null),
+      group('Microphone', 'Which one I listen from.', null,
+        // Its own row: device names are long, and a label squeezed next to one becomes "Mic".
+        el('p', { className: 'sub', textContent: 'Input device' }),
+        el('div', { className: 'links' },
+          inputs.length ? el('span', { className: 'px field select' },
+            el('select', { 'aria-label': 'Microphone', 'data-k': 'mic', on: { change: (e) => act(`mic:${e.target.value}`) } },
+              el('option', { value: '', textContent: `System default${def ? ` · ${def.description}` : ''}`, selected: !m.pick }),
+              inputs.map((x) => el('option', { value: x.name, textContent: x.description || x.name, selected: x.name === m.pick })))) : null,
+          link(m.status === 'loading' ? 'Checking…' : inputs.length ? 'Refresh' : 'Find microphones', () => act('mics'), { k: 'mics', aria: 'List the microphones' })),
+        el('p', { className: `why wrap${m.state === 'fallback' ? ' late' : ''}`, textContent: micStatus }),
+        m.state === 'fallback' ? el('p', { className: 'why wrap late', textContent: 'Plug it back in, or pick another one here; until then the default is used, so talking still works.' }) : null),
       v ? group('Talking to me', 'Speak instead of typing.', null,
         toggle('Voice control', v.download
           ? (v.download.status === 'downloading' ? `Downloading the voice model… ${v.download.pct}%` : v.download.status === 'error' ? 'The download failed' : `Needs a ${v.download.size} download`)
@@ -804,6 +885,68 @@
     clearTimeout(noteTimer); noteTimer = setTimeout(() => { n.hidden = true; }, copy ? 20000 : bad ? 9000 : 5000);
   }
 
+  // ---------------------------------------------------------------- approval
+  // A tool call waiting for a yes. The sidecar holds the action itself (its id, tool, arguments, fingerprint and
+  // expiry) and takes one answer for that exact one. This sheet only repeats back what it was shown: closing it,
+  // letting it run out, or losing the panel is never a yes, and a yes is never remembered for the next call.
+  const APPROVAL = import('./approval.js').catch(() => null);
+  let approvalMod = null, approval = null, approveTick = 0;
+  APPROVAL.then((m) => { approvalMod = m; if (approval) drawApproval(); });
+
+  // One answer, sent once: the buttons die on the press, so a second one can never go out.
+  function decide(decision) {
+    if (!approval || !approvalMod || approval.decision || approval.closed) return;
+    const msg = approvalMod.answerFor(approval.request, decision, Date.now());
+    if (!msg) { approval.closed = 'expired'; drawApproval(); return; }
+    approval.decision = decision;
+    drawApproval();
+    invoke('sidecar_send', { msg }).catch(() => { if (approval) { approval.decision = null; approval.closed = 'failed'; drawApproval(); } });
+  }
+
+  function drawApproval() {
+    const box = $('approve');
+    if (!box) return;
+    clearInterval(approveTick);
+    if (!approval) { box.hidden = true; box.replaceChildren(); return; }
+    box.hidden = false;
+    // No module (or a request it can't read) means no answer from here: the sidecar's own timer denies it.
+    const v = approvalMod ? approvalMod.viewOf(approval.request, Date.now(), approval) : null;
+    if (!v) {
+      box.replaceChildren(el('div', { className: 'approve px', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': 'Approval needed', tabIndex: -1 },
+        el('h2', {}, 'Approval needed'),
+        el('p', { className: 'why', textContent: 'This request cannot be read here, so it will not be answered. It runs out by itself and nothing happens.' })));
+      return;
+    }
+    const hot = v.risk === 'high' || v.risk === 'critical';
+    const facts = el('div', { className: 'facts' },
+      el('div', {}, 'Permission ', el('b', { textContent: v.permissionLabel })),
+      el('div', { className: hot ? 'hot' : null }, 'Risk ', el('b', { textContent: v.riskLabel })),
+      el('div', {}, v.done ? 'Clock ' : 'Expires in ', el('b', { className: 'left', textContent: v.done ? '—' : v.leftLabel })));
+    const args = v.args.length
+      ? el('div', { className: 'args' }, v.args.map((l) => el('div', { className: 'arg' },
+        l.key ? el('span', { className: 'k', textContent: `${l.key}: ` }) : null, el('span', { className: 'v', textContent: l.value }))))
+      : el('p', { className: 'args none', textContent: 'No arguments.' });
+    const acts = v.canAnswer
+      ? el('div', { className: 'acts' },
+        btn('Approve', () => decide('approve'), { kind: 'primary', k: 'approve-yes', wide: true, aria: `Approve ${v.tool}` }),
+        btn('Reject', () => decide('reject'), { kind: 'ghost', k: 'approve-no', wide: true, aria: `Reject ${v.tool}` }))
+      : el('p', { className: 'done', role: 'status', 'data-why': v.closing ?? 'unknown', textContent: approvalMod.DECISION_TEXT[v.closing] ?? approvalMod.DECISION_TEXT.unknown });
+    box.replaceChildren(el('div', {
+      className: 'approve px', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'approve-title', 'aria-describedby': 'approve-op', tabIndex: -1,
+    },
+      el('h2', { id: 'approve-title', textContent: v.canAnswer ? 'Approve this?' : 'Answered' }),
+      el('p', { className: 'op', id: 'approve-op' }, el('b', { textContent: v.tool }), v.operation ? el('span', { textContent: v.operation }) : null),
+      facts, args, acts));
+    // The countdown ticks in place (redrawing would take the focus off the sheet); at zero the sheet redraws dead.
+    if (v.canAnswer) approveTick = setInterval(() => {
+      if (!approval || approval.decision || approval.closed) return clearInterval(approveTick);
+      const now = approvalMod.viewOf(approval.request, Date.now(), approval);
+      if (!now?.canAnswer) { clearInterval(approveTick); return drawApproval(); }
+      const n = box.querySelector('.left');
+      if (n) n.textContent = now.leftLabel;
+    }, 1000);
+  }
+
   // ---------------------------------------------------------------- sidebar and keys
   const TABS = Object.keys(PANES);
   const navi = (t) => $(`nav-${t}`);
@@ -840,6 +983,19 @@
       if (e.key === 'Escape') { stopTalkCapture(); return; }
       if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(e.code)) {
         ui.recordTalk = false; act(`talkkey:${e.code}`); render('talk-key-capture');
+      }
+      return;
+    }
+    // While the approval sheet is up it has the keyboard: Escape rejects (never approves), Tab stays on it.
+    if (approval && !$('approve').hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); decide('reject'); return; }
+      if (e.key === 'Tab') {
+        const items = [...$('approve').querySelectorAll('button:not([disabled])')];
+        e.preventDefault();
+        if (!items.length) return;
+        const i = items.indexOf(document.activeElement);
+        (e.shiftKey ? items[(i <= 0 ? items.length : i) - 1] : items[(i + 1) % items.length]).focus();
+        return;
       }
       return;
     }
@@ -886,6 +1042,8 @@
   };
   window.__panelShut = () => {
     disarm(); ui.key = null; ui.recordTalk = false; unarmQuit();
+    // A dialog going away is not a yes: it reads as cancelled here, and the sidecar denies it when the panel closes.
+    if (approval && !approval.decision && !approval.closed) { approval.closed = 'cancelled'; drawApproval(); }
     body.classList.remove('opening');
     if (REDUCED.matches) { body.classList.add('shut'); return; }
     body.classList.add('shutting');
@@ -907,6 +1065,20 @@
       if (ui.arm && !document.querySelector(`[data-k="${CSS.escape(ui.arm)}"]`)) ui.arm = null;
       render(null, first);
       if (m.state.tab) show(m.state.tab, true); // opened for a reason (asked with nothing signed in: the Model page)
+    }
+    else if (m.kind === 'approval') {
+      if (!m.request?.id) return;
+      // A new request replaces any finished one in place; a second dialog never stacks on the first.
+      approval = { request: m.request, decision: null, closed: null };
+      drawApproval();
+      // Reading the sheet, not choosing for them: the buttons are the only way to answer.
+      $('approve').querySelector('.approve')?.focus();
+    }
+    else if (m.kind === 'approval_closed') {
+      if (!approval || String(m.id ?? '') !== String(approval.request.id)) return;
+      approval.decision = null;
+      approval.closed = approvalMod ? approvalMod.closedWord(m) : 'unknown';
+      drawApproval();
     }
     else if (m.kind === 'note') note(m.text, m.bad, m.copy);
     else if (m.kind === 'copied' && m.which === 'problem') note(m.ok ? 'Copied the error details. Paste them into your report.' : "Couldn't copy the error details. Try Save diagnostics.", !m.ok);
@@ -949,6 +1121,7 @@
       ],
       usage: { requests: 14, tokens: 31240 },
       facts: [{ id: 'f1', text: 'Prefers short answers in the morning' }, { id: 'f2', text: 'Working on the Roamies 1.0 launch, due end of month' }, { id: 'f3', text: 'Has a cat called Miso' }],
+      memories: [{ id: 'm1', category: 'preferences', title: 'Style', content: 'Prefers short answers', updatedAt: at, createdAt: at }, { id: 'm2', category: 'projects', title: 'Roamies', content: 'Working on 1.0 launch', updatedAt: at, createdAt: at }],
       commitments: [{ id: 'c1', text: 'Send the launch email', when: 'Fri 7 Nov, 10:00', overdue: false }, { id: 'c2', text: 'Book the dentist', when: 'Mon 3 Nov, 09:00', overdue: true }],
       name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']],
       size: 'default', sizes: [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']],
@@ -961,6 +1134,14 @@
       geminiModels: [{ id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite', per10s: 0.0015 }, { id: 'gemini-3.8-flash-tts', name: 'Flash', per10s: 0.00225 }],
       fishModels: [{ id: 'drama-3', name: 'Drama 3', perM: 50, promo: { perM: 10, until: '2026-12-01T08:00:00Z' } }, { id: 's2.1-pro', name: 'S2.1 Pro', perM: 15 }],
       voice: { on: true, keys: '⌃⌥', talkKey: '', ready: true, mac: true, mute: true, wakeWord: false, download: null }, askKeys: '⌥⌘',
+      // ?micfallback: the picked microphone is gone, so the default is recording (the row says so).
+      mic: new URLSearchParams(location.search).has('micfallback')
+        ? { status: 'ready', capture: 'pipewire', pick: 'bluez_input.41:42:EF:AB:FC:2C', using: 'Default Audio Device', state: 'fallback', wanted: 'bluez_input.41:42:EF:AB:FC:2C',
+          inputs: [{ name: 'alsa_input.pci-0000_00_1f.3.analog-stereo', description: 'Built-in Audio Analog Stereo', default: true }] }
+        : { status: 'ready', capture: 'pipewire', pick: '', using: 'bluez_input.41:42:EF:AB:FC:2C', state: 'default',
+          inputs: [{ name: 'alsa_input.pci-0000_00_1f.3.analog-stereo', description: 'Built-in Audio Analog Stereo', default: false },
+            { name: 'bluez_input.41:42:EF:AB:FC:2C', description: 'Pro 10s', default: true }] },
+      arabic: { support: true, evidence: 'model', note: "Fish's S2 models list Arabic. How it sounds depends on the voice.", voice: null, voices: null },
       sound: true, actions: false, login: { on: true },
       update: { available: new URLSearchParams(location.search).has('update') && new URLSearchParams(location.search).get('update') !== 'failed' ? '0.9.1' : null, installing: false, checking: false, result: null },
       intro: false,
@@ -995,17 +1176,29 @@
       engine: { ok: false, reason: 'engine', message: "VoiceStudio's voice engine isn't ready (CosyVoice): not installed. Pick or install an engine in VoiceStudio, then press Check again." },
     };
     if (q.has('studio')) Object.assign(s, { tts: 'voicestudio', studio: STUDIO[q.get('studio')] ?? STUDIO.on });
+    // The Arabic picker appears where the service has voices to pick (Gemini's, VoiceStudio's saved ones).
+    if (s.tts === 'gemini') Object.assign(s.arabic, { voices: s.geminiVoices, note: 'Gemini speaks Standard Arabic and picks the language from the text.' });
+    if (s.tts === 'voicestudio') Object.assign(s.arabic, { voices: s.studio?.voices ?? [], note: 'OmniVoice lists Standard Arabic.' });
+    if (q.has('arang')) Object.assign(s.arabic, { support: false, note: "KittenTTS doesn't list Arabic. Pick an OmniVoice engine in VoiceStudio for Arabic replies." });
     if (q.has('uptodate')) s.update.result = { ok: true, at: Date.now() + 60e3 };
     // ?v=0.1.36&from=0.1.35: What's new as it looks just after updating from one version to the other.
     if (q.get('v')) s.version = q.get('v');
     if (q.get('from')) s.whatsNewFrom = q.get('from');
     if (q.get('tab')) setTimeout(() => { if (q.get('mtab')) ui.mtab = q.get('mtab'); show(q.get('tab')); }, 0);
     setTimeout(() => window.__panel({ kind: 'state', state: s }), 0);
+    // ?approval: a tool call waiting for a yes, as the sidecar asks it (and answers it back once decided).
+    if (q.has('approval')) setTimeout(() => window.__panel({ kind: 'approval', request: {
+      id: 'apr_preview_1', tool: 'list_commitments', fingerprint: 'preview0000', args: { dir: '~/Documents/notes', pattern: 'launch' },
+      detail: 'Read the open commitments from memory', risk: q.get('approval') === 'high' ? 'high' : 'low', permissionLevel: q.get('approval') === 'high' ? 'sensitive' : 'observe',
+      reason: 'approval required', expiresAt: Date.now() + 47e3,
+    } }), 60);
     return async (cmd, args) => {
       if (cmd !== 'sidecar_send') return null;
       console.log('[preview] would send', JSON.stringify(args.msg));
       // A look change comes back as new state, as from the sidecar, so the Roamie's reaction can be seen.
       if (args.msg?.type === 'copy_problem') setTimeout(() => window.__panel({ kind: 'copied', which: 'problem', ok: q.get('copy') !== 'fail' }), 150);
+      // The sidecar closes the dialog as it takes the answer: the sheet ends on that word.
+      if (args.msg?.type === 'agentcore_approval') setTimeout(() => window.__panel({ kind: 'approval_closed', id: args.msg.id, why: args.msg.decision === 'approve' ? 'approved' : 'rejected' }), 160);
       const id = args.msg?.id ?? '';
       if (id.startsWith('size:')) { s.size = id.slice(5); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       if (id.startsWith('tts:')) { s.tts = id.slice(4); s.studio = s.tts === 'voicestudio' ? STUDIO[q.get('studio')] ?? STUDIO.on : null; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }

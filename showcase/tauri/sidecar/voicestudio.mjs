@@ -86,8 +86,9 @@ const fail = (reason, detail, heard) => {
  * err.reason ('offline' | 'starting' | 'voice' | 'timeout' | 'closed' | 'error') and err.heard.
  */
 export class StudioVoice {
-  constructor({ voice = null, base = studioUrl(), WebSocketImpl = globalThis.WebSocket, onAudio, onEnd, onError, openTimeout = 5000, sentenceTimeout = 90_000 }) {
-    Object.assign(this, { voice, base, WebSocketImpl, onAudio, onEnd, onError, openTimeout, sentenceTimeout });
+  constructor({ voice = null, base = studioUrl(), WebSocketImpl = globalThis.WebSocket, onAudio, onEnd, onError, openTimeout = 5000, sentenceTimeout = 90_000, voiceFor = null }) {
+    // voiceFor(text): the voice for that sentence (the user's Arabic voice, say), else this voice.
+    Object.assign(this, { voice, base, WebSocketImpl, onAudio, onEnd, onError, openTimeout, sentenceTimeout, voiceFor });
     this.queue = [];
     this.state = 'new'; // new → opening → open → (ending) → done
     this.ending = false;
@@ -150,7 +151,8 @@ export class StudioVoice {
     const text = this.queue.shift();
     if (text == null) { if (this.ending) this.finish(); return; }
     this.busy = true;
-    this.ws.send(JSON.stringify({ text, ...(this.voice ? { voice: this.voice } : {}) }));
+    const voice = (this.voiceFor ? this.voiceFor(text) : null) || this.voice;
+    this.ws.send(JSON.stringify({ text, ...(voice ? { voice } : {}) }));
     this.arm(this.sentenceTimeout, 'timeout');
   }
 

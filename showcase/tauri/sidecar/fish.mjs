@@ -25,8 +25,11 @@ export const RATE = 44100;
 
 // The voice's settings: balanced latency measured as fast as "low" (~0.4 s) with better quality. Loudness isn't
 // normalized: that flattened a whisper and a shout to the same level (1-8 dB apart; 10-28 dB without it, no clipping).
-export const startRequest = (voice, rate = RATE) => ({
+// `language` is Fish's BCP-47 tag ("ar", "ar-EG"…): it drives its text normalization (numbers, dates) and leaves the
+// voice alone. Left out, each chunk is detected on its own, which is what mixed Arabic/English needs.
+export const startRequest = (voice, rate = RATE, language = null) => ({
   text: '', reference_id: voice, format: 'pcm', sample_rate: rate, latency: 'balanced',
+  ...(language ? { language } : {}),
   temperature: 0.7, top_p: 0.7, chunk_length: 100, normalize: true, condition_on_previous_chunks: true,
   prosody: { speed: 1, volume: 0, normalize_loudness: false },
 });
@@ -51,8 +54,10 @@ export async function fishAccount(key, { fetchImpl = fetch, timeout = 6000 } = {
  * of onEnd when it fails (heard = whether any audio had arrived, so a caller can retry on another model).
  */
 export class FishVoice {
-  constructor({ key, voice = DEFAULT_VOICE, model = FISH_MODELS[0], rate = RATE, WebSocketImpl = globalThis.WebSocket, onAudio, onEnd, onError, openTimeout = 6000, audioTimeout = 8000 }) {
-    Object.assign(this, { key, voice, model, rate, WebSocketImpl, onAudio, onEnd, onError, openTimeout, audioTimeout });
+  constructor({ key, voice = DEFAULT_VOICE, model = FISH_MODELS[0], rate = RATE, WebSocketImpl = globalThis.WebSocket, onAudio, onEnd, onError, openTimeout = 6000, audioTimeout = 8000, voiceFor = null, languageFor = null }) {
+    Object.assign(this, { key, voice, model, rate, WebSocketImpl, onAudio, onEnd, onError, openTimeout, audioTimeout, voiceFor, languageFor });
+    // Set from the first sentence (one voice and one language per socket): both are part of the start event.
+    this.language = null;
     this.queue = []; // encoded messages waiting for the socket to open
     this.state = 'new'; // new → opening → open → ending → done
     this.heard = false;
@@ -74,7 +79,7 @@ export class FishVoice {
       if (this.state === 'done') return;
       this.state = this.state === 'ending' ? 'ending' : 'open';
       this.clear();
-      ws.send(encode({ event: 'start', request: startRequest(this.voice, this.rate) }));
+      ws.send(encode({ event: 'start', request: startRequest(this.voice, this.rate, this.language) }));
       for (const m of this.queue.splice(0)) ws.send(m);
       if (this.said) this.arm(this.audioTimeout, 'Fish Audio stopped sending audio');
     };
@@ -105,7 +110,14 @@ export class FishVoice {
 
   say(text) {
     if (this.state === 'done' || this.state === 'ending' || !text) return;
-    if (this.state === 'new') this.open();
+    if (this.state === 'new') {
+      // The socket takes one voice and one language, chosen from the first sentence (a reply in Arabic can use the
+      // user's Arabic voice, and Fish normalizes its numbers).
+      const voice = this.voiceFor?.(text);
+      if (voice) this.voice = voice;
+      this.language = this.languageFor?.(text) ?? this.language;
+      this.open();
+    }
     this.said++;
     this.send({ event: 'text', text: `${text} ` });
     this.send({ event: 'flush' });

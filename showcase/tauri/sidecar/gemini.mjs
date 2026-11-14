@@ -4,6 +4,7 @@
 // said: the first one plays as it streams, the ones behind it are held until it's their turn. Raw 16-bit mono
 // PCM at 24 kHz comes back as base64 in server-sent events. Same shape as FishVoice, so the speaker can use either.
 import { CUE, VOICE_CUES } from './speech.mjs';
+import { cleanSpoken, isArabic } from './lang.mjs';
 
 export const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 // Priciest first, like Fish's: a reply that fails on Flash before any audio is tried again on Flash Lite.
@@ -46,7 +47,7 @@ export const GEMINI_TAGS = {
   panting: 'pant', gasping: 'gasp', yawning: 'yawn', 'clear throat': 'throat-clearing', break: 'short pause', 'long-break': 'long pause',
 };
 export function plain(text) {
-  let s = String(text ?? ''), style = null;
+  let s = cleanSpoken(text), style = null;
   const cue = (c) => {
     const tag = GEMINI_TAGS[c.toLowerCase()];
     if (tag) return `<${tag}> `;
@@ -87,8 +88,8 @@ export async function geminiAccount(key, { fetchImpl = fetch, timeout = 6000 } =
  * It never says a failure is the key's fault: a 400 is also what an unknown voice gets. The speaker checks.
  */
 export class GeminiVoice {
-  constructor({ key, voice = GEMINI_DEFAULT_VOICE, model = GEMINI_MODEL, fetchImpl = fetch, onAudio, onEnd, onError, audioTimeout = 8000, maxInFlight = MAX_IN_FLIGHT }) {
-    Object.assign(this, { key, voice, model, fetchImpl, onAudio, onEnd, onError, audioTimeout, maxInFlight });
+  constructor({ key, voice = GEMINI_DEFAULT_VOICE, model = GEMINI_MODEL, fetchImpl = fetch, onAudio, onEnd, onError, audioTimeout = 8000, maxInFlight = MAX_IN_FLIGHT, voiceFor = null }) {
+    Object.assign(this, { key, voice, model, fetchImpl, onAudio, onEnd, onError, audioTimeout, maxInFlight, voiceFor });
     this.jobs = []; // one per sentence, in the order said: { text, style, chunks, state: waiting → running → done }
     this.head = 0; // the sentence whose audio is being handed on now
     this.state = 'open'; // open → ending → done
@@ -102,7 +103,9 @@ export class GeminiVoice {
     if (this.state !== 'open') return;
     const p = plain(text);
     if (!/[\p{L}\p{N}]/u.test(p.text.replace(/<[^>]*>/g, ''))) return; // nothing to say ("…", a lone cue or tag): asking would get no audio and fail the reply
-    this.jobs.push({ ...p, chunks: [], state: 'waiting', odd: null, timer: null });
+    // The voice can follow the sentence's language (the user's Arabic voice, say): each sentence is its own request.
+    const voice = (this.voiceFor ? this.voiceFor(p.text) : null) || this.voice;
+    this.jobs.push({ ...p, voice, chunks: [], state: 'waiting', odd: null, timer: null });
     this.pump();
   }
 
@@ -128,9 +131,12 @@ export class GeminiVoice {
     const arm = () => { clearTimeout(job.timer); job.timer = setTimeout(() => this.fail(new Error('Gemini stopped sending audio')), this.audioTimeout); };
     arm();
     try {
+      // English style notes (a mood, and the pace that fixes Gemini's slow default) stay off Arabic: Google's own
+      // guidance for non-English transcripts is English audio tags, and no page promises these notes for Arabic.
+      const style = isArabic(job.text) ? null : [job.style, GEMINI_PACE].filter(Boolean).join(', ');
       const r = await this.fetchImpl(`${GEMINI_API}/interactions`, {
         method: 'POST', headers: { 'x-goog-api-key': this.key, 'content-type': 'application/json' },
-        body: JSON.stringify(speechRequest(job.text, { voice: this.voice, model: this.model, style: [job.style, GEMINI_PACE].filter(Boolean).join(', ') })), signal: this.stopper.signal,
+        body: JSON.stringify(speechRequest(job.text, { voice: job.voice ?? this.voice, model: this.model, style })), signal: this.stopper.signal,
       });
       if (!r.ok) {
         const said = (await r.text().catch(() => '')).match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1];
