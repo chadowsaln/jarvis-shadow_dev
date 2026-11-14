@@ -196,7 +196,14 @@ export async function respanBridgeStatus({ env = process.env, fetchFn = globalTh
     // A reachable local endpoint that responds means bridge interface exists but may not be ready/connected.
     if (r.status) return { available: false, configured: cfg.configured, bridgeUrl: cfg.url, reason: String(r.data?.reason || r.data?.error || `Bridge responded (HTTP ${r.status}) but is not ready.`) };
   } catch (e) {
-    return { available: false, configured: cfg.configured, bridgeUrl: cfg.url, reason: cfg.configured ? `Cannot reach configured local browser bridge: ${String(e?.message || e)}` : 'No authenticated browser bridge detected. Install/connect a safe local browser bridge or extension that exposes visible Respan page content on localhost, then try again with user consent.' };
+    const isConfigured = cfg.configured;
+    const baseMsg = isConfigured
+      ? `Cannot reach configured local browser bridge at ${cfg.url}: ${String(e?.message || e)}`
+      : 'No authenticated browser bridge detected at the default address (http://127.0.0.1:18791).';
+    const hint = isConfigured
+      ? 'Ensure the bridge extension/app is running and accessible at the configured URL.'
+      : 'To read authenticated Respan content, install a browser extension that exposes a local HTTP bridge with /status and /read endpoints (see Respan platform documentation), then set ROAMIES_RESPAN_BROWSER_BRIDGE if it uses a different address.';
+    return { available: false, configured: cfg.configured, bridgeUrl: cfg.url, reason: `${baseMsg} ${hint}` };
   }
   return { available: false, configured: cfg.configured, bridgeUrl: cfg.url, reason: 'Authenticated browser bridge is not available.' };
 }
@@ -220,7 +227,14 @@ export async function readRespanAuthenticatedPage(url, { env = process.env, fetc
     if (wall) noteParts.push(`${wall.reason} Not bypassed; if visible content is limited, complete login/CAPTCHA in your browser and retry with consent.`);
     return { ok: true, platform: 'respan', authenticated: true, url: snap.url || String(url), title: snap.title, text: snap.text, elements: snap.elements, lang: snap.lang, authWall: wall ? wall.kind : null, bridge: { available: true, bridgeUrl: cfg.url }, note: noteParts.join(' ') };
   } catch (e) {
-    return { ok: false, url: String(url || ''), platform: 'respan', bridge: { available: false, bridgeUrl: cfg.url }, error: `Authenticated browser bridge unavailable: ${String(e?.message || e)}`, note: 'Could not read authenticated Respan content because no reachable local browser bridge/extension is connected. End-to-end integration requires a user-installed safe bridge; without it, open the page in your browser session or use unauthenticated browser_read_page for visible public content. No credentials/cookies/session tokens are extracted.' };
+    const isConfigured = cfg.configured;
+    const baseMsg = isConfigured
+      ? `Cannot reach configured local browser bridge at ${cfg.url}: ${String(e?.message || e)}`
+      : 'No authenticated browser bridge detected at the default address (http://127.0.0.1:18791).';
+    const hint = isConfigured
+      ? 'Ensure the bridge extension/app is running and accessible at the configured URL.'
+      : 'To read authenticated Respan content, install a browser extension that exposes a local HTTP bridge with /status and /read endpoints (see Respan platform documentation), then set ROAMIES_RESPAN_BROWSER_BRIDGE if it uses a different address.';
+    return { ok: false, url: String(url || ''), platform: 'respan', bridge: { available: false, bridgeUrl: cfg.url }, error: `${baseMsg} ${hint}`, note: 'No credentials/cookies/session tokens are extracted. Open the page in your browser to use your signed-in session, or use unauthenticated browser_read_page for visible public content.' };
   }
 }
 

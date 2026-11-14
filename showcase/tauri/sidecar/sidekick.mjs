@@ -448,8 +448,21 @@ async function connectOllama() {
     : `Ollama is connected, but none of its models can see images. Get one with: ollama pull qwen3.5:4b`, !r.models.length);
 }
 // Some models run on only one kind of key (Kimi K2.8 Preview on a Kimi Code plan key, MiMo UltraSpeed on API Credits).
-const canRun = (p, id) => !!signedIn.get(p) && getAuthStorageKeys(p, id).some((k) => k === p || storedKeys.has(k));
-const runnable = (p) => getModelsForProvider(p).filter((m) => canRun(p, m.id));
+const canRun = (p, id) => {
+  if (!signedIn.get(p)) return false;
+  // For OpenRouter with discovered models: any model in the catalog is runnable if the key is saved.
+  if (p === 'openrouter' && openrouterModels.status === 'ready') {
+    const inCatalog = openrouterModels.models.some((m) => m.id === id);
+    if (inCatalog) return true;
+  }
+  return getAuthStorageKeys(p, id).some((k) => k === p || storedKeys.has(k));
+};
+const runnable = (p) => {
+  if (p === 'openrouter' && openrouterModels.status === 'ready') {
+    return openrouterModels.models.filter((m) => canRun(p, m.id));
+  }
+  return getModelsForProvider(p).filter((m) => canRun(p, m.id));
+};
 // OpenRouter's catalog from the API, or gg-core's list while discovery hasn't succeeded.
 const openRouterCatalog = (p) => p === 'openrouter' && openrouterModels.status === 'ready'
   ? openrouterModels.models
@@ -457,8 +470,15 @@ const openRouterCatalog = (p) => p === 'openrouter' && openrouterModels.status =
 function ensureModel() {
   const known = getModel(config.model);
   if (config.provider && known && canRun(config.provider, config.model)) return true;
-  // OpenRouter: discovered or manually entered models may not be in gg-core's list; keep the pick if the key is saved.
-  if (config.provider === 'openrouter' && signedIn.get('openrouter')) return true;
+  // OpenRouter: validate against discovered catalog if available, else keep pick if key is saved.
+  if (config.provider === 'openrouter') {
+    if (openrouterModels.status === 'ready') {
+      const inCatalog = openrouterModels.models.some((m) => m.id === config.model);
+      if (inCatalog) return true;
+    } else if (signedIn.get('openrouter')) {
+      return true;
+    }
+  }
   // A local model stays picked while Ollama is closed; the request says to open it.
   if (config.provider === 'local' && parseLocalModelId(config.model ?? '') && signedIn.get('local')) return true;
   const p = ['anthropic', 'openai', 'gemini', ...MENU_PROVIDERS].find((x) => runnable(x).length);
