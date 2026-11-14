@@ -118,7 +118,12 @@ for (const type of AGENT_TYPES) {
 }
 assert.match(agentSystem('organizer', { dir: '/x' }), /one yes for all of it/);
 // Research goes through the web tools, which need no yes, never through curl in run_command, which does.
-for (const type of AGENT_TYPES) assert.match(agentSystem(type, { dir: '/x' }), /web_search[^\n]*web_fetch \(offset continues a long page\); never curl or wget/);
+for (const type of AGENT_TYPES) {
+  const ptxt = agentSystem(type, { dir: '/x' });
+  assert.match(ptxt, /web_search[^\n]*web_fetch \(offset continues a long page\)/);
+  assert.match(ptxt, /exa_search\/exa_get_contents\/exa_find_similar[^\n]*optional when configured[^\n]*existing web search\/fetch providers/);
+  assert.match(ptxt, /Never curl or wget\./);
+}
 assert.ok(!/files\/notes\.md/.test(agentSystem('researcher', { dir: '/x' })), 'a researcher answers by default');
 assert.match(agentSystem('researcher', { dir: '/x', returns: 'files' }), /files\/notes\.md/);
 assert.match(agentSystem('researcher', { dir: '/x', userName: 'Ken' }), /Ken wants an answer, not a file[^\n]*use files\/ only if the brief asks for a file/);

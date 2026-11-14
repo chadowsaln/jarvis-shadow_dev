@@ -292,11 +292,21 @@
         lines.push(run.length ? ('Running: ' + run.slice(0, 6).join(', ') + (run.length > 6 ? '…' : '')) : 'Running: none detected');
         if (e.note) lines.push(String(e.note));
       } else if (action === 'search') {
+        if (e.provider) lines.push('Source: ' + String(e.provider));
         if (e.query) lines.push('Query: ' + String(e.query).slice(0, 80));
         const res = (e.results || []).slice(0, 4);
-        if (res.length) res.forEach((r, i) => lines.push((i + 1) + '. ' + String(r.title || r.url || '').slice(0, 60)));
+        if (res.length) res.forEach((r, i) => {
+          const t = String(r.title || r.url || '').slice(0, 56);
+          const src = r.source || r.provider || e.provider || '';
+          const cite = r.citation?.url || r.url || '';
+          lines.push((i + 1) + '. ' + t + (src ? ' [' + src + ']' : ''));
+          if (cite) lines.push('   ' + String(cite).slice(0, 72));
+        });
         else if (e.count != null) lines.push('Results: ' + e.count);
+        const cites = Array.isArray(e.citations) ? e.citations.filter(c => c && c.url).slice(0, 2) : [];
+        if (cites.length && !res.length) cites.forEach((c) => lines.push('↳ ' + String(c.title || c.url).slice(0, 70)));
       } else if (action === 'read') {
+        if (e.provider) lines.push('Source: ' + String(e.provider));
         if (e.title) lines.push('Title: ' + String(e.title).slice(0, 80));
         if (e.url) lines.push('URL: ' + String(e.url).slice(0, 90));
         if (e.lang && e.lang !== 'unknown') lines.push('Language: ' + e.lang);
@@ -310,13 +320,20 @@
         if (e.nav) lines.push('Action: ' + e.nav);
         if (e.url) lines.push('URL: ' + String(e.url).slice(0, 100));
         if (e.note) lines.push(String(e.note).slice(0, 140));
+      } else if (action === 'exa_status') {
+        this.head = 'Exa search';
+        lines.push('Provider: Exa');
+        lines.push('Status: ' + String(e.status || (e.configured ? 'configured' : 'not_configured')));
+        if (e.note) lines.push(String(e.note).slice(0, 140));
       } else if (action === 'error') {
+        if (e.provider) lines.push('Source: ' + String(e.provider));
         lines.push(String(e.error || 'Browser action failed.').slice(0, 160));
+        if (e.note) lines.push(String(e.note).slice(0, 120));
         if (e.url) lines.push('URL: ' + String(e.url).slice(0, 90));
       } else {
         if (e.url) lines.push(String(e.url).slice(0, 100));
       }
-      this.lines = lines.filter(Boolean).slice(0, 6);
+      this.lines = lines.filter(Boolean).slice(0, 10);
       this.open = true; this.at = 0; this.age = 0;
     }
     layout() {

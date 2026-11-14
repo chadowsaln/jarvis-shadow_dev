@@ -45,6 +45,10 @@ export function describe(name, args = {}) {
       const a = short(args.action || 'navigate', 12);
       return args.url ? [`Navigating: ${a} ${host(args.url)}`, `Navigated: ${a}`] : [`Navigating: ${a}`, `Navigated: ${a}`];
     }
+    case 'exa_search_status': return ['Checking Exa search', 'Checked Exa search'];
+    case 'exa_search': return args.query ? [`Searching Exa: ${short(args.query, 24)}`, 'Searched Exa'] : ['Searching with Exa', 'Searched with Exa'];
+    case 'exa_get_contents': return ['Reading pages with Exa', 'Read pages with Exa'];
+    case 'exa_find_similar': return [`Finding similar pages${args.url ? ` to ${host(args.url)}` : ''}`, 'Found similar pages'];
     case 'browser_discover': return ['Checking browsers', 'Checked browsers'];
     case 'browser_open_url': return [`Opening ${host(args.url || args.target)}`, `Opened ${host(args.url || args.target)}`];
     case 'browser_read_page': return [`Reading ${host(args.url)}`, `Read ${host(args.url)}`];

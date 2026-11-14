@@ -9,6 +9,7 @@ import { createWebFetchTool, createWebSearchTool, runSideWebSearch, runSideWebSe
 import { getSystemStatus } from './sysinfo.mjs';
 import { captureViaPortal, detectTesseract, ocrImage, readImageDataUrl, removeTemp, screenAnswerText } from './screen.mjs';
 import { BROWSER_ACTIONS, browserDiscover, browserOpenUrl, browserStatusText, detectAuthOrCaptchaWall, detectPageLang, fetchReadablePage, filterBrowserApps, getDefaultBrowserInfo, isRespanPlatformUrl, readRespanAuthenticatedPage, respanBridgeStatus, respanReadNote, summarizeSearchResults } from './browser.mjs';
+import { exaStatus, exaSearch, exaGetContents, exaFindSimilar } from './exa.mjs';
 import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
 import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
@@ -1636,6 +1637,80 @@ A drawing stays until the user clears it or the window changes; your next drawin
       permission: { level: 'observe', requiresApproval: false, description: 'Read the open commitments from memory' },
       execute: async () => commitmentsText() || 'Nothing open.',
     },
+    {
+      name: 'exa_search_status',
+      description: `Check whether Exa (https://exa.ai/) web search/retrieval is configured and available in Little Boy (observe, read-only). Exa is optional: when not configured, Little Boy continues using its existing web search providers. Never exposes API keys.`,
+      parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'Check Exa provider configuration/status' },
+      execute: async () => {
+        const st = exaStatus({});
+        ui({ kind: 'browser', action: 'exa_status', provider: st.provider, status: st.status, configured: st.configured, note: st.note, at: Date.now() });
+        return st;
+      },
+    },
+    {
+      name: 'exa_search',
+      description: `Search the web using Exa (optional provider) as part of Browser Intelligence. Supports Arabic and English queries for general web, news, technical and programming research. Returns titles, URLs, snippets/extracted text, and source citations. Observe-only (no site actions). If Exa is not configured, returns status not_configured so other existing search providers can be used instead. Do not send private user data to Exa.`,
+      parameters: z.object({
+        query: z.string().min(1).max(2000).describe('Search query (Arabic or English).'),
+        numResults: z.number().int().min(1).max(10).optional().describe('Number of results (1-10, default 5).'),
+        type: z.string().optional().describe('Optional Exa search type, e.g. auto, neural, keyword.'),
+        category: z.string().optional().describe('Optional category hint, e.g. news article, research paper, github, tweet.'),
+        includeDomains: z.array(z.string()).optional().describe('Optional domains to include.'),
+        excludeDomains: z.array(z.string()).optional().describe('Optional domains to exclude.'),
+        startPublishedDate: z.string().optional().describe('Optional ISO published-date lower bound.'),
+        endPublishedDate: z.string().optional().describe('Optional ISO published-date upper bound.'),
+        includeContents: z.boolean().optional().describe('If true (default), request snippets/highlights/text excerpts.'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Search the web via Exa (optional)' },
+      execute: async ({ query, numResults, type, category, includeDomains, excludeDomains, startPublishedDate, endPublishedDate, includeContents }) => {
+        const r = await exaSearch({ query, numResults, type, category, includeDomains, excludeDomains, startPublishedDate, endPublishedDate, contents: includeContents }, {});
+        if (!r.ok) {
+          ui({ kind: 'browser', action: r.status === 'not_configured' ? 'exa_status' : 'error', source: 'exa_search', provider: 'exa', status: r.status, query: String(query || ''), error: r.error, note: r.note, configured: r.status !== 'not_configured', at: Date.now() });
+          return r;
+        }
+        ui({ kind: 'browser', action: 'search', provider: 'exa', query: r.query, results: r.results, citations: r.citations, count: r.count, at: Date.now() });
+        return r;
+      },
+    },
+    {
+      name: 'exa_get_contents',
+      description: `Extract content from specific web page URLs using Exa (optional provider). Returns titles, URLs, extracted text/snippets, and citations. Observe-only; does not access login-protected browser sessions or bypass protections. If Exa is not configured, returns status not_configured.`,
+      parameters: z.object({
+        urls: z.array(z.string().min(1)).min(1).max(10).describe('One or more http(s) URLs to extract content from.'),
+        maxCharacters: z.number().int().min(200).max(20000).optional().describe('Max extracted text characters per page (200-20000, default 4000).'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Extract page contents via Exa (optional)' },
+      execute: async ({ urls, maxCharacters }) => {
+        const r = await exaGetContents({ urls, maxCharacters }, {});
+        if (!r.ok) {
+          ui({ kind: 'browser', action: r.status === 'not_configured' ? 'exa_status' : 'error', source: 'exa_get_contents', provider: 'exa', status: r.status, urls, error: r.error, note: r.note, configured: r.status !== 'not_configured', at: Date.now() });
+          return r;
+        }
+        ui({ kind: 'browser', action: 'read', provider: 'exa', results: r.results, citations: r.citations, count: r.count, title: r.results[0]?.title || '', url: r.results[0]?.url || (urls && urls[0]) || '', text: String(r.results[0]?.content || r.results[0]?.snippet || '').slice(0, 1200), at: Date.now() });
+        return r;
+      },
+    },
+    {
+      name: 'exa_find_similar',
+      description: `Find pages similar to a given URL using Exa (optional provider). Returns titles, URLs, snippets/extracted text, and citations. Observe-only. If Exa is not configured, returns status not_configured.`,
+      parameters: z.object({
+        url: z.string().min(1).describe('The URL to find similar pages for.'),
+        numResults: z.number().int().min(1).max(10).optional().describe('Number of results (1-10, default 5).'),
+        excludeSourceDomain: z.boolean().optional().describe('Exclude the source domain (default true).'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Find similar pages via Exa (optional)' },
+      execute: async ({ url, numResults, excludeSourceDomain }) => {
+        const r = await exaFindSimilar({ url, numResults, excludeSourceDomain }, {});
+        if (!r.ok) {
+          ui({ kind: 'browser', action: r.status === 'not_configured' ? 'exa_status' : 'error', source: 'exa_find_similar', provider: 'exa', status: r.status, url: String(url || ''), error: r.error, note: r.note, configured: r.status !== 'not_configured', at: Date.now() });
+          return r;
+        }
+        ui({ kind: 'browser', action: 'search', provider: 'exa', query: `Similar to ${String(url).slice(0, 80)}`, results: r.results, citations: r.citations, count: r.count, at: Date.now() });
+        return r;
+      },
+    },
+
   ];
 
   // What's in front, for the live state. Quick and never fails: '' if the helper is missing, slow or denied.

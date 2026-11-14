@@ -299,15 +299,19 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   // Batch 8: screen intelligence on Linux is observe-level but requires explicit approval each time (portal consent).
   // Batch 9: browser intelligence - discover/open/read/navigate are observe-level (read-only, no data-changing actions).
   // Batch 9.1: Respan authenticated reading via local bridge shares visible page content only with explicit consent (observe + approval).
+  // Batch 10: persistent memory - list/search observe, save/update/delete trusted with approval.
+  // Batch 11: Exa search integration - optional observe-level web search/retrieval (no approval, no site actions).
   const apps = process.platform === 'linux';
-  const readOnlyBrowser = ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_respan_bridge_status'];
+  const readOnlyBrowser = ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_respan_bridge_status', 'exa_find_similar', 'exa_get_contents', 'exa_search', 'exa_search_status'];
   const readOnlyApps = apps ? ['find_app', 'list_apps', 'running_apps', 'system_status'] : [];
+  const readOnlyMemory = ['memory_list', 'memory_search'];
   const mutatingApps = apps ? ['launch_app'] : [];
+  const mutatingMemory = ['memory_delete', 'memory_save', 'memory_update'];
   const observeAsk = [...(apps ? ['screen_capture', 'screen_ocr'] : []), 'browser_read_respan_authenticated'];
-  const readOnly = [...readOnlyFile, ...readOnlyApps, ...readOnlyBrowser], mutating = [...mutatingFile, ...mutatingApps];
+  const readOnly = [...readOnlyFile, ...readOnlyApps, ...readOnlyBrowser, ...readOnlyMemory], mutating = [...mutatingFile, ...mutatingApps, ...mutatingMemory];
   const base = ['list_commitments', 'run_diagnostic', ...(process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['list_windows'] : [])];
   const expected = [...base, ...readOnly, ...observeAsk, ...mutating].sort();
-  assert.deepEqual(names, expected, 'offered tools are the reviewed read-only/memory/browser tools plus approved-gated file/app/screen/authenticated-read tools');
+  assert.deepEqual(names, expected, 'offered tools are the reviewed read-only/memory/browser/exa tools plus approved-gated file/app/memory/screen/authenticated-read tools');
   for (const n of readOnly) {
     const t = rt.tools.find((x) => x.name === n);
     assert.ok(t, `${n} offered`);
@@ -332,8 +336,8 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
     assert.equal(r.allowed, false, `${n} is not reachable`);
     assert.match(r.reason, /unknown tool/, `${n} was never offered`);
   }
-  // No delete tool exists.
-  assert.equal(names.some((n) => /delete|remove|unlink|rm/i.test(n)), false, 'no delete/remove tool offered');
+  // No destructive file/system delete tool exists (persistent memory deletion is an approved managed action).
+  assert.equal(names.some((n) => n !== 'memory_delete' && /delete|remove|unlink|rm/i.test(n)), false, 'no destructive delete/remove tool offered');
   // A tool whose metadata asks for more than the host grants is refused, approval or not.
   const higher = { name: 'delete_everything', parameters: { shape: {} }, permission: { level: PERMISSION_LEVEL.administrative }, execute: async () => 'nope' };
   const low = live({ granted: 'observe', ask: [], extra: [higher] });

@@ -15,7 +15,7 @@ export const RETURNS = ['files', 'answer'];
 export const DEFAULT_RETURNS = { maker: 'files', researcher: 'answer', organizer: 'answer' };
 const returnsOf = (a) => (RETURNS.includes(a?.returns) ? a.returns : DEFAULT_RETURNS[a?.type] ?? 'files');
 // Every type works with files, commands and the web; the screen and the user's lists stay the chat's.
-const WORK_TOOLS = ['read_file', 'list_files', 'search_files', 'find_files', 'file_info', 'write_file', 'create_directory', 'copy_file', 'move_file', 'rename_file', 'run_command', 'web_search', 'web_fetch', 'browser_discover', 'browser_open', 'browser_read_page', 'browser_navigate', 'browser_respan_bridge_status', 'browser_read_respan_authenticated'];
+const WORK_TOOLS = ['read_file', 'list_files', 'search_files', 'find_files', 'file_info', 'write_file', 'create_directory', 'copy_file', 'move_file', 'rename_file', 'run_command', 'web_search', 'web_fetch', 'browser_discover', 'browser_open', 'browser_read_page', 'browser_navigate', 'browser_respan_bridge_status', 'browser_read_respan_authenticated', 'exa_search_status', 'exa_search', 'exa_get_contents', 'exa_find_similar'];
 export const TYPE_TOOLS = { maker: WORK_TOOLS, researcher: WORK_TOOLS, organizer: WORK_TOOLS };
 export const SCREEN_TOOLS = ['take_screenshot', 'list_windows', 'read_window', 'act_in_app', 'draw', 'open', 'see_photo',
   'remember_commitment', 'update_commitment', 'forget_fact', 'plan_steps', 'show_list', 'list_commitments', 'about_roamies'];
@@ -224,7 +224,7 @@ export function agentSystem(type, { dir, userName = 'the user', deliverTo = null
 ${how}
 ${mode}
 Your folder is ${dir}. What you make for ${userName} goes in files/ (only finished things, with clear names); scratch work, downloads and installed libraries go in work/; anything they sent you is in inputs/. Save what you make with paths starting files/ (like files/poem.md), and save each thing once: no second copies. Relative paths and run_command start in your folder.${deliverTo ? ` When you finish, a copy of what you list is also put in ${deliverTo} for them; don't copy it there yourself.` : ''}
-Find pages with web_search and read them with web_fetch (offset continues a long page); never curl or wget.
+Find pages with web_search and read them with web_fetch (offset continues a long page). Exa tools (exa_search/exa_get_contents/exa_find_similar) are optional when configured; if Exa is not configured, use existing web search/fetch providers. Never curl or wget.
 Each time you start a new stage, call plan with one short line (under 60 characters) saying what you're doing now; it shows on your row.
 ${done}
 Overwriting your own files needs no yes. Anything outside your folder, deleting, installing or anything risky asks ${userName} first, and they may say no: then find another way, or say so in needs_you. Some things are blocked for safety; never try to get around a block.
@@ -234,7 +234,7 @@ Today is ${now.toDateString()}.`;
 
 // ---------- the manager ----------
 const LIMITS = { running: 3, local: 1, workMs: 30 * 60_000, turns: 80, beatMs: 60_000, stuckMs: 3 * 60_000, killMs: 3000 };
-const GLYPH = { write_file: 'pen', web_fetch: 'lens', web_search: 'lens', run_command: 'gear', read_file: 'eye', list_files: 'eye', search_files: 'eye', find_files: 'eye', file_info: 'eye', create_directory: 'pen', copy_file: 'pen', move_file: 'pen', rename_file: 'pen' };
+const GLYPH = { write_file: 'pen', web_fetch: 'lens', web_search: 'lens', exa_search: 'lens', exa_get_contents: 'lens', exa_find_similar: 'lens', exa_search_status: 'lens', run_command: 'gear', read_file: 'eye', list_files: 'eye', search_files: 'eye', find_files: 'eye', file_info: 'eye', create_directory: 'pen', copy_file: 'pen', move_file: 'pen', rename_file: 'pen' };
 const IMAGE = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const one = (s, n) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const exists = (p) => fs.promises.stat(p).then(() => true, () => false);

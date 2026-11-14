@@ -177,7 +177,7 @@ if (LINUX) {
   assert.deepEqual(defaultToolPermission(byName('running_apps')), { level: 'observe', requiresApproval: false, approvalScopes: null, description: 'List the installed apps that are running' });
   assert.deepEqual(defaultToolPermission(byName('launch_app')), { level: 'trusted', requiresApproval: true, approvalScopes: null, description: 'Start an installed application' });
   // There is no tool that installs, removes or updates anything.
-  assert.deepEqual(named.filter((n) => /install|uninstall|remove|update|upgrade|purge/i.test(n)).filter((n) => !['update_commitment'].includes(n)), []);
+  assert.deepEqual(named.filter((n) => /install|uninstall|remove|update|upgrade|purge/i.test(n)).filter((n) => !['update_commitment', 'memory_update'].includes(n)), []);
   // The launch tool takes one name: no command, no arguments, no ids of processes.
   const schema = resolveToolSchema(byName('launch_app'));
   assert.deepEqual(Object.keys(schema.properties), ['app'], 'the only input is an app name');
