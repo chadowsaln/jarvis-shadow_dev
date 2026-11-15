@@ -9,7 +9,7 @@
       ]
     },
     {
-      "version": "0.1.41",
+      "version": "0.0.4",
       "date": "2026-11-15",
       "items": [
         { "kind": "new", "title": "Custom colors", "text": "Pick any color in Appearance and your Little Boy tints itself to match." },

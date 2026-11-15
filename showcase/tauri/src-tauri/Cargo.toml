@@ -1,6 +1,6 @@
 [package]
 name = "littleboy"
-version = "0.1.41"
+version = "0.0.4"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Little Boy: AI desktop companion inspired by JARVIS"
