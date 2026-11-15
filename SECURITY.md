@@ -1,6 +1,6 @@
 # Security policy
 
-Roamies reads your AI provider API keys and OAuth tokens from your machine (`~/.gg/auth.json`) and runs a
+JARVIS V2 (rebranding WIP from Roamies/Little Boy) reads your AI provider API keys and OAuth tokens from your machine (e.g. `~/.gg/auth.json`) and runs a
 local agent that can take screenshots, read windows and read files, and, if you turn
 them on, click and type in other apps, write files and run commands. Security reports are taken seriously.
 
@@ -25,8 +25,8 @@ You'll get an acknowledgement within 7 days. Once a fix ships, the advisory will
 - the agent sidecar and its tools: file access, commands, screenshots, app control
 - the safety switches for writing files and running commands
 - the Tauri shell and its commands
-- the macOS helpers (voice and hands)
-- memory and session files in `~/.gg/sidekick/`
+- the macOS/Windows/Linux helpers (voice and hands where applicable)
+- memory and session files in `~/.gg/sidekick/` (and any configured app data locations)
 
 ## Out of scope
 

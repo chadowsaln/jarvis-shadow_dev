@@ -1,4 +1,6 @@
-# The Respan Gateway for the side calls
+# The Respan Gateway for the side calls (JARVIS V2)
+
+> Note: This document describes gateway integration used in this codebase during the transition from Roamies/Little Boy to JARVIS V2. Environment variables and route examples currently use legacy `ROAMIES_*` names as implemented.
 
 The two side calls beside the conversation — folding old turns into a summary, and the memory pass that learns
 lasting facts — are one short question each, with a JSON answer. They can go through a local

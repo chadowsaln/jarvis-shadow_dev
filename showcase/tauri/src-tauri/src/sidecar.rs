@@ -14,8 +14,12 @@ fn find_node() -> Option<PathBuf> {
     // GUI apps don't get the shell's PATH on macOS, so check the usual installs too.
     let exe = if cfg!(windows) { "node.exe" } else { "node" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "C:\\Program Files\\nodejs"] {
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/home/shadow/.local/bin", "C:\\Program Files\\nodejs"] {
         dirs.push(PathBuf::from(d));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(&home).join(".local/bin"));
+        dirs.push(PathBuf::from(&home).join(".nvm/current/bin"));
     }
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
 }

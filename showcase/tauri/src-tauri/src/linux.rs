@@ -451,7 +451,7 @@ fn exec_quoted(path: &str) -> Option<String> {
 /// The XDG autostart entry that starts Little Boy when the user logs in.
 fn autostart_entry(program: &str) -> Option<String> {
     let exec = exec_quoted(program)?;
-    Some(format!("[Desktop Entry]\nType=Application\nName=Little Boy\nComment=AI desktop companion\nExec={exec}\nIcon=littleboy\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"))
+    Some(format!("[Desktop Entry]\nType=Application\nName=JARVIS V2\nComment=AI Agent + Computer Control + Perception + Memory + Skills + Security\nExec={exec}\nIcon=jarvis-v2\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"))
 }
 
 /// Whether an autostart entry is switched on: desktops' own "startup apps" settings switch one off by adding
@@ -462,7 +462,7 @@ fn autostart_on(entry: &str) -> bool {
 
 fn autostart_file() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(config.join("autostart").join("littleboy.desktop"))
+    Some(config.join("autostart").join("jarvis-v2.desktop"))
 }
 
 /// Open at Login: an entry in ~/.config/autostart, which GNOME, KDE and the other XDG desktops all run. It starts
@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn the_autostart_entry_quotes_the_program() {
         let e = autostart_entry("/home/kai/Apps/LittleBoy 0.1.33.AppImage").expect("an entry");
-        assert!(e.starts_with("[Desktop Entry]\nType=Application\nName=Little Boy\n"));
+        assert!(e.starts_with("[Desktop Entry]\nType=Application\nName=JARVIS V2\n"));
         assert!(e.contains("\nExec=\"/home/kai/Apps/LittleBoy 0.1.33.AppImage\"\n"), "{e}");
         assert_eq!(exec_quoted("/usr/bin/littleboy").as_deref(), Some("\"/usr/bin/littleboy\""));
         // Characters a shell or the desktop would act on stay literal.

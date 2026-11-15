@@ -2,8 +2,7 @@
   "bundle": {
     "externalBin": [
       "binaries/roamies-voice",
-      "binaries/roamies-hands",
-      "binaries/node"
+      "binaries/roamies-hands"
     ],
     "macOS": {
       "dmg": {

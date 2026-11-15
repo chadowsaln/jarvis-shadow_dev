@@ -1249,6 +1249,206 @@ A drawing stays until the user clears it or the window changes; your next drawin
         },
       },
     ] : []),
+    // Linux Computer Control tools (V2.1): AT-SPI2, input simulation, OCR, D-Bus integration
+...(LINUX ? [
+      {
+        name: 'linux_list_apps',
+        description: 'List running applications on Linux via AT-SPI2 accessibility bus. Returns app name, path, PID, toolkit, and version.',
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'List accessible applications on Linux' },
+        execute: async () => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const apps = await driver.getApplicationList();
+            return apps.length
+              ? apps.map(a => `${a.name} (pid ${a.pid}) [${a.toolkitName}] ${a.path}`).join('\n')
+              : 'No accessible applications found.';
+          } finally {
+            await driver.disconnect();
+          }
+        },
+      },
+      {
+        name: 'linux_list_windows',
+        description: 'List open windows on Linux via AT-SPI2. Returns window title, app name, bounds, and states.',
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'List open windows on Linux' },
+        execute: async () => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const windows = await driver.getWindowList();
+            return windows.length
+              ? windows.map(w => `${w.appName}: ${w.title} @ ${w.bounds.x},${w.bounds.y} ${w.bounds.width}x${w.bounds.height} [${w.states.join(', ')}]`).join('\n')
+              : 'No windows found.';
+          } finally {
+            await driver.disconnect();
+          }
+        },
+      },
+      {
+        name: 'linux_find_element',
+        description: 'Find an accessible UI element on Linux by role, name, description, states, or attributes. Returns element path, bounds, actions, and properties.',
+        parameters: z.object({
+          role: z.string().optional().describe('AT-SPI role, e.g., ROLE_PUSH_BUTTON, ROLE_TEXT, ROLE_COMBO_BOX'),
+          name: z.string().optional().describe('Element name (partial match, case-insensitive)'),
+          description: z.string().optional().describe('Element description'),
+          states: z.array(z.string()).optional().describe('Required states, e.g., STATE_VISIBLE, STATE_ENABLED'),
+          attributes: z.record(z.string()).optional().describe('Required attributes'),
+          applicationName: z.string().optional().describe('Limit search to this application'),
+          index: z.number().int().optional().describe('Nth match (0-based)'),
+        }),
+        permission: { level: 'observe', requiresApproval: false, description: 'Find accessible UI element on Linux' },
+        execute: async (criteria) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const elements = await driver.findElements(criteria);
+            if (!elements.length) return 'No matching elements found.';
+            return elements.map((el, i) => 
+              `${i}. ${el.role}: "${el.name}" @ ${el.coordinates ? `${el.coordinates.x},${el.coordinates.y} ${el.coordinates.width}x${el.coordinates.height}` : 'no bounds'} actions: [${el.actions.join(', ')}] path: ${el.path}`
+            ).join('\n');
+          } finally {
+            await driver.disconnect();
+          }
+        },
+      },
+      {
+        name: 'linux_click_element',
+        description: 'Click an accessible UI element on Linux by criteria (role, name, etc.). Uses AT-SPI2 to find the element and input simulation to click it.',
+        parameters: z.object({
+          role: z.string().optional(),
+          name: z.string().optional(),
+          description: z.string().optional(),
+          states: z.array(z.string()).optional(),
+          attributes: z.record(z.string()).optional(),
+          applicationName: z.string().optional(),
+          index: z.number().int().optional(),
+          button: z.enum(['left', 'right', 'middle']).optional().default('left'),
+        }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Click a UI element on Linux desktop' },
+        execute: async (criteria) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const driver = await createATSPIDriver();
+          const input = await getInputSimulator();
+          try {
+            const element = await driver.findElement(criteria);
+            if (!element) throw new Error('Element not found');
+            if (!element.coordinates) throw new Error('Element has no coordinates');
+            const centerX = element.coordinates.x + element.coordinates.width / 2;
+            const centerY = element.coordinates.y + element.coordinates.height / 2;
+            await input.click(centerX, centerY, criteria.button || 'left');
+            return `Clicked ${element.role} "${element.name}" at ${centerX},${centerY}`;
+          } finally {
+            await driver.disconnect();
+          }
+        },
+      },
+      {
+        name: 'linux_type_text',
+        description: 'Type text at the current cursor position or into a focused element on Linux. Uses input simulation (ydotool/libei).',
+        parameters: z.object({
+          text: z.string().min(1),
+          delayMs: z.number().int().min(0).max(1000).optional().default(10),
+        }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Type text on Linux desktop' },
+        execute: async ({ text, delayMs = 10 }) => {
+          const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const input = await getInputSimulator();
+          await input.type(text, delayMs);
+          return `Typed ${text.length} characters`;
+        },
+      },
+      {
+        name: 'linux_press_key',
+        description: 'Press a key or key combination on Linux. Examples: "Enter", "Tab", "Escape", "Control+c", "Alt+Tab".',
+        parameters: z.object({
+          key: z.string().min(1).describe('Key to press (e.g., "Enter", "Tab", "Escape")'),
+          modifiers: z.array(z.string()).optional().describe('Modifiers: "Control", "Shift", "Alt", "Meta"'),
+        }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Press a key on Linux desktop' },
+        execute: async ({ key, modifiers = [] }) => {
+          const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const input = await getInputSimulator();
+          if (modifiers.length) {
+            await input.hotkey(modifiers, key);
+          } else {
+            await input.press(key);
+          }
+          return `Pressed ${modifiers.length ? modifiers.join('+') + '+' : ''}${key}`;
+        },
+      },
+      {
+        name: 'linux_move_mouse',
+        description: 'Move mouse cursor to absolute screen coordinates on Linux.',
+        parameters: z.object({
+          x: z.number().int(),
+          y: z.number().int(),
+          durationMs: z.number().int().min(0).optional(),
+        }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Move mouse cursor on Linux desktop' },
+        execute: async ({ x, y, durationMs }) => {
+          const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const input = await getInputSimulator();
+          await input.move(x, y, durationMs);
+          return `Moved mouse to ${x},${y}`;
+        },
+      },
+      {
+        name: 'linux_capture_screen',
+        description: 'Capture screen via XDG Desktop Portal (user consent required). Returns screenshot URI.',
+        parameters: z.object({
+          interactive: z.boolean().optional().default(true).describe('Let user choose screen/window/area'),
+          cursor: z.boolean().optional().default(false).describe('Include cursor in capture'),
+        }),
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen via desktop portal' },
+        execute: async ({ interactive = true, cursor = false }) => {
+          const { getDBusIntegration } = await import('./computer-control/dbus-integration.mjs');
+          const dbus = await getDBusIntegration();
+          const handleToken = `littleboy-${Date.now()}`;
+          const result = await dbus.requestScreenshot(handleToken, interactive, cursor);
+          return `Screenshot captured: ${result.uri}`;
+        },
+      },
+      {
+        name: 'linux_ocr',
+        description: 'Capture screen via XDG Desktop Portal and extract text using local Tesseract OCR. Supports Arabic and English.',
+        parameters: z.object({
+          interactive: z.boolean().optional().default(true),
+          language: z.string().optional().default('eng+ara').describe('Tesseract language(s), e.g., "eng", "ara", "eng+ara"'),
+        }),
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen and extract text via OCR' },
+        execute: async ({ interactive = true, language = 'eng+ara' }) => {
+          const { getDBusIntegration } = await import('./computer-control/dbus-integration.mjs');
+          const { getOCREngine } = await import('./computer-control/ocr-adapter.mjs');
+          const dbus = await getDBusIntegration();
+          const ocr = await getOCREngine();
+          const handleToken = `littleboy-${Date.now()}`;
+          const result = await dbus.requestScreenshot(handleToken, interactive, false);
+          return `OCR requested via portal. Result URI: ${result.uri}. Language: ${language}`;
+        },
+      },
+      {
+        name: 'linux_focus_window',
+        description: 'Focus a window by title on Linux (GNOME via D-Bus, KDE via KWin).',
+        parameters: z.object({
+          title: z.string().min(1).describe('Window title (partial match)'),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Focus a window on Linux' },
+        execute: async ({ title }) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            await driver.focusWindow(title);
+            return `Focused window matching "${title}"`;
+          } finally {
+            await driver.disconnect();
+          }
+        },
+      },
+    ] : []),
     // GG Coder's own web tools (observe): search with a side search or keyless engines, pages as Markdown.
     // Wrapped to surface browser/web activity in Little Boy. No tokens, no CAPTCHA/login bypass.
     ...(() => {

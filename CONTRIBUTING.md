@@ -2,6 +2,8 @@
 
 Thanks for helping out. Bug reports, ideas and pull requests are all welcome.
 
+This repository is in a **rebranding/implementation transition to JARVIS V2** (see `README.md` and `JARVIS_V2_SPEC.md`). Some names, paths, docs, and UI strings may still reference legacy Roamies/Little Boy identifiers while the migration is in progress.
+
 ## Setup
 
 With Rust, Node.js 22+, the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) and, on macOS,

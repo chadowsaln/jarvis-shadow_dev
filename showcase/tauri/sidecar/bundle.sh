@@ -13,7 +13,10 @@ fi
 rm -rf dist && mkdir -p dist/node_modules
 # web_fetch (GG Coder's) loads its page and PDF readers by dynamic import, which a bundler can't follow: they stay
 # external and are copied below. linkedom is also bundled, because web_search imports it directly.
-WEB_EXT=(--external:@mozilla/readability --external:turndown --external:turndown-plugin-gfm --external:unpdf)
+# Native/optional deps used by computer-control and dbus-next/tesseract are external to avoid bundling issues.
+WEB_EXT=(--external:@mozilla/readability --external:turndown --external:turndown-plugin-gfm --external:unpdf \
+  --external:x11 --external:usocket --external:abstract-socket --external:dbus-next \
+  --external:tesseract.js --external:better-sqlite3 --external:pino --external:tesseract.js-core)
 "$ES" sidekick.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist/sidekick.mjs \
   --external:@huggingface/transformers --external:ogg-opus-decoder "${WEB_EXT[@]}" \
   --banner:js="import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" \
@@ -25,7 +28,8 @@ WEB_EXT=(--external:@mozilla/readability --external:turndown --external:turndown
   --log-level=warning
 # The readers and their dependencies, laid out as npm installed them (a nested copy travels with its parent).
 # One that's missing only costs web_fetch its Markdown: it falls back to plain text.
-node - linkedom @mozilla/readability turndown turndown-plugin-gfm unpdf <<'EOF'
+# External runtime deps (kept external above) must also be copied when present so the bundled sidecar can import them.
+node - linkedom @mozilla/readability turndown turndown-plugin-gfm unpdf dbus-next tesseract.js tesseract.js-core better-sqlite3 pino <<'EOF'
 const fs = require('node:fs'), path = require('node:path');
 const done = new Set();
 function copy(name, from) {
@@ -39,7 +43,7 @@ function copy(name, from) {
       for (const dep of Object.keys({ ...pkg.dependencies, ...pkg.optionalDependencies })) copy(dep, src);
       return;
     }
-    if (dir === process.cwd()) return console.error(`bundle: ${name} isn't installed; web_fetch will read pages as plain text`);
+    if (dir === process.cwd()) return console.error(`bundle: ${name} isn't installed; skipping`);
   }
 }
 for (const name of process.argv.slice(2)) copy(name, process.cwd());

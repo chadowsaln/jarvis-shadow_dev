@@ -49,11 +49,8 @@ export function describe(name, args = {}) {
     case 'exa_search': return args.query ? [`Searching Exa: ${short(args.query, 24)}`, 'Searched Exa'] : ['Searching with Exa', 'Searched with Exa'];
     case 'exa_get_contents': return ['Reading pages with Exa', 'Read pages with Exa'];
     case 'exa_find_similar': return [`Finding similar pages${args.url ? ` to ${host(args.url)}` : ''}`, 'Found similar pages'];
-    case 'browser_discover': return ['Checking browsers', 'Checked browsers'];
     case 'browser_open_url': return [`Opening ${host(args.url || args.target)}`, `Opened ${host(args.url || args.target)}`];
-    case 'browser_read_page': return [`Reading ${host(args.url)}`, `Read ${host(args.url)}`];
     case 'browser_search_web': return ['Searching the web', 'Searched the web'];
-    case 'browser_navigate': return ['Navigating browser', 'Browser navigation checked'];
     case 'remember_commitment': return ['Adding a reminder', 'Added a reminder'];
     case 'update_commitment': return ['Updating a reminder', 'Updated a reminder'];
     case 'forget_fact': return ['Forgetting it', 'Forgot it'];

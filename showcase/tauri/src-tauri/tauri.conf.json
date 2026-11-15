@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Little Boy",
-  "version": "0.0.4",
-  "identifier": "com.kenkai.littleboy",
+  "productName": "JARVIS V2",
+  "version": "0.1.0",
+  "identifier": "ai.jarvis.v2",
   "build": {
     "frontendDist": "../dist"
   },
@@ -31,9 +31,7 @@
       "minimumSystemVersion": "13.5"
     },
     "createUpdaterArtifacts": true,
-    "externalBin": [
-      "binaries/node"
-    ]
+    "externalBin": []
   },
   "plugins": {
     "updater": {

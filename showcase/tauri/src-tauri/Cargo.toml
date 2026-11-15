@@ -1,9 +1,9 @@
 [package]
-name = "littleboy"
-version = "0.0.4"
+name = "jarvis_v2"
+version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-description = "Little Boy: AI desktop companion inspired by JARVIS"
+description = "JARVIS V2: AI Agent + Computer Control + Perception + Memory + Skills + Security"
 repository = "https://github.com/KenKaiii/LittleBoy"
 homepage = "https://github.com/KenKaiii/LittleBoy"
 

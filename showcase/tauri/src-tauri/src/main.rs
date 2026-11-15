@@ -1726,7 +1726,7 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Quit Little Boy", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&starting, &quit])?;
             // Left click opens the panel; right click shows the short menu.
-            let mut tray = TrayIconBuilder::with_id("littleboy")
+            let mut tray = TrayIconBuilder::with_id("jarvis-v2")
                 .tooltip("Little Boy")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -1757,7 +1757,7 @@ fn main() {
                     eprintln!("could not register the area shortcut: {e}");
                 }
             } else {
-                eprintln!("global shortcuts need X11; on this Wayland desktop bind `roamies --summon` and the other commands in your keyboard settings");
+                eprintln!("global shortcuts need X11; on this Wayland desktop bind `littleboy --summon` and the other commands in your keyboard settings");
             }
             build_overlays(app.handle())?;
             pump_cursor(app.handle().clone());
