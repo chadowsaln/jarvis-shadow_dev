@@ -5,6 +5,32 @@
   const R = window.Roamie;
   const { clamp, lerp } = R;
 
+  // ---------- RTL/Arabic detection ----------
+  const ARABIC = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/gu;
+  const LATIN = /[A-Za-z\u00C0-\u024F]/g;
+  const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+  function scriptMix(text) {
+    const s = String(text ?? '').replace(/\[[^\]]*\]/g, ' ').replace(/<[^>]*>/g, ' ');
+    const letters = (re) => (s.match(re) ?? []).filter((c) => /\p{L}/u.test(c)).length;
+    return { arabic: letters(ARABIC), latin: letters(LATIN) };
+  }
+  function languageOf(text) {
+    const { arabic, latin } = scriptMix(text);
+    const all = arabic + latin;
+    if (!all) return null;
+    if (arabic && latin && Math.min(arabic, latin) / all >= 0.2) return 'mixed';
+    return arabic > latin ? 'ar' : 'en';
+  }
+  function isArabic(text) {
+    const { arabic, latin } = scriptMix(text);
+    return arabic > 0 && arabic >= latin;
+  }
+  function cleanSpoken(text) {
+    return String(text ?? '').replace(BIDI, '');
+  }
+  R.isArabic = isArabic;
+  R.cleanSpoken = cleanSpoken;
+
   // ---------- dot-matrix glyphs: real font, supersampled, thresholded to two brightness levels ----------
   const CW = 6, CH = 10, SS = 4;
   const glyphs = new Map();
@@ -686,7 +712,7 @@
 
     // ---- the bubble's words: real type, crisp at any size ----
     const drawText = (ctx, env, bb) => {
-      const ph = bb.input && !bb.text;
+const ph = bb.input && !bb.text;
       const fr = bb.frame;
       if (!fr || (!bb.text && !bb.input)) return;
       const P = k.P, t = T(), dpr = env.dpr || 1, cw = colW(t), lh = CH * t;
@@ -716,7 +742,12 @@
         return f;
       };
       let curFont = '';
-      tctx.textBaseline = 'middle'; tctx.textAlign = 'left';
+      // RTL support: detect if text is Arabic/RTL and use proper direction
+      const textForRtl = ph ? (bb.input.placeholder || '') : bb.text;
+      const rtl = isArabic(textForRtl);
+      tctx.textBaseline = 'middle';
+      tctx.textAlign = rtl ? 'right' : 'left';
+      if (rtl && typeof tctx.direction !== 'undefined') tctx.direction = 'rtl';
       const ink = dim ? css(PAL[L - 2], 0.9) : TEXT_INK, accent = dim ? ink : TEXT_ACCENT;
       for (let li = first; li <= last; li++) {
         const line = lines[li], cy = (li - s0 + 0.5) * lh;
@@ -724,26 +755,47 @@
         const edge = Math.min(1, fadeTop ? (cy / lh) * 1.2 : 1, fadeBot ? ((ih - cy) / lh) * 1.2 : 1);
         if (edge <= 0.02) continue;
         tctx.globalAlpha = clamp(edge, 0, 1);
-        for (let j = 0; j < line.s.length; j++) {
-          const idx = line.start + j;
-          if (idx >= shown) break;
-          if (line.s[j] === ' ') {
-            // A link's underline runs on under the spaces between its words.
-            if (R.md && (bb.sty?.[idx] ?? 0) & R.md.LINK && (bb.sty?.[idx + 1] ?? 0) & R.md.LINK) { tctx.fillStyle = TEXT_ACCENT; tctx.fillRect(j * cw, cy + lh * 0.36, cw, Math.max(1, t * 0.4)); }
-            continue;
+        // For RTL, render the whole visible line at once for proper shaping
+        if (rtl) {
+          const visibleEnd = Math.min(line.s.length, shown - line.start);
+          if (visibleEnd > 0) {
+            const visibleText = line.s.slice(0, visibleEnd);
+            const st = ph ? 0 : bb.sty?.[line.start] ?? 0;
+            const f = fontFor(st);
+            if (f !== curFont) { tctx.font = f; curFont = f; }
+            const marked = md && st & (md.CODE | md.LINK);
+            const x = rtl ? iw - cw : 0;
+            const age = ph ? 9 : now - (bb.at[line.start] ?? 0);
+            tctx.fillStyle = age < 0.12 ? '#ffffff' : marked ? accent : ink;
+            tctx.fillText(visibleText, x, cy);
+            if (md && st & md.LINK) {
+              const textWidth = tctx.measureText(visibleText).width;
+              const linkX = rtl ? x - textWidth : x;
+              tctx.fillRect(linkX, cy + lh * 0.36, textWidth, Math.max(1, t * 0.4));
+            }
           }
-          const em = emojiAt(line.s, j);
-          const ch = em ? em.cluster : line.s[j];
-          // Each new letter lands white, then settles to the text colour (code and links in the accent). It lands
-          // in place: a little hop per letter made the line being read shake while it streamed in.
-          const st = ph ? 0 : bb.sty?.[idx] ?? 0, f = fontFor(st);
-          if (f !== curFont) { tctx.font = f; curFont = f; }
-          const age = ph ? 9 : now - (bb.at[idx] ?? 0), x = j * cw + (em ? cw * 0.15 : 0), y = cy;
-          const marked = md && st & (md.CODE | md.LINK);
-          tctx.fillStyle = age < 0.12 ? '#ffffff' : marked ? accent : ink;
-          tctx.fillText(ch, x, y);
-          if (md && st & md.LINK) tctx.fillRect(x, cy + lh * 0.36, cw, Math.max(1, t * 0.4));
-          if (em) j += em.n - 1;
+        } else {
+          for (let j = 0; j < line.s.length; j++) {
+            const idx = line.start + j;
+            if (idx >= shown) break;
+            if (line.s[j] === ' ') {
+              // A link's underline runs on under the spaces between its words.
+              if (R.md && (bb.sty?.[idx] ?? 0) & R.md.LINK && (bb.sty?.[idx + 1] ?? 0) & R.md.LINK) { tctx.fillStyle = TEXT_ACCENT; tctx.fillRect(j * cw, cy + lh * 0.36, cw, Math.max(1, t * 0.4)); }
+              continue;
+            }
+            const em = emojiAt(line.s, j);
+            const ch = em ? em.cluster : line.s[j];
+            // Each new letter lands white, then settles to the text colour (code and links in the accent). It lands
+            // in place: a little hop per letter made the line being read shake while it streamed in.
+            const st = ph ? 0 : bb.sty?.[idx] ?? 0, f = fontFor(st);
+            if (f !== curFont) { tctx.font = f; curFont = f; }
+            const age = ph ? 9 : now - (bb.at[idx] ?? 0), x = j * cw + (em ? cw * 0.15 : 0), y = cy;
+            const marked = md && st & (md.CODE | md.LINK);
+            tctx.fillStyle = age < 0.12 ? '#ffffff' : marked ? accent : ink;
+            tctx.fillText(ch, x, y);
+            if (md && st & md.LINK) tctx.fillRect(x, cy + lh * 0.36, cw, Math.max(1, t * 0.4));
+            if (em) j += em.n - 1;
+          }
         }
       }
       tctx.globalAlpha = 1;
@@ -753,7 +805,8 @@
         if (bb.text) ({ li, col } = caretAt(bb.lines, bb.input.caret ?? bb.text.length));
         if (col >= bb.cols) col = bb.cols - 1;
         const cy = (li - s0) * lh;
-        if (cy > -1 && cy < ih) { tctx.fillStyle = css(HOT); tctx.fillRect(col * cw + 0.5, cy + lh * 0.15, Math.max(1.5, t * 0.8), lh * 0.7); }
+        const caretX = rtl ? iw - col * cw : col * cw;
+        if (cy > -1 && cy < ih) { tctx.fillStyle = css(HOT); tctx.fillRect(caretX + 0.5, cy + lh * 0.15, Math.max(1.5, t * 0.8), lh * 0.7); }
       }
       // Clip to the frame as it is this instant: it may still be growing, or shrinking away on close.
       const cx1 = fr.x + fr.w - padX(bb) + 2, cy1 = fr.y + fr.h - padY(bb) - (bb.input?.listen ? (METER + 1) * P : 0) - footH(bb) + 2;

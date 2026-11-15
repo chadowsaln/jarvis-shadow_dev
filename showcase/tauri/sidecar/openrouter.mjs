@@ -1,6 +1,6 @@
 // OpenRouter model discovery and key checks: https://openrouter.ai/api/v1/models
 // Fetches the full OpenRouter model catalog using the account's API key,
-// so Roamies is never restricted to a hardcoded subset (e.g. Qwen only).
+// so Little Boy is never restricted to a hardcoded subset (e.g. Qwen only).
 // The catalog is also the cheapest way to check a key: one authenticated GET, no paid tokens.
 import { parseOpenRouterCatalog } from '@kenkaiiii/gg-core';
 

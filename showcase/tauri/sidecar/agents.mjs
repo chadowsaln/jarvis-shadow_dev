@@ -18,7 +18,7 @@ const returnsOf = (a) => (RETURNS.includes(a?.returns) ? a.returns : DEFAULT_RET
 const WORK_TOOLS = ['read_file', 'list_files', 'search_files', 'find_files', 'file_info', 'write_file', 'create_directory', 'copy_file', 'move_file', 'rename_file', 'run_command', 'web_search', 'web_fetch', 'browser_discover', 'browser_open', 'browser_read_page', 'browser_navigate', 'browser_respan_bridge_status', 'browser_read_respan_authenticated', 'exa_search_status', 'exa_search', 'exa_get_contents', 'exa_find_similar'];
 export const TYPE_TOOLS = { maker: WORK_TOOLS, researcher: WORK_TOOLS, organizer: WORK_TOOLS };
 export const SCREEN_TOOLS = ['take_screenshot', 'list_windows', 'read_window', 'act_in_app', 'draw', 'open', 'see_photo',
-  'remember_commitment', 'update_commitment', 'forget_fact', 'plan_steps', 'show_list', 'list_commitments', 'about_roamies'];
+  'remember_commitment', 'update_commitment', 'forget_fact', 'plan_steps', 'show_list', 'list_commitments', 'about_littleboy'];
 /** The tools an agent of this type gets, from the full set createTools made. */
 export const toolsFor = (type, all) => all.filter((t) => (TYPE_TOOLS[type] ?? []).includes(t.name) && !SCREEN_TOOLS.includes(t.name));
 

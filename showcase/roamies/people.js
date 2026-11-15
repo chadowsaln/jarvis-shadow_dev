@@ -121,7 +121,7 @@
         rows: ['...hhhhh...', '..hhhhhhhh.', '.hhhssshhhh', '.hssssssshT', '.sssssssshT', '..ssssssshT', '...ssssshTt', '....zszhTt.', '..CCkwkCtCC'],
       },
     },
-    // Ken Kai, who made Roamies (shown on the About page, not a look): a textured dark fringe over faded sides,
+    // Ken Kai, who made Little Boy (shown on the About page, not a look): a textured dark fringe over faded sides,
     // and a hoodie with its drawstrings.
     ken: {
       L: {

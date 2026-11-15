@@ -242,6 +242,54 @@
   // you have, reacting to what's going on) and one per look on the Appearance page. One loop draws them all,
   // only while the panel is up and each canvas is on screen.
   const LED = [[4, 16, 18], [14, 92, 96], [40, 196, 184], [120, 255, 226], [230, 255, 250]];
+  // Generate a 5-color LED palette from a base color (hex or rgb string)
+  function paletteFromColor(base) {
+    let r, g, b;
+    if (base.startsWith('#')) {
+      const hex = base.slice(1);
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    } else if (base.startsWith('rgb')) {
+      [r, g, b] = base.match(/\d+/g).map(Number);
+    } else {
+      return LED; // fallback
+    }
+    // Convert to HSL for easier manipulation
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0, l = (max + min) / 510;
+    const d = max - min;
+    if (d !== 0) {
+      s = l > 0.5 ? d / (510 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+    const hsl = (h, s, l) => {
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      const hue2rgb = (t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      return [Math.round(hue2rgb(h + 1 / 3) * 255), Math.round(hue2rgb(h) * 255), Math.round(hue2rgb(h - 1 / 3) * 255)];
+    };
+    // Create 5 levels: dark edge, shadow, mid, bright, highlight
+    return [
+      hsl(h, Math.min(1, s * 1.2), Math.max(0.05, l * 0.15)),   // 0: darkest
+      hsl(h, Math.min(1, s * 1.1), Math.max(0.1, l * 0.35)),   // 1: shadow
+      hsl(h, s, l * 0.65),                                       // 2: mid
+      hsl(h, Math.min(1, s * 0.9), Math.min(0.95, l * 1.15)),  // 3: bright
+      hsl(h, Math.min(1, s * 0.7), Math.min(1, l * 1.4)),      // 4: highlight
+    ];
+  }
   const live = new Set();
   let pointer = null; // the cursor in page px, for their eyes
   addEventListener('pointermove', (e) => { pointer = [e.clientX, e.clientY]; }, { passive: true });
@@ -254,7 +302,7 @@
   // A Roamie on a canvas of w×h CSS px: the one on screen at half scale (the app's unit, every dot half size), so
   // each size shows its own art (the full face, the small one, the pointer) at its real size next to the others.
   const ZOOM = 0.5, UNIT = 340;
-  function liveRoamie(canvas, w, h, { look = 'classic', y = 0.56, form = 'default' } = {}) {
+  function liveRoamie(canvas, w, h, { look = 'classic', y = 0.56, form = 'default', pal = null } = {}) {
     if (!window.Roamie?.ditherKit) return null;
     const dpr = Math.min(2, devicePixelRatio || 1);
     canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
@@ -270,7 +318,7 @@
     const me = {
       pose: null, look, form,
       kit: Roamie.ditherKit({
-        id: 'panel', label: 'Panel', matrix: true, pixel: 1.3, glow: 0.55, speed: 80, pal: LED,
+        id: 'panel', label: 'Panel', matrix: true, pixel: 1.3, glow: 0.55, speed: 80, pal: pal ?? LED,
         // busy: no acts of its own; pose: whatever's going on, except while it's acting something out.
         plugin: (kit) => { K = kit; return { busy: () => true, pose: () => (clock < actUntil ? null : POSES[me.pose]?.(clock) ?? null) }; },
       }).create(env),
@@ -307,7 +355,7 @@
 
   // The header's Roamie: your look, reacting to what's going on. A short line beside it when something changes.
   // The same size and detail as the look tiles (fewer dots than that and the faces turn to noise).
-  const avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55 });
+  const avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
   const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
   let quipTimer = 0, seen = { look: null, update: null, opened: 0 };
   function quip(text, secs = 2.6) {
@@ -591,8 +639,17 @@
       : "OpenRouter didn't return any models.";
   }
   function appearancePage() {
+    const customPal = state.customColor ? paletteFromColor(state.customColor) : LED;
     return [
       group('Look', 'Each look has its own name and voice.', null, lookTiles()),
+      group('Color', 'Pick a custom color to tint your look. The palette is generated from this color.', null,
+        el('div', { className: 'setting' },
+          el('label', { className: 'px field' },
+            'Custom color',
+            el('input', { type: 'color', id: 'custom-color', value: state.customColor ?? '#7ff3ff', 'aria-label': 'Custom tint color', 'data-k': 'custom-color', on: { input: (e) => { ui.customColor = e.target.value; }, change: (e) => { const v = e.target.value; act(`customcolor:${v}`); ui.customColor = v; } } })),
+          state.customColor ? el('span', { className: 'row-btns' }, btn('Reset to default', () => { act('customcolor:'); ui.customColor = null; render('appearance'); }, { k: 'customcolor_reset', aria: 'Reset custom color to default' })) : null
+        )
+      ),
       group('Size', 'How big I am on your screen.', null, picks('Size', state.sizes, state.size, (x) => act(`size:${x}`), 'size')),
     ];
   }
@@ -607,7 +664,7 @@
       if (!t) {
         const cv = el('canvas', { 'aria-hidden': 'true' });
         const b = el('button', { className: 'px looktile', type: 'button', role: 'radio', 'data-k': `look:${id}` }, cv, el('span', { className: 'name', textContent: name }));
-        const r = liveRoamie(cv, 104, 76, { look: id, y: 0.55, form: state.size });
+        const r = liveRoamie(cv, 104, 76, { look: id, y: 0.55, form: state.size, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
         t = { b, r, waved: 0 };
         const wave = () => { if (r && Date.now() - t.waved > 3500) { t.waved = Date.now(); r.act('wave'); } };
         b.addEventListener('pointerenter', wave);
@@ -780,7 +837,7 @@
   function maker() {
     if (!ken) {
       const cv = el('canvas', { 'aria-hidden': 'true' });
-      const r = liveRoamie(cv, 100, 74, { look: 'ken', y: 0.55 });
+      const r = liveRoamie(cv, 100, 74, { look: 'ken', y: 0.55, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
       const card = el('div', { className: 'maker' }, cv, el('span', {}, 'Ken Kai', el('small', { textContent: 'Creator of Roamies' })));
       let waved = 0;
       card.addEventListener('pointerenter', () => { if (r && Date.now() - waved > 3500) { waved = Date.now(); r.act('wave'); } });

@@ -25,7 +25,7 @@
     hide: () => invoke('buddy', { msg: { on: false } }).catch(() => {}),
   };
   window.__roamieBuddy = (m) => { Roamie.wake?.(); Roamie.buddy.onEvent?.(m); };
-  // handsBusy: Roamies is acting in another app (it may take the real cursor), so clicks always go through.
+  // handsBusy: Little Boy is acting in another app (it may take the real cursor), so clicks always go through.
   let hot = null, cursor = null, handsBusy = false;
   // Linux ("x11" or "wayland", set by the shell): clicks are let through by region instead (below).
   const LINUX = !!window.ROAMIE_LINUX;
@@ -194,7 +194,7 @@
     autoListen = me;
   }
 
-  // Wake word: once a reply has been typed out and said, the sidecar may listen for "Hey Roamies" again.
+  // Wake word: once a reply has been typed out and said, the sidecar may listen for "Hey Little Boy" again.
   let saidWatch = null;
   function reportSaid(rid) {
     clearInterval(saidWatch);

@@ -1,20 +1,20 @@
-// Hands helper for Roamies on Windows, the twin of hands/main.swift: lets the agent see one window or app, read its
+// Hands helper for Little Boy on Windows, the twin of hands/main.swift: lets the agent see one window or app, read its
 // controls and work them. Same commands, same JSON: one command per run, one JSON object on stdout, live progress as
 // "@"-prefixed JSON lines on stderr.
 //
-//   roamies-hands windows                      visible windows, front to back
-//   roamies-hands front                        the app, window title and (for a browser) address in front
-//   roamies-hands capture <out.jpg> front|app:<name>|window:<id>|screen [max] [thumb thumbMax]
-//   roamies-hands locate front|app:<name>|window:<id>|screen
-//   roamies-hands select <out.png>             drag to choose an area (Esc cancels)
-//   roamies-hands ui front|app:<name>|window:<id> [controls]
-//   roamies-hands locate-control <target> <id>
-//   roamies-hands find-text <target> <text> [scroll]
-//   roamies-hands ocr-find <target> <text> [all]
-//   roamies-hands refine '[[x,y,w,h],…]' [window:<id>]
-//   roamies-hands act <json>                   {"app":"Notepad","steps":[{"do":"fill","field":"Text editor","text":"hi"}]}
-//   roamies-hands --self-test                  the logic checks (no windows needed)
-//   roamies-hands --smoke                      a real run against Notepad (CI)
+//   littleboy-hands windows                      visible windows, front to back
+//   littleboy-hands front                        the app, window title and (for a browser) address in front
+//   littleboy-hands capture <out.jpg> front|app:<name>|window:<id>|screen [max] [thumb thumbMax]
+//   littleboy-hands locate front|app:<name>|window:<id>|screen
+//   littleboy-hands select <out.png>             drag to choose an area (Esc cancels)
+//   littleboy-hands ui front|app:<name>|window:<id> [controls]
+//   littleboy-hands locate-control <target> <id>
+//   littleboy-hands find-text <target> <text> [scroll]
+//   littleboy-hands ocr-find <target> <text> [all]
+//   littleboy-hands refine '[[x,y,w,h],…]' [window:<id>]
+//   littleboy-hands act <json>                   {"app":"Notepad","steps":[{"do":"fill","field":"Text editor","text":"hi"}]}
+//   littleboy-hands --self-test                  the logic checks (no windows needed)
+//   littleboy-hands --smoke                      a real run against Notepad (CI)
 //
 // Coordinates are screen points: physical pixels ÷ the scale of the monitor they're on, which is how the overlays
 // place things (each overlay's origin is its monitor's position ÷ its scale; see safe_js in src/main.rs). Window ids
@@ -105,7 +105,7 @@ fn windows_main(cmd: &str, args: &[String]) -> ! {
             }).collect();
             out(json!({ "ok": true, "windows": list }))
         }
-        // Where the user is right now: the app in front (never Roamies), its window's title, and a browser's address.
+        // Where the user is right now: the app in front (never Little Boy), its window's title, and a browser's address.
         "front" => {
             let mut o = json!({ "ok": true });
             let Some(w) = resolve("front") else { out(o) };

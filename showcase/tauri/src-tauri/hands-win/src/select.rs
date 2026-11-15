@@ -192,12 +192,12 @@ pub fn select(file: &str) -> Result<Option<[u32; 2]>, String> {
         let class = WNDCLASSW {
             lpfnWndProc: Some(proc),
             hInstance: inst.into(),
-            lpszClassName: w!("RoamiesSnap"),
-            hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&class);
-        let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, w!("RoamiesSnap"), w!("Roamies: drag an area"), WS_POPUP, vx, vy, vw, vh, None, None, Some(inst.into()), None)
+lpszClassName: w!("LittleBoySnap"),
+        hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
+        ..Default::default()
+    };
+    RegisterClassW(&class);
+    let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, w!("LittleBoySnap"), w!("Little Boy: drag an area"), WS_POPUP, vx, vy, vw, vh, None, None, Some(inst.into()), None)
             .map_err(|e| e.to_string())?;
         let _ = ShowWindow(hwnd, SW_SHOW);
         force_front(hwnd);

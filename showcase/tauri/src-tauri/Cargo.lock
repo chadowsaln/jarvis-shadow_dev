@@ -2053,6 +2053,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "littleboy"
+version = "0.1.41"
+dependencies = [
+ "global-hotkey",
+ "gtk",
+ "objc2",
+ "objc2-service-management",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2945,23 +2962,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "roamies"
-version = "0.1.40"
-dependencies = [
- "global-hotkey",
- "gtk",
- "objc2",
- "objc2-service-management",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "x11rb",
- "zbus",
 ]
 
 [[package]]

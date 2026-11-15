@@ -28,7 +28,7 @@ DEFAULT_CONFIG = HERE / "gateway.toml"
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Serve the Respan Gateway on loopback for Roamies.")
+    ap = argparse.ArgumentParser(description="Serve the Respan Gateway on loopback for Little Boy.")
     ap.add_argument("--port", type=int, default=0, help="port to listen on (0: any free one), loopback only")
     ap.add_argument("--config", help=f"a gateway.toml to read (default: {DEFAULT_CONFIG} when it exists)")
     args = ap.parse_args()
