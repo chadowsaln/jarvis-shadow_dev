@@ -418,7 +418,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: "Little Boy isn't running." }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {}, respanBridgeUrl = '' }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: "JARVIS V2 isn't running." }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {}, respanBridgeUrl = '' }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -451,7 +451,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
     };
   }
   async function hands(...args) {
-    if (!HANDS) throw new Error('This needs the Little Boy app.');
+    if (!HANDS) throw new Error('This needs the JARVIS V2 app.');
     // Acting in an app may take the real cursor: meanwhile clicks go through the overlay, even where the Sidekick or
     // its bubble sits on the spot being clicked.
     const acting = args[0] === 'act';
@@ -472,7 +472,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
       if (process.platform === 'darwin' && /Accessibility/i.test(res.error ?? '')) {
         // Open the exact Settings pane (once a minute at most) so the fix is one click away.
         if (Date.now() - axNudged > 60_000) { axNudged = Date.now(); openUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'); }
-        throw new Error('Accessibility is off for Little Boy, so I can\'t read or control other apps yet. I just opened System Settings → Privacy & Security → Accessibility: switch on Little Boy there, then ask again. Tell the user exactly that, briefly.');
+        throw new Error('Accessibility is off for JARVIS V2, so I can\'t read or control other apps yet. I just opened System Settings → Privacy & Security → Accessibility: switch on JARVIS V2 there, then ask again. Tell the user exactly that, briefly.');
       }
       throw new Error(res.error || 'That did not work.');
     }
@@ -667,7 +667,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
         return (await hands('ocr-find', where, String(find), 'all').catch(() => null))?.matches ?? [];
       },
       async findText(find) {
-        if (!HANDS) throw new Error('Finding words on screen needs the Little Boy app; take a screenshot and give x, y instead.');
+        if (!HANDS) throw new Error('Finding words on screen needs the JARVIS V2 app; take a screenshot and give x, y instead.');
         // Text read off the screen: one match, or where each of several is, so the right one can be picked with within.
         const readOne = async () => {
           const all = await this.textAll(find);
@@ -692,7 +692,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
         }
       },
       async id(n) {
-        if (!HANDS) throw new Error('read_window ids need the Little Boy app; give x, y from a screenshot instead.');
+        if (!HANDS) throw new Error('read_window ids need the JARVIS V2 app; give x, y from a screenshot instead.');
         live ??= await liveControls(spec);
         const c = live(n);
         if (c.offscreen) throw new Error(`"${c.label || c.role}" is further down the page. Use its text instead; that scrolls to it.`);
@@ -766,7 +766,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
       else if (m.kind === 'open') { await tools.find((x) => x.name === 'open').execute({ target: m.url }); }
       else if (m.kind === 'handoff') onHandoff(m.task || m.text || m.label || 'a task');
       else if (m.kind === 'type') {
-        if (!HANDS) throw new Error('Typing into apps needs the Little Boy app.');
+        if (!HANDS) throw new Error('Typing into apps needs the JARVIS V2 app.');
         const src = m.at.src, app = t === 'front' || t === 'screen' ? {} : { app: t };
         const steps = src.text != null ? [{ do: 'fill', field: src.text, text: m.text }]
           : src.id != null ? [{ do: 'click', id: m.at.live }, { do: 'type', text: m.text }]
@@ -787,7 +787,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
     const id = ctx.toolCallId, edits = args.edit ?? [], notes = [], said = [];
     // Clicks and hovers in other apps can't be seen here (Wayland): the beats play one after another instead.
     const beats = (args.beats ?? []).map((b) => (POINTER_OK || !b.wait ? b : { ...b, wait: undefined }));
-    if (beats.some((b, i) => b !== (args.beats ?? [])[i])) notes.push("This desktop doesn't let Little Boy see clicks in other apps, so the beats played one after another instead of waiting for clicks.");
+    if (beats.some((b, i) => b !== (args.beats ?? [])[i])) notes.push("This desktop doesn't let JARVIS V2 see clicks in other apps, so the beats played one after another instead of waiting for clicks.");
     for (const e of edits) if (e.do !== 'clear' && !parts.has(e.part)) throw new Error(`There's no ${e.part} on screen now${parts.ids.length ? ` (there is: ${parts.describe()})` : ' (nothing is drawn)'}. Draw it again instead.`);
     // A new drawing in a later request replaces the old one (cards too), unless it's editing what's there.
     if (ink.turn !== turn && !edits.length && parts.ids.length) clearAllInk();
@@ -1195,7 +1195,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'screen_capture',
-        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal. The desktop asks the user to allow or choose what to share before every capture (no hidden or background capture). Shows the captured image in Little Boy, optionally extracts text with local OCR if available (Arabic/English when installed), and returns the image and extracted text so you can analyze what's on screen and answer questions about it. Images and extracted text are not saved by default (temporary capture is deleted after use). If the portal or OCR is unavailable, it explains why clearly.`,
+        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal. The desktop asks the user to allow or choose what to share before every capture (no hidden or background capture). Shows the captured image in JARVIS V2, optionally extracts text with local OCR if available (Arabic/English when installed), and returns the image and extracted text so you can analyze what's on screen and answer questions about it. Images and extracted text are not saved by default (temporary capture is deleted after use). If the portal or OCR is unavailable, it explains why clearly.`,
         parameters: z.object({
           interactive: z.boolean().optional().describe('If true (default), the portal lets the user choose screen, window, or area and consent. If false, requests a non-interactive capture when the desktop allows it.'),
           ocr: z.boolean().optional().describe('If true (default), try to extract on-screen text using local OCR when available.'),
@@ -1215,7 +1215,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
           }
           ui({ kind: 'screen_capture', image: dataUrl, ocr: ocrResult, question: question || null, at: Date.now() });
           const parts = [
-            'Captured screen image is shown in Little Boy and included below for analysis.',
+            'Captured screen image is shown in JARVIS V2 and included below for analysis.',
             question ? `Question: ${question}` : null,
             screenAnswerText({ ocr: ocrResult, ocrEnabled: !!ocr }),
             'Do not save the image or extracted text. Use them only to answer the user about what is shown.',
@@ -1227,7 +1227,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'screen_ocr',
-        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal and extract visible text locally (OCR). Uses local tesseract when installed (Arabic/English when language packs are available). The desktop asks the user to allow or choose what to share before every capture. Shows the capture in Little Boy. Nothing is saved by default. If portal or OCR is unavailable, returns a clear reason.`,
+        description: `Capture the screen or a chosen window/area on ${THIS_COMPUTER} (Linux) through the XDG Desktop Portal and extract visible text locally (OCR). Uses local tesseract when installed (Arabic/English when language packs are available). The desktop asks the user to allow or choose what to share before every capture. Shows the capture in JARVIS V2. Nothing is saved by default. If portal or OCR is unavailable, returns a clear reason.`,
         parameters: z.object({
           interactive: z.boolean().optional().describe('If true (default), let the user choose screen, window, or area.'),
         }),
@@ -1450,7 +1450,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
     ] : []),
     // GG Coder's own web tools (observe): search with a side search or keyless engines, pages as Markdown.
-    // Wrapped to surface browser/web activity in Little Boy. No tokens, no CAPTCHA/login bypass.
+    // Wrapped to surface browser/web activity in JARVIS V2. No tokens, no CAPTCHA/login bypass.
     ...(() => {
       const baseSearch = createWebSearchTool(undefined, async (req) => {
         const side = sideSearchFor(await Promise.resolve().then(sideSearch).catch(() => null));
@@ -1524,7 +1524,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'browser_respan_bridge_status',
-      description: `Check whether a safe local authenticated browser bridge/extension is available for Respan platform reading (observe, read-only). The bridge, if connected by the user, can expose only visible page content (title/url/text/elements) from the user's signed-in browser session on https://platform.respan.ai/ without sending passwords, cookies, or session tokens to Little Boy. This does not connect to or share any page content; it only reports bridge availability/configuration status.`,
+      description: `Check whether a safe local authenticated browser bridge/extension is available for Respan platform reading (observe, read-only). The bridge, if connected by the user, can expose only visible page content (title/url/text/elements) from the user's signed-in browser session on https://platform.respan.ai/ without sending passwords, cookies, or session tokens to JARVIS V2. This does not connect to or share any page content; it only reports bridge availability/configuration status.`,
       parameters: z.object({}),
       permission: { level: 'observe', requiresApproval: false, description: 'Check local authenticated browser bridge status for Respan' },
       execute: async () => {
@@ -1535,11 +1535,11 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'browser_read_respan_authenticated',
-      description: `Read the visible content of a Respan platform page (https://platform.respan.ai/...) from the user's current signed-in browser session via a safe local browser bridge/extension, when available (observe). Requires explicit user approval before sharing page content with Little Boy. Returns only visible page title, URL, text, and displayed elements; never extracts or transmits passwords, cookies, or session tokens, never bypasses login/CAPTCHA, and never performs account changes/submissions/publishing. If no connected bridge is available, it reports that clearly and does not claim success.`,
+      description: `Read the visible content of a Respan platform page (https://platform.respan.ai/...) from the user's current signed-in browser session via a safe local browser bridge/extension, when available (observe). Requires explicit user approval before sharing page content with JARVIS V2. Returns only visible page title, URL, text, and displayed elements; never extracts or transmits passwords, cookies, or session tokens, never bypasses login/CAPTCHA, and never performs account changes/submissions/publishing. If no connected bridge is available, it reports that clearly and does not claim success.`,
       parameters: z.object({
         url: z.string().min(1).describe('A https://platform.respan.ai/ URL to read from the authenticated browser session.'),
       }),
-      permission: { level: 'observe', requiresApproval: true, description: 'Share visible authenticated Respan page content with Little Boy via local bridge (explicit consent required)' },
+      permission: { level: 'observe', requiresApproval: true, description: 'Share visible authenticated Respan page content with JARVIS V2 via local bridge (explicit consent required)' },
       execute: async ({ url }) => {
         const v = checkFetch(String(url));
         if (v.level === 'block') throw new Error(v.reason || 'That URL cannot be read.');
@@ -1782,7 +1782,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'memory_save',
-      description: `Save a lasting memory for ${userName} in Little Boy's local persistent memory (SQLite on this device). Use categories: preferences, projects, conversations, tasks. Never store passwords, API keys, cookies or session tokens. Do not save a memory automatically unless ${userName} asked you to remember something lasting or it is clearly needed for future help; when in doubt, ask first.`,
+      description: `Save a lasting memory for ${userName} in JARVIS V2's local persistent memory (SQLite on this device). Use categories: preferences, projects, conversations, tasks. Never store passwords, API keys, cookies or session tokens. Do not save a memory automatically unless ${userName} asked you to remember something lasting or it is clearly needed for future help; when in doubt, ask first.`,
       parameters: z.object({ category: z.enum(['preferences', 'projects', 'conversations', 'tasks']), content: z.string().min(2).max(8000), title: z.string().max(200).optional() }),
       executionMode: 'sequential',
       permission: { level: 'trusted', requiresApproval: true, description: 'Save a memory entry locally' },
@@ -1794,7 +1794,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'memory_search',
-      description: 'Search Little Boy\'s local persistent memory by text (SQLite local search, no AI models). Returns matching memories across titles and content, optionally filtered by category.',
+      description: 'Search JARVIS V2\'s local persistent memory by text (SQLite local search, no AI models). Returns matching memories across titles and content, optionally filtered by category.',
       parameters: z.object({ query: z.string().min(1).max(200), category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional(), limit: z.number().int().min(1).max(100).optional() }),
       permission: { level: 'observe', requiresApproval: false, description: 'Search local persistent memory' },
       execute: async ({ query, category, limit }) => formatMemories(memorySearch({ query, category, limit })),
@@ -1833,13 +1833,13 @@ A drawing stays until the user clears it or the window changes; your next drawin
     {
       name: 'list_commitments', description: "List the open commitments you're keeping track of.",
       parameters: z.object({}),
-      // Agent core: this only reads the commitments Little Boy already keeps, and never writes anything.
+      // Agent core: this only reads the commitments JARVIS V2 already keeps, and never writes anything.
       permission: { level: 'observe', requiresApproval: false, description: 'Read the open commitments from memory' },
       execute: async () => commitmentsText() || 'Nothing open.',
     },
     {
       name: 'exa_search_status',
-      description: `Check whether Exa (https://exa.ai/) web search/retrieval is configured and available in Little Boy (observe, read-only). Exa is optional: when not configured, Little Boy continues using its existing web search providers. Never exposes API keys.`,
+      description: `Check whether Exa (https://exa.ai/) web search/retrieval is configured and available in JARVIS V2 (observe, read-only). Exa is optional: when not configured, JARVIS V2 continues using its existing web search providers. Never exposes API keys.`,
       parameters: z.object({}),
       permission: { level: 'observe', requiresApproval: false, description: 'Check Exa provider configuration/status' },
       execute: async () => {

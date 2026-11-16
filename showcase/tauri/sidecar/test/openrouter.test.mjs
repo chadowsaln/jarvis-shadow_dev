@@ -106,6 +106,13 @@ await withFetch(okCatalog, async (seen) => {
 await withFetch(() => ({ status: 401, ok: false }), async () => {
   assert.deepEqual(await validateOpenRouterKey('bad'), { ok: false, reason: 'key', status: 401, models: [], skipped: 0 });
 });
+await withFetch(() => ({ status: 429, ok: false }), async () => {
+  const r = await validateOpenRouterKey('rate-limited');
+  assert.deepEqual(r, { ok: false, reason: 'rate_limited', status: 429, models: [], skipped: 0 });
+});
+await withFetch(() => ({ status: 429, ok: false }), async () => {
+  await assert.rejects(() => discoverOpenRouterModels('sk-or-v1-rl'), /openrouter_rate_limited/);
+});
 await withFetch(() => ({ status: 402, ok: false }), async () => {
   const r = await validateOpenRouterKey('no-credit');
   assert.equal(r.ok, false); assert.equal(r.reason, 'http'); assert.equal(r.status, 402);

@@ -41,7 +41,7 @@ pub(crate) fn watch_screenshots(app: AppHandle) {
     });
 }
 
-/// Interactive screenshots (Cmd+Shift+4, Cmd+Shift+5, Little Boy's own area snap) put `screencapture` windows on
+/// Interactive screenshots (Cmd+Shift+4, Cmd+Shift+5, JARVIS V2's own area snap) put `screencapture` windows on
 /// screen: a full-screen input shield, plus the highlight in window mode. Non-interactive captures show none.
 fn screenshot_on_screen() -> bool {
     autoreleasepool(|_| unsafe {

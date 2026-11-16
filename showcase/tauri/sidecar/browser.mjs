@@ -98,7 +98,7 @@ export function detectPageLang(text) {
 
 // --- Authenticated Respan reading via optional local browser bridge (Batch 9.1) ---
 // A user-installed browser extension/companion may expose a SAFE local interface that returns only visible page
-// content (title/url/text/elements) from the user's current authenticated browser session. Little Boy never receives
+// content (title/url/text/elements) from the user's current authenticated browser session. JARVIS V2 never receives
 // or extracts passwords, cookies, or session tokens; the bridge must not send them. This module only talks to an
 // explicitly configured local bridge and only for Respan platform URLs. Consent is required before sharing page
 // content (enforced at tool/permission level via approval).
@@ -216,7 +216,7 @@ export async function readRespanAuthenticatedPage(url, { configUrl = null, env =
   }
   const cfg = getRespanBridgeConfig({ configUrl, env });
   if (!cfg.ok) return { ok: false, url: String(url || ''), error: cfg.reason, bridge: { available: false } };
-  const consentNote = 'User consent required and assumed granted for this approved read: only visible page content (title/url/text/elements) may be shared with Little Boy; no passwords, cookies, or session tokens are extracted or sent.';
+  const consentNote = 'User consent required and assumed granted for this approved read: only visible page content (title/url/text/elements) may be shared with JARVIS V2; no passwords, cookies, or session tokens are extracted or sent.';
   try {
     const r = await fetchBridgeJson(cfg.url, '/read', { url: String(url), platform: 'respan', scope: 'visible-content' }, { fetchFn, timeoutMs: 8000 });
     if (!r.ok || !r.data || r.data.ok === false) {

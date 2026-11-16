@@ -25,7 +25,15 @@
     hide: () => invoke('buddy', { msg: { on: false } }).catch(() => {}),
   };
   window.__roamieBuddy = (m) => { Roamie.wake?.(); Roamie.buddy.onEvent?.(m); };
-  // handsBusy: Little Boy is acting in another app (it may take the real cursor), so clicks always go through.
+  // What the entity is showing, from the app's own events. A consumer only: orb-state.js decides the state, this holds
+  // it, and the look reads it. Nothing here can make the app ready, start a turn or change a tool.
+  {
+    const reduce = Roamie.orbState?.reduce;
+    let cur = null;
+    const fire = (ev) => { if (reduce) cur = reduce(cur, ev, performance.now()); };
+    Roamie.orb = { name: () => cur?.name ?? 'idle', since: () => cur?.since ?? 0, event: fire };
+  }
+  // handsBusy: JARVIS V2 is acting in another app (it may take the real cursor), so clicks always go through.
   let hot = null, cursor = null, handsBusy = false;
   // Linux ("x11" or "wayland", set by the shell): clicks are let through by region instead (below).
   const LINUX = !!window.ROAMIE_LINUX;
@@ -194,7 +202,7 @@
     autoListen = me;
   }
 
-  // Wake word: once a reply has been typed out and said, the sidecar may listen for "Hey Little Boy" again.
+  // Wake word: once a reply has been typed out and said, the sidecar may listen for "Hey JARVIS V2" again.
   let saidWatch = null;
   function reportSaid(rid) {
     clearInterval(saidWatch);
@@ -250,6 +258,7 @@
     if (!a) return;
     switch (e.type) {
       case 'start':
+        Roamie.orb?.event({ type: 'turn_start' });
         dropAutoListen();
         // A new request: no tool of an earlier one is still running, whatever was missed (a cut-off call). Its tag
         // ends instead of staying up, with this request's tags queued behind it.
@@ -300,6 +309,7 @@
         break;
       }
       case 'tool':
+        Roamie.orb?.event({ type: 'tool_start' });
         if (listen?.open) break;
         // Tools with nothing to show (listing commitments) don't interrupt the bubble.
         if (!e.anim) break;
@@ -313,6 +323,7 @@
         jobs.push({ id: e.id, anim: e.anim }); playTools();
         break;
       case 'tool_end':
+        Roamie.orb?.event({ type: 'tool_end' });
         settle(e.id, e.isError);
         break;
       // A drawing's next segment (beats with their places already on screen), or clearing what's drawn.
@@ -351,6 +362,7 @@
         a.act(e.action);
         break;
       case 'done':
+        Roamie.orb?.event({ type: 'speech_end' });
         responding = false;
         if (agentish) { agentish = false; Roamie.agentHome?.hatchOff(); }
         if (research) panel()?.end(fromWeb ? 'From the web' : 'Answer');
@@ -360,6 +372,7 @@
         reportSaid(e.speech);
         break;
       case 'error':
+        Roamie.orb?.event({ type: 'failure', reason: e.message });
         dropAutoListen();
         responding = false;
         if (agentish) { agentish = false; Roamie.agentHome?.hatchOff(); }
@@ -438,7 +451,15 @@
     if (m.kind === 'speech') { Roamie.voiceOut?.handle(m); return; } // plays on, even while it changes screens
     if (held) { held.q.push(m); return; }
     if (m.kind === 'sound') { if (Roamie.sfx) Roamie.sfx.enabled = m.on; return; }
+    // The AI provider's own state (the shell keeps its lifecycle separate): offline only when there is no model at all.
+    if (m.kind === 'provider') { Roamie.orb?.event({ type: 'provider', status: m.status, offline: !!m.offline }); return; }
     if (m.kind === 'size') { for (const t of Roamie.tiles ?? []) t.creature.setForm?.(m.size); return; }
+    // The hybrid entity's theme, saved by the sidecar and applied here (theme.js validates it): live, no restart.
+    if (m.kind === 'theme') {
+      if (m.theme) Roamie.theme?.apply(m.theme);
+      else Roamie.theme?.reset();
+      return;
+    }
     if (m.kind === 'look') {
       for (const t of Roamie.tiles ?? []) t.creature.setLook?.(m.look);
       field.setAttribute('aria-label', `Message for ${NAMES[m.look] ?? NAMES.classic}`);

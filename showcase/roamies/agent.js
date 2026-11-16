@@ -1146,6 +1146,8 @@ const ph = bb.input && !bb.text;
         let p = tp ?? bp;
         if (tp && bp && b?.kind === 'speech' && mouthT > 0) p = { ...tp, mouth: bp.mouth };
         if (tool && tool.status && tool.out > 0.35) p = p && { ...p, arms: tool.out > 0.6 ? 0 : p.arms };
+        // What a look needs to know: a tool call is running (the hybrid orb shows it as tool_execution).
+        if (p) p = { ...p, tooling: !!tool?.status };
         lastPose = p;
         return p;
       },

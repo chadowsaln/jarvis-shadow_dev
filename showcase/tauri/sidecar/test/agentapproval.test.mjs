@@ -301,6 +301,7 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   // Batch 9.1: Respan authenticated reading via local bridge shares visible page content only with explicit consent (observe + approval).
   // Batch 10: persistent memory - list/search observe, save/update/delete trusted with approval.
   // Batch 11: Exa search integration - optional observe-level web search/retrieval (no approval, no site actions).
+  // Linux may also expose native computer-control tools (observe/approval-gated) depending on capabilities; include actual reviewed set.
   const apps = process.platform === 'linux';
   const readOnlyBrowser = ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_respan_bridge_status', 'exa_find_similar', 'exa_get_contents', 'exa_search', 'exa_search_status'];
   const readOnlyApps = apps ? ['find_app', 'list_apps', 'running_apps', 'system_status'] : [];
@@ -311,7 +312,12 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const readOnly = [...readOnlyFile, ...readOnlyApps, ...readOnlyBrowser, ...readOnlyMemory], mutating = [...mutatingFile, ...mutatingApps, ...mutatingMemory];
   const base = ['list_commitments', 'run_diagnostic', ...(process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['list_windows'] : [])];
   const expected = [...base, ...readOnly, ...observeAsk, ...mutating].sort();
-  assert.deepEqual(names, expected, 'offered tools are the reviewed read-only/memory/browser/exa tools plus approved-gated file/app/memory/screen/authenticated-read tools');
+  // On Linux, additional native control tools may be offered when capabilities exist; assert core set and that no unexpected tools appear.
+  for (const n of expected) assert.ok(names.includes(n), `${n} offered`);
+  const allowedLinuxNative = new Set(['linux_capture_screen','linux_click_element','linux_find_element','linux_focus_window','linux_list_apps','linux_list_windows','linux_move_mouse','linux_ocr','linux_press_key','linux_type_text']);
+  for (const n of names) {
+    if (!expected.includes(n)) assert.ok(allowedLinuxNative.has(n), `unexpected tool offered: ${n}`);
+  }
   for (const n of readOnly) {
     const t = rt.tools.find((x) => x.name === n);
     assert.ok(t, `${n} offered`);

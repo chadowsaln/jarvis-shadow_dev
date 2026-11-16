@@ -50,9 +50,13 @@
       // Look: 'classic' (the goo blob, and the arrow at cursor size), 'jarvis' (roamies/jarvis.js: a globe of
       // points with a lit heart, and a HUD reticle at cursor size) or a character from roamies/people.js
       // ('anime', 'sarah', 'adrian', 'rita'). Moves, sizes and everything else are shared.
-      const drawn = (l) => (l === 'jarvis' ? Roamie.jarvis : Roamie.people?.[l]);
+      const drawn = (l) => (l === 'jarvis' ? Roamie.jarvis : l === 'hybrid' ? Roamie.hybrid : Roamie.people?.[l]);
       const pickLook = (l) => (drawn(l) ? l : 'classic');
+      // A look that keeps state (the hybrid's own renderer and orb position) is made once per creature: two of them
+      // on one page must not share a renderer, or each would be drawn where the other last was.
+      const lookPart = (l) => { const d = drawn(l); return d?.create ? d.create() : d; };
       let look = pickLook(typeof location !== 'undefined' ? new URLSearchParams(location.search).get('look') : null);
+      let part = lookPart(look);
       const jst = { spin: 0, dt: 0.016 };
       // Each hand springs to its pose in the body's own space (o: its offset from the body), so it moves with the body
       // however fast that goes, and only eases between poses. x, y: where that puts it now.
@@ -479,7 +483,7 @@
       // A drawn look: JARVIS's globe (or reticle at cursor size), or a character, with what it's doing passed in
       // for its motion and face.
       const drawLook = (bx, by, env) => {
-        const J = drawn(look);
+        const J = part;
         if (!J) return;
         const A = act?.name;
         Object.assign(jst, {
@@ -491,12 +495,12 @@
         });
         // The globe's points overlap (the brightest wins); a character is drawn in layers (the last one wins).
         if (look !== 'jarvis') {
-          const k = { put, L, th };
+          const k = { put, L, th, P };
           if (form === 'cursor') J.cursor(k, Math.round(bx / P), Math.round(by / P), Math.round(bx / P) - AX, Math.round(by / P) - AY, jst);
           else J.body(k, bx / P, by / P, R / P, jst);
           return;
         }
-        const k = { put: jput, L, th };
+        const k = { put: jput, L, th, P };
         if (form === 'cursor') J.cursor(k, Math.round(bx / P), Math.round(by / P), Math.round(bx / P) - AX, Math.round(by / P) - AY, jst);
         else {
           // A faint projector glow on the floor under the hologram.
@@ -589,7 +593,14 @@
         ghost: () => !!plug?.ghost?.(),
         morph,
         get look() { return look; },
-        setLook(l) { look = pickLook(l); jst.spin = 0; jst.tail = null; },
+        // The look's own instance (the hybrid's renderer lives there): diagnostics and tests only.
+        get part() { return part; },
+        setLook(l) {
+          const next = pickLook(l);
+          // A look with a GPU renderer gives it back when it's replaced (a context per look would pile up).
+          if (next !== look) { part?.dispose?.(); part = lookPart(next); }
+          look = next; jst.spin = 0; jst.tail = null;
+        },
         resize(env) {
           lastEnv = env;
           const S = Roamie.unit(env);
@@ -854,6 +865,15 @@
             rect = [Math.max(0, Math.floor((dx0 - a - tox) / a) * a + tox), Math.max(0, Math.floor((dy0 - a - toy) / a) * a + toy),
               Math.min(gw, Math.ceil((dx1 + 1 + a - tox) / a) * a + tox), Math.min(gh, Math.ceil((dy1 + 1 + a - toy) / a) * a + toy)];
           }
+          // The hybrid look's 3D render reaches further than the lit cells, and it can light none at all (its picture is
+          // the 3D one): the patch has to hold it either way, or there'd be no rectangle to draw it into.
+          const patch = clear ? part?.extent?.(P) : null;
+          if (patch) {
+            rect = rect
+              ? [Math.max(0, Math.min(rect[0], Math.floor(patch[0] / P))), Math.max(0, Math.min(rect[1], Math.floor(patch[1] / P))),
+                Math.min(gw, Math.max(rect[2], Math.ceil(patch[2] / P))), Math.min(gh, Math.max(rect[3], Math.ceil(patch[3] / P)))]
+              : [Math.max(0, Math.floor(patch[0] / P)), Math.max(0, Math.floor(patch[1] / P)), Math.min(gw, Math.ceil(patch[2] / P)), Math.min(gh, Math.ceil(patch[3] / P))];
+          }
           // What the plugin draws off the grid (glass bubbles, tags, cards) widens the patch to cover it, glow and all.
           const ext = clear && rect ? plug?.extent?.() : null;
           if (ext) {
@@ -866,7 +886,8 @@
           // A fingerprint of the picture: the lit cells, where the patch sits and the glide offset. NaN (never equal)
           // whenever something is also drawn outside the grid or the CRT effect is playing.
           let sig = NaN;
-          if (clear && pd && !performing && !crtXform() && !mo && (!plug || plug.quiet?.())) {
+          // A look that animates itself (the hybrid's 3D render) changes every frame, so its patch is never reused.
+          if (clear && pd && !performing && !crtXform() && !mo && !part?.animated && (!plug || plug.quiet?.())) {
             let h = 2166136261 ^ (rect[0] * 73856093) ^ (rect[1] * 19349663) ^ (rect[2] * 83492791) ^ rect[3];
             for (let y = pd[1] * K; y < pd[3] * K; y++) for (let i = y * IW + pd[0] * K, e = y * IW + pd[2] * K; i < e; i++) h = Math.imul(h ^ u32[i], 16777619);
             const glide = !!m.drive && pres.state === 'shown';
@@ -940,7 +961,12 @@
           // Text and anything else drawn over the grid sits where the grid had it (snapped), then slides with it.
           const sn = glideSnap();
           if (sn) shiftAll(sn.dx, sn.dy);
-          try { plug?.over?.(ctx, env); } finally { if (sn) shiftAll(-sn.dx, -sn.dy); }
+          try {
+            // The hybrid look's 3D render goes over the grid, under the agent's own bubbles and cards.
+            const H = part;
+            if (H?.over && form !== 'cursor') H.over(ctx, env, { ...jst, level: Math.max(jst.heard ?? 0, jst.voice ?? 0) });
+            plug?.over?.(ctx, env);
+          } finally { if (sn) shiftAll(-sn.dx, -sn.dy); }
           ctx.restore();
           if (o.grid && !clear) {
             ctx.fillStyle = o.grid;

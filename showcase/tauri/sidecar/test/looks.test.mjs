@@ -7,11 +7,13 @@ import { DEFAULT_VOICE } from '../fish.mjs';
 const src = (p) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8');
 const side = src('../sidekick.mjs'), guide = src('../../../onboarding/onboarding.js');
 const looks = [...side.slice(side.indexOf('const LOOKS = ['), side.indexOf('];', side.indexOf('const LOOKS = ['))).matchAll(/\['(\w+)', '([^']+)', (DEFAULT_VOICE|'(\w+)')\]/g)];
-assert.deepEqual(looks.map((m) => m[1]), ['classic', 'jarvis', 'anime', 'sarah', 'adrian', 'rita']);
+assert.deepEqual(looks.map((m) => m[1]), ['classic', 'jarvis', 'hybrid', 'anime', 'sarah', 'adrian', 'rita']);
 const voices = Object.fromEntries(looks.map((m) => [m[1], m[4] ?? null]));
 assert.equal(voices.classic, null, 'Roamie uses DEFAULT_VOICE');
 assert.equal(DEFAULT_VOICE, '2680da81de8348a68e1f4dbaa79272f1');
 assert.equal(voices.jarvis, 'e13fa398a7f445a685316a3de6089ce7');
+// The hybrid is JARVIS's machine voice: the same voice, a different body.
+assert.equal(voices.hybrid, voices.jarvis);
 // Regression: Roamie spoke with JARVIS's voice (the default was JARVIS's ID).
 assert.equal(new Set([DEFAULT_VOICE, ...Object.values(voices).filter(Boolean)]).size, 6, 'every look has its own voice');
 assert.ok(!/config\.fishVoice/.test(side), 'a saved fishVoice (the old JARVIS default) is never used');

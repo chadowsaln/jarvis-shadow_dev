@@ -355,8 +355,19 @@
 
   // The header's Roamie: your look, reacting to what's going on. A short line beside it when something changes.
   // The same size and detail as the look tiles (fewer dots than that and the faces turn to noise).
-  const avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
-  const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
+  // The sidekick's state arrives after this file runs, so the Roamie is made on the first one (reading it before
+  // that threw, and took the whole panel with it). A look's palette is fixed when it's made, so a new custom colour
+  // makes a new one.
+  let avatar = null, avatarColor;
+  function makeAvatar() {
+    const color = state?.customColor ?? '';
+    if (avatar && color === avatarColor) return avatar;
+    if (avatar) avatar.kit?.vanish?.(null, true);
+    avatarColor = color;
+    avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55, pal: color ? paletteFromColor(color) : LED });
+    return avatar;
+  }
+  const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', hybrid: 'Reactor core online.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
   let quipTimer = 0, seen = { look: null, update: null, opened: 0 };
   function quip(text, secs = 2.6) {
     const q = $('saying'), n = $('by');
@@ -365,7 +376,7 @@
     quipTimer = setTimeout(() => { q.classList.remove('on'); n.classList.remove('quiet'); }, secs * 1000);
   }
   function react() {
-    if (!avatar) return;
+    if (!makeAvatar()) return;
     avatar.pose = state.busy ? 'think' : state.status.state === 'off' ? 'concerned' : null;
     if (seen.look && state.look !== seen.look) { avatar.setLook(state.look); avatar.act('wave'); quip(QUIPS[state.look] ?? 'Hi!'); }
     else avatar.setLook(state.look);
@@ -651,7 +662,90 @@
         )
       ),
       group('Size', 'How big I am on your screen.', null, picks('Size', state.sizes, state.size, (x) => act(`size:${x}`), 'size')),
+      themeGroup(),
     ];
+  }
+
+  // ---- the hybrid entity's theme ----
+  // roamies/theme.js owns the values, the presets and the validation; this only edits them. A change is previewed
+  // here at once (the tiles above use the same theme) and saved when the control is let go, so dragging a slider
+  // never fights a re-render. The sidecar keeps the JSON and hands it to every page, so it survives a restart.
+  const themeKit = () => window.Roamie?.theme ?? null;
+  const themeOf = () => themeKit()?.current ?? state?.theme ?? null;
+  const themePreview = (patch) => { themeKit()?.apply(patch); };
+  const themeCommit = (patch) => {
+    const T = themeKit();
+    if (!T) return;
+    T.apply(patch);
+    act(`theme:${JSON.stringify(T.current)}`);
+  };
+  function themeGroup() {
+    const T = themeKit(), t = themeOf();
+    if (!T || !t) return null;
+    const color = (key, label) => el('label', { className: 'theme-col' },
+      el('span', { textContent: label }),
+      el('input', { type: 'color', value: t[key], 'aria-label': `${label} color`, 'data-k': `theme-${key}`,
+        on: { input: (e) => themePreview({ [key]: e.target.value }), change: (e) => themeCommit({ [key]: e.target.value }) } }));
+    const range = (key, label, min, max, step, fmt) => {
+      const out = el('span', { className: 'row-btns', 'aria-hidden': 'true', textContent: fmt(t[key]) });
+      return el('div', { className: 'setting' },
+        el('span', { id: `lbl-theme-${key}` }, label),
+        el('span', { className: 'row-btns' }, out,
+          el('input', { type: 'range', min, max, step, value: t[key], 'aria-labelledby': `lbl-theme-${key}`, 'data-k': `theme-${key}`,
+            on: {
+              input: (e) => { const v = Number(e.target.value); out.textContent = fmt(v); themePreview({ [key]: v }); },
+              change: (e) => themeCommit({ [key]: Number(e.target.value) }),
+            } })));
+    };
+    const file = el('input', { type: 'file', accept: 'application/json,.json', hidden: true, 'data-k': 'theme-import-file',
+      on: { change: async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        const r = T.parse(await f.text());
+        if (!r.theme) return note(`That file is not a theme: ${r.problems.join(', ')}.`, true);
+        themeCommit(r.theme);
+        note('Theme imported.');
+      } } });
+    const pct = (n) => `${Math.round(n * 100)}%`;
+    return group('Hybrid entity', 'The 3D orb\u2019s colors, glow, particles and motion. Shown by the Hybrid look above.', null,
+      el('div', { className: 'setting' },
+        el('span', {}, 'Preset', el('small', { textContent: 'A starting point; editing a color keeps it only while it still matches.' }))),
+      picks('Preset', T.PRESETS.map(([id, name]) => [id, name]), t.preset, (id) => themeCommit(T.fromPreset(id)), 'themepreset'),
+      el('div', { className: 'setting' },
+        el('span', {}, 'Colors', el('small', { textContent: 'HEX, from the color picker.' }))),
+      el('div', { className: 'theme-cols' }, color('core', 'Core'), color('reactor', 'Reactor'), color('neural', 'Neural'), color('glow', 'Glow')),
+      range('glowIntensity', 'Glow', 0, 2, 0.05, (n) => pct(n / 2)),
+      range('particleOpacity', 'Particle brightness', 0, 1, 0.05, pct),
+      range('transparency', 'Transparency', 0, 0.9, 0.05, pct),
+      el('div', { className: 'setting' },
+        el('span', { id: 'lbl-theme-particles' }, 'Particles', el('small', { textContent: 'The neural field\u2019s points. Fewer is cheaper on an integrated GPU.' })),
+        el('span', { className: 'row-btns' },
+          el('span', { 'aria-hidden': 'true', textContent: String(t.particles) }),
+          el('input', { type: 'range', min: 8, max: T.MAX_PARTICLES, step: 8, value: t.particles, 'aria-labelledby': 'lbl-theme-particles', 'data-k': 'theme-particles',
+            on: {
+              input: (e) => { const v = Number(e.target.value); themePreview({ particles: v }); },
+              change: (e) => themeCommit({ particles: Number(e.target.value) }),
+            } }))),
+      el('div', { className: 'setting' },
+        el('span', {}, 'Rendering quality', el('small', { textContent: 'Auto steps down when frames run long.' })),
+        picks('Rendering quality', [['auto', 'Auto'], ['high', 'High'], ['low', 'Low']], t.quality, (q) => themeCommit({ quality: q }), 'theme-quality')),
+      toggle('Animate', 'Off: the orb holds still (the LED fallback shows).', t.animate, () => themeCommit({ animate: !t.animate }), 'theme-animate'),
+      toggle('Audio-reactive', 'The mic and the voice move the plasma.', t.audioReactive, () => themeCommit({ audioReactive: !t.audioReactive }), 'theme-audior'),
+      el('div', { className: 'setting' },
+        el('span', {}, 'Theme file', el('small', { textContent: 'Copy a theme to a file, or load one from a file.' })),
+        el('span', { className: 'row-btns' },
+          btn('Export', () => {
+            const url = URL.createObjectURL(new Blob([T.serialize(t)], { type: 'application/json' }));
+            const a = el('a', { href: url, download: 'jarvis-theme.json' });
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+          }, { k: 'theme-export' }),
+          el('label', { className: 'px btn ghost', 'data-k': 'theme-import' }, 'Import', file))),
+      el('div', { className: 'setting' },
+        el('span', {}, 'Defaults', el('small', { textContent: 'JARVIS Blue, glow and particles back where they started.' })),
+        btn('Reset to defaults', () => themeCommit(T.fromPreset('jarvis-blue')), { k: 'theme-reset' })),
+    );
   }
   // The looks as live tiles: each one's character, playing, at the size picked below. Kept between renders (a state update mustn't restart
   // them); hovering or focusing one makes it wave; picking it makes it cheer.
@@ -846,8 +940,30 @@
     }
     return ken;
   }
+  // Startup: the steps the shell wrote down while it was coming up (main.rs's ~/.gg/lifecycle.log), each with its
+  // timing. This is the answer to "it sat on Starting": the step that came late, or never, is right there.
+  const span = (ms) => (ms == null ? '' : ms < 950 ? `${Math.max(0, Math.round(ms))} ms` : `${(ms / 1000).toFixed(1)} s`);
+  function startupGroup() {
+    const s = state.startup;
+    if (!s) return null;
+    const rows = Array.isArray(s.stages) ? s.stages : [];
+    const total = s.readyMs != null ? span(s.readyMs) : rows.length ? span(rows[rows.length - 1].sinceStart) : null;
+    // The total is the badge; the line under the title says whose launch this was, and anything that went wrong.
+    const when = !rows.length ? null : s.current ? 'This launch' : s.stale ? 'From an earlier launch' : 'The last launch';
+    const desc = !rows.length ? null
+      : [when, s.failed ? 'something failed' : s.provider === 'unavailable' ? `AI unavailable${s.providerDetail ? ` (${s.providerDetail.replace(/_/g, ' ')})` : ''}` : null].filter(Boolean).join(' · ');
+    return group('Startup', desc, total && rows.length ? total : null,
+      rows.length
+        ? el('ul', { className: 'list', 'aria-label': 'Startup steps' }, rows.map((r) => el('li', { className: `item${r.bad ? ' bad' : ' did'}` },
+            el('span', { className: 'mark', 'aria-hidden': 'true' }),
+            el('span', { className: 'text' }, r.label, r.detail ? el('small', { textContent: r.detail }) : null),
+            el('span', { className: 'meta', textContent: `+${span(r.sinceStart)}` }))))
+        : el('p', { className: 'empty', textContent: s.error ? `Couldn't read the startup log: ${s.error}` : 'No startup log yet: one is written every time JARVIS V2 starts.' }));
+  }
   function aboutPage() {
     return [
+      // Startup first on About: it is what someone opens this page to check when the app looked stuck.
+      startupGroup(),
       group('Made by', null, null, maker(),
         KEN.map(([label, hint, url, aria]) => el('div', { className: 'setting' },
           el('span', {}, label, el('small', { textContent: hint })),
@@ -1098,6 +1214,7 @@
   window.__panelOpen = (fromBottom = false) => {
     body.classList.remove('shut', 'shutting', 'opening');
     // The Roamie switches on with the panel, and waves if it's been a while.
+    makeAvatar();
     if (avatar) { avatar.kit.vanish(null, true); setTimeout(() => { avatar.appear(); if (Date.now() - seen.opened > 10 * 60e3) setTimeout(() => avatar.act('wave'), 500); seen.opened = Date.now(); }, REDUCED.matches ? 0 : 120); }
     body.classList.toggle('from-bottom', !!fromBottom);
     if (REDUCED.matches) return render(null, false);
@@ -1127,6 +1244,8 @@
   window.__panel = (m) => {
     if (m.kind === 'state') {
       const first = !state; state = m.state;
+      // The saved theme, applied on the panel's own tiles (theme.js validates it; a bad one leaves the last good one).
+      if (m.state.theme) window.Roamie?.theme?.apply(m.state.theme, { silent: true });
       if (ui.arm && !document.querySelector(`[data-k="${CSS.escape(ui.arm)}"]`)) ui.arm = null;
       render(null, first);
       if (m.state.tab) show(m.state.tab, true); // opened for a reason (asked with nothing signed in: the Model page)
@@ -1188,7 +1307,7 @@
       facts: [{ id: 'f1', text: 'Prefers short answers in the morning' }, { id: 'f2', text: 'Working on the Roamies 1.0 launch, due end of month' }, { id: 'f3', text: 'Has a cat called Miso' }],
       memories: [{ id: 'm1', category: 'preferences', title: 'Style', content: 'Prefers short answers', updatedAt: at, createdAt: at }, { id: 'm2', category: 'projects', title: 'Roamies', content: 'Working on 1.0 launch', updatedAt: at, createdAt: at }],
       commitments: [{ id: 'c1', text: 'Send the launch email', when: 'Fri 7 Nov, 10:00', overdue: false }, { id: 'c2', text: 'Book the dentist', when: 'Mon 3 Nov, 09:00', overdue: true }],
-      name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']],
+      name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['hybrid', 'Hybrid'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']],
       size: 'default', sizes: [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']],
       replies: 'voice', fishKey: true, fishModel: 'drama-3', fishFree: false,
       // ?tts=gemini: Gemini as the voice, its key saved.
@@ -1210,6 +1329,18 @@
       sound: true, actions: false, login: { on: true },
       update: { available: new URLSearchParams(location.search).has('update') && new URLSearchParams(location.search).get('update') !== 'failed' ? '0.9.1' : null, installing: false, checking: false, result: null },
       intro: false,
+      // ?slow: a launch where the tray menu came late; ?stale: last launch's log, not this one's.
+      startup: {
+        current: !new URLSearchParams(location.search).has('stale'), readyMs: new URLSearchParams(location.search).has('slow') ? 41200 : 2140,
+        provider: 'ready', providerDetail: null, failed: false, stale: false, error: null, path: '~/.gg/lifecycle.log',
+        stages: [
+          { label: 'Starting', sinceStart: 0, detail: null, bad: false },
+          { label: 'Sidecar ready', sinceStart: 1740, detail: null, bad: false },
+          { label: 'Interface ready', sinceStart: 1990, detail: null, bad: false },
+          { label: 'Tray menu ready', sinceStart: new URLSearchParams(location.search).has('slow') ? 41010 : 2120, detail: null, bad: false },
+          { label: 'Desktop ready', sinceStart: new URLSearchParams(location.search).has('slow') ? 41200 : 2140, detail: null, bad: false },
+        ],
+      },
     };
     const q = new URLSearchParams(location.search);
     // The talk key's words and whether its button is locked come from the sidekick's rules (talkkey.mjs), not a copy here.

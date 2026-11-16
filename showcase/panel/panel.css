@@ -359,3 +359,9 @@ html, body { height: 100%; background: transparent; }
   .approve-scrim, .approve { animation: none; }
   .navi, .arm > span, .tab, .ibtn, .ibtn > span { transition: none; }
 }
+/* The hybrid entity's theme (Appearance → Hybrid entity): color swatches and sliders keep the setting's two columns. */
+.theme-col { display: inline-grid; gap: 4px; justify-items: center; }
+.theme-col > span { font-size: var(--t-small); color: var(--ink-3); }
+.theme-col input[type="color"] { width: 44px; height: 26px; padding: 0; border: 0; background: none; cursor: pointer; }
+.setting input[type="range"] { width: 116px; accent-color: var(--ink); }
+.theme-cols { display: flex; flex-wrap: wrap; gap: 14px; }

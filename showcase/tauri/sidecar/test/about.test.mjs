@@ -7,15 +7,15 @@ const mac = aboutLittleBoy({ ...base, mac: true, snap: true, pointer: true, voic
 const win = aboutLittleBoy(base);
 const linux = aboutLittleBoy({ ...base, linux: true, voice: true });
 assert.match(mac, /lives in the menu bar at the top of the screen/);
-assert.match(mac, /Show JARVIS, Ask JARVIS…, Ask About an Area…, Stop, Quit Little Boy/);
+assert.match(mac, /Show JARVIS, Ask JARVIS…, Ask About an Area…, Stop, Quit JARVIS V2/);
 assert.match(mac, /Appearance \(pick your look and its size: Roamie, JARVIS, Anime Girl, Sarah, Adrian or Rita X/);
-assert.match(mac, /wake word: say "Hey Little Boy"/);
+assert.match(mac, /wake word: say "Hey JARVIS"/);
 assert.match(mac, /Voice \(pick the voice provider and model/);
 assert.match(win, /bottom right of the taskbar/);
 assert.ok(!/Ask About an Area|Wake word|Voice Control|Cursor, a little arrow/.test(win), 'features this copy lacks are left out');
 assert.match(linux, /AppIndicator extension/);
-  assert.match(linux, /bind keys in your desktop settings for littleboy/);
-  assert.ok(!/Wake word/.test(linux), 'the wake word is Mac only');
+assert.match(linux, /bind keys in your desktop settings for littleboy/);
+assert.ok(!/Wake word/.test(linux), 'the wake word is Mac only');
 for (const t of [mac, win, linux]) {
   assert.match(t, /Save Diagnostics/);
   assert.match(t, /github\.com\/KenKaiii\/LittleBoy/);

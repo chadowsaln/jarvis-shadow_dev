@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{thread, time::Duration};
 
 use serde_json::{json, Value};
@@ -48,6 +48,8 @@ const PANEL_SHUT_MS: u64 = 150;
 /// The panel sits above the icon (a taskbar at the bottom), so it opens from its bottom edge.
 static PANEL_FROM_BOTTOM: AtomicBool = AtomicBool::new(false);
 
+const TRAY_ID: &str = "jarvis-v2";
+
 fn panel_open_js() -> String {
     format!("window.__panelOpen&&__panelOpen({})", PANEL_FROM_BOTTOM.load(Ordering::SeqCst))
 }
@@ -65,6 +67,70 @@ struct VoiceModel(Mutex<Option<String>>);
 struct MicPick(Mutex<Option<String>>);
 /// macOS: the "drag me into the list" panel the hands helper shows under System Settings.
 struct PermGuide(Mutex<Option<Child>>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopPhase {
+    Starting,
+    SidecarReady,
+    DesktopReady,
+    Error,
+}
+impl DesktopPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::SidecarReady => "sidecar_ready",
+            Self::DesktopReady => "desktop_ready",
+            Self::Error => "error",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderPhase {
+    Unknown,
+    Ready,
+    Unavailable,
+}
+impl ProviderPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Ready => "ready",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+#[derive(Clone, Debug)]
+struct LifecycleSnapshot {
+    desktop: DesktopPhase,
+    provider: ProviderPhase,
+    ui_ready: bool,
+    menu_ready: bool,
+    detail: Option<String>,
+}
+impl LifecycleSnapshot {
+    fn to_json(&self) -> Value {
+        json!({
+            "desktop": self.desktop.as_str(),
+            "provider": self.provider.as_str(),
+            "ui_ready": self.ui_ready,
+            "menu_ready": self.menu_ready,
+            "detail": self.detail,
+        })
+    }
+}
+struct Lifecycle(Mutex<LifecycleSnapshot>);
+impl Lifecycle {
+    fn new() -> Self {
+        Self(Mutex::new(LifecycleSnapshot {
+            desktop: DesktopPhase::Starting,
+            provider: ProviderPhase::Unknown,
+            ui_ready: false,
+            menu_ready: false,
+            detail: None,
+        }))
+    }
+}
 
 /// Windows: helpers are console programs, so without this each one opens a console window.
 fn hide_console(cmd: &mut Command) -> &mut Command {
@@ -85,7 +151,7 @@ static TYPING: AtomicBool = AtomicBool::new(false);
 static INK_WAIT: AtomicBool = AtomicBool::new(false);
 /// The type-to-ask pair as tap.rs bits (0: none, as on Wayland): a quick tap of it opens the text field by the cursor.
 static WRITE_CHORD: AtomicU8 = AtomicU8::new(0);
-/// The cursor is over something clickable in an overlay (a card, its buttons): a click there is on Little Boy, not the app below.
+/// The cursor is over something clickable in an overlay (a card, its buttons): a click there is on JARVIS V2, not the app below.
 pub(crate) static OVERLAY_HOT: AtomicBool = AtomicBool::new(false);
 
 fn is_overlay(label: &str) -> bool {
@@ -251,7 +317,7 @@ fn other_input_down() -> bool {
     false
 }
 
-/// Windows: leaves an overlay out of every capture, so Little Boy never shows up in its own screenshots, area snaps
+/// Windows: leaves an overlay out of every capture, so JARVIS V2 never shows up in its own screenshots, area snaps
 /// or the pictures it reads text from.
 #[cfg(target_os = "windows")]
 fn exclude_from_capture(w: &WebviewWindow) {
@@ -339,6 +405,9 @@ fn to_sidekick_buddy(app: &AppHandle, msg: &Value) {
 
 #[tauri::command]
 fn sidecar_send(app: AppHandle, msg: Value) {
+    if msg.get("type").and_then(Value::as_str) == Some("ui_ready") {
+        set_lifecycle_ui_ready(&app);
+    }
     to_sidecar(&app, &msg);
 }
 
@@ -351,7 +420,7 @@ fn set_typing(app: AppHandle, window: WebviewWindow, on: bool) {
         let _ = window.set_focus();
         #[cfg(target_os = "linux")]
         linux::activate(&window);
-// Opened from a hotkey (e.g. after an area snap), Little Boy isn't the active app and macOS 14+
+// Opened from a hotkey (e.g. after an area snap), JARVIS V2 isn't the active app and macOS 14+
 // ignores plain focus requests, so make the overlay key directly, then ask to activate.
         #[cfg(target_os = "macos")]
         if let Ok(p) = window.ns_window() {
@@ -420,7 +489,7 @@ fn diagnostics(app: &AppHandle) -> Value {
         "webview": tauri::webview_version().ok(),
         "screens": screens,
         "primary": app.primary_monitor().ok().flatten().and_then(|m| m.name().cloned()),
-        "tray_icon": app.tray_by_id("roamies").and_then(|t| t.rect().ok().flatten()).map(rect),
+        "tray_icon": app.tray_by_id(TRAY_ID).and_then(|t| t.rect().ok().flatten()).map(rect),
         "panel": panel,
         "windows": app.webview_windows().keys().cloned().collect::<Vec<_>>(),
         "voice_helper": voice_binary().map(|p| p.exists()),
@@ -489,7 +558,7 @@ async fn perm_request(kind: String) -> Value {
 #[tauri::command]
 fn open_settings(pane: String) {
     const PANES: [&str; 6] = ["Privacy_Microphone", "Privacy_SpeechRecognition", "Privacy_ScreenCapture", "Privacy_FilesAndFolders", "Privacy_AllFiles", "Privacy_Accessibility"];
-    // explorer hands ms-settings: links to the Settings app. Taskbar: where Little Boy's tray icon is switched on.
+    // explorer hands ms-settings: links to the Settings app. Taskbar: where JARVIS V2's tray icon is switched on.
     if cfg!(windows) && (pane == "privacy-microphone" || pane == "taskbar") {
         let _ = hide_console(&mut Command::new("explorer")).arg(format!("ms-settings:{pane}")).spawn();
         return;
@@ -522,7 +591,7 @@ async fn screen_check() -> Value {
 }
 
 /// Shows the hands helper's panel under System Settings for one Privacy pane ("accessibility" or
-/// "screen"): Little Boy's icon to drag into the list, in case macOS left it out. Any other kind just
+/// "screen"): JARVIS V2's icon to drag into the list, in case macOS left it out. Any other kind just
 /// closes it. The helper waits for Settings to open and leaves once its stdin (held here) closes.
 #[tauri::command]
 fn perm_guide(app: AppHandle, kind: Option<String>) {
@@ -530,8 +599,8 @@ fn perm_guide(app: AppHandle, kind: Option<String>) {
     #[cfg(target_os = "macos")]
     {
         let Some(kind) = kind.filter(|k| k == "accessibility" || k == "screen") else { return };
-        let Some(bin) = helper_binary("littleboy-hands") else { return };
-        // The LittleBoy.app around this binary; a dev build has none, so the panel shows text only.
+        let Some(bin) = helper_binary("roamies-hands") else { return };
+        // The app bundle around this binary; a dev build has none, so the panel shows text only.
         let bundle = std::env::current_exe()
             .ok()
             .and_then(|e| e.ancestors().find(|p| p.extension().is_some_and(|x| x == "app")).map(|p| p.to_string_lossy().into_owned()))
@@ -615,7 +684,7 @@ fn onboarding_finish(app: AppHandle, text: String) {
     if let Some(w) = app.get_webview_window(ONBOARDING_LABEL) {
         let _ = w.close();
     }
-    let tray = app.tray_by_id("roamies").and_then(|t| t.rect().ok().flatten());
+    let tray = app.tray_by_id(TRAY_ID).and_then(|t| t.rect().ok().flatten());
     let app2 = app.clone();
     // Let the guide window finish closing first, so the drop-in is the only thing moving.
     thread::spawn(move || {
@@ -748,14 +817,14 @@ fn show_panel(app: &AppHandle, rect: Option<tauri::Rect>, toggle: bool) {
         Some(w) => w,
         None => {
             let b = WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::App("panel/index.html".into()))
-                .title("Little Boy")
+                .title("JARVIS V2")
                 .inner_size(PANEL_W, PANEL_H)
                 .resizable(false)
                 .maximizable(false)
                 .minimizable(false)
                 .decorations(false)
-                // macOS: the first click acts even while another app is active, instead of only activating Little Boy.
-                .accept_first_mouse(true)
+            // macOS: the first click acts even while another app is active, instead of only activating JARVIS V2.
+            .accept_first_mouse(true)
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .visible_on_all_workspaces(true)
@@ -784,7 +853,7 @@ fn show_panel(app: &AppHandle, rect: Option<tauri::Rect>, toggle: bool) {
             }
         }
     };
-    let rect = rect.or_else(|| app.tray_by_id("roamies").and_then(|t| t.rect().ok().flatten()));
+    let rect = rect.or_else(|| app.tray_by_id(TRAY_ID).and_then(|t| t.rect().ok().flatten()));
     PANEL_FROM_BOTTOM.store(place_panel(app, &w, rect), Ordering::SeqCst);
     PANEL_GEN.fetch_add(1, Ordering::SeqCst);
     PANEL_CLOSING.store(false, Ordering::SeqCst);
@@ -860,7 +929,7 @@ fn tray_scale(app: &AppHandle) -> f64 {
         .ok()
         .flatten()
     };
-    app.tray_by_id("roamies").and_then(|t| read(&t)).filter(|k| *k > 0.0).unwrap_or(1.0)
+    app.tray_by_id(TRAY_ID).and_then(|t| read(&t)).filter(|k| *k > 0.0).unwrap_or(1.0)
 }
 #[cfg(not(target_os = "macos"))]
 fn tray_scale(_app: &AppHandle) -> f64 {
@@ -877,7 +946,7 @@ fn set_panel_position(w: &WebviewWindow, x: f64, y: f64, _s: f64) {
 
 // ---------- setup guide window ----------
 
-/// While the setup guide is open Little Boy is a normal app (Dock icon, ⌘Tab), so it's easy to get
+/// While the setup guide is open JARVIS V2 is a normal app (Dock icon, ⌘Tab), so it's easy to get
 /// back to after a trip to System Settings. Otherwise it lives only in the menu bar.
 fn set_dock(app: &AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]
@@ -906,13 +975,13 @@ fn open_onboarding(app: &AppHandle, mode: Option<&str>) {
     }
     let url = if chat { "onboarding/index.html?mode=chat" } else { "onboarding/index.html" };
     let mut b = WebviewWindowBuilder::new(app, ONBOARDING_LABEL, WebviewUrl::App(url.into()))
-        .title(if chat { "Get to know you" } else { "Welcome to Little Boy" })
+        .title(if chat { "Get to know you" } else { "Welcome to JARVIS V2" })
         .inner_size(780.0, 540.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
         .center()
-        // macOS: the first click acts even while another app is active, instead of only activating Little Boy.
+        // macOS: the first click acts even while another app is active, instead of only activating JARVIS V2.
         .accept_first_mouse(true)
         .focused(true)
         .background_color(tauri::window::Color(5, 16, 18, 255));
@@ -1092,7 +1161,7 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             *SIDEKICK_OVERLAY.lock().unwrap() = Some(label.clone());
         }
         let w = WebviewWindowBuilder::new(app, label, WebviewUrl::App("desktop.html".into()))
-            .title("Little Boy")
+            .title("JARVIS V2")
             .transparent(true)
             .decorations(false)
             .shadow(false)
@@ -1101,7 +1170,7 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
             // macOS: a click on its bubbles and buttons (Allow, Don't allow) acts even while another app is active,
-            // instead of only activating Little Boy. It stays unfocusable: set_typing decides when it takes the keyboard.
+            // instead of only activating JARVIS V2. It stays unfocusable: set_typing decides when it takes the keyboard.
             .accept_first_mouse(true)
             .focused(false)
             .focusable(false)
@@ -1204,7 +1273,7 @@ fn screens(monitors: &[tauri::Monitor]) -> Vec<Screen> {
     monitors.iter().map(|m| Screen { pos: (m.position().x, m.position().y), size: (m.size().width, m.size().height), scale: m.scale_factor() }).collect()
 }
 
-/// Why the overlays need building again, or None. `have` overlays are open and `roster` Little Boys want one each, at
+/// Why the overlays need building again, or None. `have` overlays are open and `roster` JARVIS V2 instances want one each, at
 /// most one per screen. Never with no screens: while the only display sleeps macOS lists none (it lists active
 /// displays), and the overlays already made are kept for when it wakes.
 fn overlays_stale(built: &[Screen], now: &[Screen], have: usize, roster: usize) -> Option<&'static str> {
@@ -1220,7 +1289,7 @@ fn overlays_stale(built: &[Screen], now: &[Screen], have: usize, roster: usize) 
 }
 
 /// The overlays were built at launch and when the roster changed, and never again. Started while the only display
-/// slept, Little Boy listed no screens, built no overlay and never showed the Little Boy (it still talked); a screen plugged
+/// slept, JARVIS V2 listed no screens, built no overlay and never showed it (it still talked); a screen plugged
 /// in or taken away later wasn't followed either. So every 3 s, on the main thread, they're built again when one is
 /// missing or the screens changed.
 fn watch_screens(app: AppHandle) {
@@ -1374,25 +1443,230 @@ fn menu_items(app: &AppHandle, items: &[Value]) -> tauri::Result<Vec<Box<dyn IsM
     Ok(out)
 }
 
-fn set_menu(app: &AppHandle, items: &[Value]) {
-    let Some(tray) = app.tray_by_id("roamies") else { return };
+/// Replaces the tray's menu. False when the sidecar's JSON could not be turned into a menu, so the caller knows
+/// the tray is still showing what it had and the menu is not ready.
+fn set_menu(app: &AppHandle, items: &[Value]) -> bool {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return false };
     let built = menu_items(app, items).and_then(|kids| {
         let refs: Vec<&dyn IsMenuItem<Wry>> = kids.iter().map(|b| b.as_ref()).collect();
         Menu::with_items(app, &refs)
     });
     match built {
-        Ok(menu) => { let _ = tray.set_menu(Some(menu)); }
-        Err(e) => eprintln!("menu build failed: {e}"),
+        Ok(menu) => { let _ = tray.set_menu(Some(menu)); true }
+        Err(e) => { eprintln!("menu build failed: {e}"); false }
     }
 }
 
 fn fallback_menu(app: &AppHandle, status: &str) {
-    set_menu(app, &[
-        json!({ "id": "status", "label": status, "enabled": false }),
-        json!({ "sep": true }),
-        json!({ "id": "restart", "label": "Restart Little Boy" }),
-        json!({ "id": "quit", "label": "Quit Little Boy" }),
-    ]);
+    set_menu(app, &lifecycle_tray_items(status, true));
+}
+
+/// The tray menu the shell owns: one line saying where startup is, and the way out (plus a restart when something
+/// failed). Shown until the sidecar's own menu arrives, and again if it stops. A tray that still says "Starting"
+/// long after launch is what this replaces.
+fn lifecycle_tray_items(status: &str, can_restart: bool) -> Vec<Value> {
+    let mut items = vec![json!({ "id": "status", "label": status, "enabled": false })];
+    if can_restart {
+        items.push(json!({ "sep": true }));
+        items.push(json!({ "id": "restart", "label": "Restart JARVIS V2" }));
+    }
+    items.push(json!({ "sep": true }));
+    items.push(json!({ "id": "quit", "label": "Quit JARVIS V2" }));
+    items
+}
+
+fn lifecycle_menu_status(s: &LifecycleSnapshot) -> String {
+    match s.desktop {
+        // A detail here is why it is still starting (a stopped sidecar, say): saying "Starting…" would hide it.
+        DesktopPhase::Starting => s.detail.clone().unwrap_or_else(|| "Starting JARVIS V2…".to_string()),
+        DesktopPhase::Error => s.detail.clone().unwrap_or_else(|| "JARVIS V2 sidecar error".to_string()),
+        DesktopPhase::SidecarReady | DesktopPhase::DesktopReady => match s.provider {
+            ProviderPhase::Ready => "JARVIS V2 is ready".to_string(),
+            ProviderPhase::Unavailable => "JARVIS V2 is ready (AI unavailable)".to_string(),
+            ProviderPhase::Unknown => "JARVIS V2 is starting AI…".to_string(),
+        },
+    }
+}
+
+/// One line per change in ~/.gg/lifecycle.log: a support report of exactly which readiness signals
+/// arrived, without asking anyone to rebuild with logging.
+fn lifecycle_log(text: &str) {
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else { return };
+    // Epoch milliseconds: the panel's Startup section shows each step to a tenth of a second. One line each, so a
+    // detail with spaces ("Sidecar stopped") can't split the record.
+    let millis = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = format!("{millis} {text}\n");
+    let _ = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(PathBuf::from(home).join(".gg").join("lifecycle.log"))
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
+fn refresh_lifecycle_ui(app: &AppHandle) {
+    // Readiness changes on every thread that can hear the sidecar (its reader, its handshake timer) and the tray is
+    // windowing-system UI, which only the main thread may touch. Snapshotting first and replaying in the main thread
+    // keeps the transitions in the order they happened.
+    let snapshot = app.state::<Lifecycle>().0.lock().unwrap().clone();
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || apply_lifecycle_ui(&app2, snapshot));
+}
+
+fn apply_lifecycle_ui(app: &AppHandle, snapshot: LifecycleSnapshot) {
+    let status = lifecycle_menu_status(&snapshot);
+    let _ = app.tray_by_id(TRAY_ID).map(|t| t.set_tooltip(Some(&status)));
+    // The tray speaks for itself only until the sidecar's own menu lands (it has the model, agents and panel
+    // entries). Keeping the launch-time menu when that message never comes is what left it on "Starting" forever.
+    if !snapshot.menu_ready {
+        set_menu(app, &lifecycle_tray_items(&status, matches!(snapshot.desktop, DesktopPhase::Error)));
+    }
+    lifecycle_log(&format!(
+        "desktop={} ui_ready={} menu_ready={} provider={} detail={}",
+        snapshot.desktop.as_str(),
+        snapshot.ui_ready,
+        snapshot.menu_ready,
+        snapshot.provider.as_str(),
+        snapshot.detail.as_deref().unwrap_or("-"),
+    ));
+    to_sidecar(app, &json!({ "type": "lifecycle", "state": snapshot.to_json() }));
+}
+
+fn apply_lifecycle_starting(s: &mut LifecycleSnapshot) {
+    s.desktop = DesktopPhase::Starting;
+    s.ui_ready = false;
+    s.menu_ready = false;
+    s.detail = None;
+    // Provider state resets on fresh sidecar start; desktop/provider remain independently meaningful after ready.
+    s.provider = ProviderPhase::Unknown;
+}
+
+fn maybe_desktop_ready(s: &mut LifecycleSnapshot) {
+    // Desktop ready only when sidecar readiness and interface readiness conditions are both met.
+    if matches!(s.desktop, DesktopPhase::Starting | DesktopPhase::Error) {
+        return;
+    }
+    if s.ui_ready && s.menu_ready && matches!(s.desktop, DesktopPhase::SidecarReady | DesktopPhase::DesktopReady) {
+        s.desktop = DesktopPhase::DesktopReady;
+        s.detail = None;
+    }
+}
+
+fn apply_lifecycle_sidecar_ready(s: &mut LifecycleSnapshot) {
+    // sidecar_ready: sidecar initialization finished. Idempotent; only meaningful from Starting.
+    // Error requires an explicit reset (starting/restart) so stale/late readiness cannot clear failures.
+    if matches!(s.desktop, DesktopPhase::Starting) {
+        s.desktop = DesktopPhase::SidecarReady;
+        s.detail = None;
+    }
+    maybe_desktop_ready(s);
+}
+
+fn apply_lifecycle_ui_ready(s: &mut LifecycleSnapshot) {
+    // ui_ready: interface is ready. Independent from sidecar init completion ordering.
+    s.ui_ready = true;
+    maybe_desktop_ready(s);
+}
+
+fn apply_lifecycle_menu_ready(s: &mut LifecycleSnapshot) {
+    // menu_ready: interactive menu delivered and applied.
+    s.menu_ready = true;
+    maybe_desktop_ready(s);
+}
+
+fn apply_lifecycle_provider(s: &mut LifecycleSnapshot, status: &str, detail: Option<String>) {
+    // provider_status: AI provider state only; must not revert desktop lifecycle.
+    s.provider = match status {
+        "ready" => ProviderPhase::Ready,
+        "unavailable" => ProviderPhase::Unavailable,
+        _ => ProviderPhase::Unknown,
+    };
+    if s.provider == ProviderPhase::Unavailable {
+        s.detail = detail;
+    } else if matches!(s.desktop, DesktopPhase::SidecarReady | DesktopPhase::DesktopReady) {
+        s.detail = None;
+    }
+}
+
+fn apply_lifecycle_sidecar_down(s: &mut LifecycleSnapshot, detail: &str) {
+    // Back to Starting: the sidecar is restarted with backoff, and readiness has to be earned again. The detail
+    // stays so the tray says what happened instead of looking stuck on a first launch.
+    s.desktop = DesktopPhase::Starting;
+    s.ui_ready = false;
+    s.menu_ready = false;
+    s.provider = ProviderPhase::Unknown;
+    s.detail = Some(detail.to_string());
+}
+
+fn apply_lifecycle_error(s: &mut LifecycleSnapshot, detail: &str) {
+    s.desktop = DesktopPhase::Error;
+    s.ui_ready = false;
+    s.menu_ready = false;
+    s.provider = ProviderPhase::Unknown;
+    s.detail = Some(detail.to_string());
+}
+
+pub(crate) fn set_lifecycle_starting(app: &AppHandle) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_starting(&mut s);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_sidecar_ready(app: &AppHandle) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_sidecar_ready(&mut s);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_ui_ready(app: &AppHandle) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_ui_ready(&mut s);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_menu_ready(app: &AppHandle) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_menu_ready(&mut s);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_provider(app: &AppHandle, status: &str, detail: Option<String>) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_provider(&mut s, status, detail);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_sidecar_down(app: &AppHandle, detail: &str) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_sidecar_down(&mut s, detail);
+    }
+    refresh_lifecycle_ui(app);
+}
+
+pub(crate) fn set_lifecycle_error(app: &AppHandle, detail: &str) {
+    {
+        let state = app.state::<Lifecycle>();
+        let mut s = state.0.lock().unwrap();
+        apply_lifecycle_error(&mut s, detail);
+    }
+    refresh_lifecycle_ui(app);
 }
 
 // ---------- bundled helpers ----------
@@ -1535,11 +1809,22 @@ async fn tokio_sleep(d: Duration) {
 
 fn handle_sidecar(app: &AppHandle, msg: Value) {
     match msg.get("type").and_then(Value::as_str) {
+        Some("sidecar_ready") => {
+            set_lifecycle_sidecar_ready(app);
+        }
+        Some("provider_status") => {
+            let status = msg.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            let detail = msg.get("detail").and_then(Value::as_str).map(|s| s.to_string());
+            set_lifecycle_provider(app, status, detail);
+        }
         Some("update") => update(app, msg.get("install").and_then(Value::as_bool) == Some(true)),
         Some("login_item") => login_item(app, msg.get("on").and_then(Value::as_bool)),
         Some("menu") => {
             if let Some(items) = msg.get("items").and_then(Value::as_array) {
-                set_menu(app, items);
+                // Only a menu the tray really took counts as ready; a failed build leaves the lifecycle line up.
+                if set_menu(app, items) {
+                    set_lifecycle_menu_ready(app);
+                }
             }
         }
         Some("ui") => {
@@ -1612,7 +1897,7 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
         }
         // `roamies --talk` (Linux): start a take, or send the one under way.
         Some("talk_toggle") => to_voice(app, &json!({ "cmd": "toggle" })),
-        // Little Boy is answering or speaking: the wake word waits, so it can't wake itself.
+        // JARVIS V2 is answering or speaking: the wake word waits, so it can't wake itself.
         Some("wake_hold") => to_voice(app, &json!({ "cmd": "wake_hold", "on": msg.get("on").and_then(Value::as_bool) == Some(true) })),
         // Esc while it's listening: drop the take.
         Some("listen_cancel") => to_voice(app, &json!({ "cmd": "cancel" })),
@@ -1674,8 +1959,8 @@ fn cli_action(args: &[String]) -> Option<&'static str> {
 }
 
 /// A second launch quit and handed its arguments over (the single-instance plugin). A plain one summons the
-/// Little Boy and, on Windows and Linux, opens the panel: Windows 11 hides a new tray icon behind the ^ arrow and many
-/// Linux desktops show none, so opening Little Boy again from the Start menu or the app list is the way in.
+/// JARVIS V2 and, on Windows and Linux, opens the panel: Windows 11 hides a new tray icon behind the ^ arrow and many
+/// Linux desktops show none, so opening JARVIS V2 again from the Start menu or the app list is the way in.
 fn second_launch(app: &AppHandle, args: &[String]) {
     match cli_action(args) {
         Some("summon") => to_overlays(app, &json!({ "kind": "summon" })),
@@ -1708,6 +1993,7 @@ fn main() {
         .manage(VoiceModel(Mutex::new(None)))
         .manage(MicPick(Mutex::new(None)))
         .manage(PermGuide(Mutex::new(None)))
+        .manage(Lifecycle::new())
         .invoke_handler(tauri::generate_handler![buddy, ink_wait, set_hot, set_hit_rects, sidecar_send, set_typing, perm_status, perm_request, perm_guide, screen_check, open_settings, onboarding_finish, guide_close, panel_hide, esc_watch, relaunch, focus_guide, guide_aside, drag_window])
         .on_menu_event(|app, e| match e.id.as_ref() {
             "quit" => app.exit(0),
@@ -1722,12 +2008,12 @@ fn main() {
                 app.set_menu(Menu::default(app.handle())?)?;
             }
 
-            let starting = MenuItem::with_id(app, "status", "Starting Little Boy…", false, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Little Boy", true, None::<&str>)?;
+            let starting = MenuItem::with_id(app, "status", "Starting JARVIS V2…", false, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit JARVIS V2", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&starting, &quit])?;
             // Left click opens the panel; right click shows the short menu.
-            let mut tray = TrayIconBuilder::with_id("jarvis-v2")
-                .tooltip("Little Boy")
+            let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+                .tooltip("Starting JARVIS V2…")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, e| {
@@ -1757,7 +2043,7 @@ fn main() {
                     eprintln!("could not register the area shortcut: {e}");
                 }
             } else {
-                eprintln!("global shortcuts need X11; on this Wayland desktop bind `littleboy --summon` and the other commands in your keyboard settings");
+                eprintln!("global shortcuts need X11; on this Wayland desktop bind `jarvis_v2 --summon` and the other commands in your keyboard settings");
             }
             build_overlays(app.handle())?;
             pump_cursor(app.handle().clone());
@@ -1766,11 +2052,12 @@ fn main() {
             snapshot::watch_screenshots(app.handle().clone());
             #[cfg(target_os = "macos")]
             fullscreen::watch(app.handle().clone());
+            set_lifecycle_starting(app.handle());
             spawn_sidecar(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to run Little Boy")
+        .expect("failed to run JARVIS V2")
         .run(|_, e| {
             if matches!(e, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
                 sidecar::QUITTING.store(true, Ordering::SeqCst);
@@ -1812,13 +2099,13 @@ mod tests {
         assert!(overlays_stale(&one, &[s(0, 2560)], 1, 1).is_some(), "resolution changed");
         assert!(overlays_stale(&one, &[s(100, 1920)], 1, 1).is_some(), "moved in the arrangement");
         assert!(overlays_stale(&one, &[Screen { scale: 1.0, ..s(0, 1920) }], 1, 1).is_some(), "scale changed");
-        assert_eq!(overlays_stale(&two, &two, 1, 1), None, "two screens and one Little Boy: one overlay is all there is");
-        assert!(overlays_stale(&two, &two, 1, 2).is_some(), "two Little Boys on two screens and one overlay: build");
-        // build_overlays puts every Little Boy on one screen's overlay when there's one screen: counting one overlay per
-        // Little Boy there would rebuild every 3 s, forever.
-        assert_eq!(overlays_stale(&one, &one, 1, 2), None, "two Little Boys on one screen: one overlay holds both");
-        assert!(overlays_stale(&one, &one, 0, 2).is_some(), "two Little Boys on one screen and no overlay: build");
-        assert_eq!(overlays_stale(&one, &one, 0, 0), None, "no Little Boys: no overlay is missing");
+        assert_eq!(overlays_stale(&two, &two, 1, 1), None, "two screens and one JARVIS V2 instance: one overlay is all there is");
+        assert!(overlays_stale(&two, &two, 1, 2).is_some(), "two JARVIS V2 instances on two screens and one overlay: build");
+        // build_overlays puts every JARVIS V2 instance on one screen's overlay when there's one screen: counting one overlay per
+        // instance there would rebuild every 3 s, forever.
+        assert_eq!(overlays_stale(&one, &one, 1, 2), None, "two JARVIS V2 instances on one screen: one overlay holds both");
+        assert!(overlays_stale(&one, &one, 0, 2).is_some(), "two JARVIS V2 instances on one screen and no overlay: build");
+        assert_eq!(overlays_stale(&one, &one, 0, 0), None, "no JARVIS V2 instances: no overlay is missing");
     }
 
     #[test]
@@ -1836,5 +2123,130 @@ mod tests {
         rotate_log(&log);
         assert_eq!(std::fs::read(&old).unwrap()[0], b'y', "the newer one replaces the older .old");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    fn snap() -> LifecycleSnapshot {
+        LifecycleSnapshot {
+            desktop: DesktopPhase::Starting,
+            provider: ProviderPhase::Unknown,
+            ui_ready: false,
+            menu_ready: false,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn starting_to_sidecar_to_desktop_requires_ui_and_menu() {
+        let mut s = snap();
+        apply_lifecycle_sidecar_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::SidecarReady);
+        assert!(!s.ui_ready && !s.menu_ready);
+
+        apply_lifecycle_ui_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::SidecarReady);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+    }
+
+    #[test]
+    fn ui_and_menu_can_arrive_before_sidecar_ready_and_become_ready_after() {
+        let mut s = snap();
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::Starting);
+        apply_lifecycle_sidecar_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+    }
+
+    #[test]
+    fn provider_unavailable_does_not_revert_desktop_ready() {
+        let mut s = snap();
+        apply_lifecycle_sidecar_ready(&mut s);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+        apply_lifecycle_provider(&mut s, "unavailable", Some("rate_limited".into()));
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+        assert_eq!(s.provider, ProviderPhase::Unavailable);
+        assert_eq!(s.detail.as_deref(), Some("rate_limited"));
+        assert!(lifecycle_menu_status(&s).contains("AI unavailable"));
+
+        apply_lifecycle_provider(&mut s, "ready", None);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+        assert_eq!(s.provider, ProviderPhase::Ready);
+    }
+
+    #[test]
+    fn sidecar_ready_and_readiness_signals_are_idempotent() {
+        let mut s = snap();
+        apply_lifecycle_sidecar_ready(&mut s);
+        apply_lifecycle_sidecar_ready(&mut s);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
+    }
+
+    #[test]
+    fn sidecar_down_resets_to_starting_and_clears_provider() {
+        let mut s = snap();
+        apply_lifecycle_sidecar_ready(&mut s);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        apply_lifecycle_provider(&mut s, "ready", None);
+        apply_lifecycle_sidecar_down(&mut s, "Sidecar stopped");
+        assert_eq!(s.desktop, DesktopPhase::Starting);
+        assert_eq!(s.provider, ProviderPhase::Unknown);
+        assert!(!s.ui_ready && !s.menu_ready);
+    }
+
+    #[test]
+    fn a_stopped_sidecar_is_named_in_the_tray_instead_of_looking_like_a_first_launch() {
+        let mut s = snap();
+        assert_eq!(lifecycle_menu_status(&s), "Starting JARVIS V2…");
+        apply_lifecycle_sidecar_down(&mut s, "Sidecar stopped");
+        assert_eq!(lifecycle_menu_status(&s), "Sidecar stopped", "the tray says why, not 'Starting…' again");
+        apply_lifecycle_starting(&mut s);
+        assert_eq!(lifecycle_menu_status(&s), "Starting JARVIS V2…", "a fresh attempt clears the old reason");
+    }
+
+    #[test]
+    fn the_shell_keeps_a_menu_until_the_sidecar_sends_its_own() {
+        // What the tray is given before any menu message: the row the user sees, and Quit. No dead "Starting" row
+        // once the sidecar is up, so a missing menu message cannot leave the tray stuck at launch.
+        let items = lifecycle_tray_items("JARVIS V2 is ready", false);
+        let labels: Vec<&str> = items.iter().filter_map(|i| i.get("label").and_then(Value::as_str)).collect();
+        assert_eq!(labels, vec!["JARVIS V2 is ready", "Quit JARVIS V2"]);
+        assert_eq!(items[0].get("enabled"), Some(&json!(false)), "a status row is not a command");
+        assert_eq!(items[items.len() - 1].get("id").and_then(Value::as_str), Some("quit"));
+
+        // Something failed: the way to retry is in the menu, since readiness is not going to arrive by itself.
+        let items = lifecycle_tray_items("JARVIS V2 sidecar stopped", true);
+        let ids: Vec<&str> = items.iter().filter_map(|i| i.get("id").and_then(Value::as_str)).collect();
+        assert_eq!(ids, vec!["status", "restart", "quit"]);
+    }
+
+    #[test]
+    fn error_state_is_terminal_for_readiness_until_reset() {
+        let mut s = snap();
+        apply_lifecycle_error(&mut s, "handshake timeout");
+        assert_eq!(s.desktop, DesktopPhase::Error);
+        apply_lifecycle_sidecar_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::Error);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::Error);
+        apply_lifecycle_starting(&mut s);
+        apply_lifecycle_sidecar_ready(&mut s);
+        apply_lifecycle_ui_ready(&mut s);
+        apply_lifecycle_menu_ready(&mut s);
+        assert_eq!(s.desktop, DesktopPhase::DesktopReady);
     }
 }

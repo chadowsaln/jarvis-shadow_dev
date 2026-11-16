@@ -1,5 +1,5 @@
 // Exa (https://exa.ai/) web search/retrieval integration for Browser Intelligence.
-// Optional provider: no API key required for Little Boy to run. All network calls are explicit,
+// Optional provider: no API key required for JARVIS V2 to run. All network calls are explicit,
 // injected/mockable for tests, and never expose EXA_API_KEY to the UI/logs.
 
 const EXA_API_BASE = 'https://api.exa.ai';

@@ -1,4 +1,4 @@
-// Persistent local memory for Little Boy (Batch 10): SQLite-backed, no local AI/models/embeddings.
+// Persistent local memory for JARVIS V2 (Batch 10): SQLite-backed, no local AI/models/embeddings.
 // Stored in the sidecar data directory (ROAMIES_DATA_DIR/sidecar or ~/.gg/sidecar) so it survives restarts.
 // All access should flow through Agent Core tools (permissioned) or explicit UI actions; this module is pure storage.
 

@@ -1,4 +1,4 @@
-// Windows 11 starts a new tray icon hidden behind the ^ arrow, so people couldn't find Little Boy (or its settings).
+// Windows 11 starts a new tray icon hidden behind the ^ arrow, so people couldn't find JARVIS V2 (or its settings).
 // There's no API to show it; Windows keeps the choice per program under HKCU\Control Panel\NotifyIconSettings\<id>
 // (ExecutablePath, and IsPromoted: 1 shows it next to the clock). Explorer makes that entry once the icon has been
 // added. Undocumented, so it's tried once and quietly given up on if the entry never shows up.

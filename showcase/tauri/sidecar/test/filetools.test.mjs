@@ -1,4 +1,4 @@
-// File management tools (Batch 4 / Little Boy). Run: node --test showcase/tauri/sidecar/test/filetools.test.mjs
+// File management tools (Batch 4 / JARVIS V2). Run: node --test showcase/tauri/sidecar/test/filetools.test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';

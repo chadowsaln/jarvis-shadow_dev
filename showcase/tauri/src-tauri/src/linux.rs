@@ -56,7 +56,7 @@ pub(crate) fn init() {
         if env("DISPLAY").is_some_and(|d| !d.is_empty()) {
             std::env::set_var("GDK_BACKEND", "x11");
         } else {
-            eprintln!("Little Boy needs XWayland on a Wayland session (no DISPLAY is set): windows can't be placed or kept on top without it");
+            eprintln!("JARVIS V2 needs XWayland on a Wayland session (no DISPLAY is set): windows can't be placed or kept on top without it");
         }
     }
 }
@@ -448,7 +448,7 @@ fn exec_quoted(path: &str) -> Option<String> {
     Some(out)
 }
 
-/// The XDG autostart entry that starts Little Boy when the user logs in.
+/// The XDG autostart entry that starts JARVIS V2 when the user logs in.
 fn autostart_entry(program: &str) -> Option<String> {
     let exec = exec_quoted(program)?;
     Some(format!("[Desktop Entry]\nType=Application\nName=JARVIS V2\nComment=AI Agent + Computer Control + Perception + Memory + Skills + Security\nExec={exec}\nIcon=jarvis-v2\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"))
@@ -494,6 +494,9 @@ pub(crate) fn login_item(set: Option<bool>, installed: bool) -> (bool, bool) {
 /// The program as a shell word, for commands people bind to keys (`<this> --talk`): plain `roamies` when that's
 /// what the package installed on PATH, else the AppImage or binary's full path, single-quoted if it needs it.
 fn launch_word(program: &str) -> String {
+    if program == "/usr/bin/jarvis_v2" || program == "/usr/local/bin/jarvis_v2" {
+        return "jarvis_v2".into();
+    }
     if program == "/usr/bin/roamies" || program == "/usr/local/bin/roamies" {
         return "roamies".into();
     }
@@ -511,7 +514,7 @@ pub(crate) fn launch_command() -> String {
 /// Where a copy installed from a .deb or .rpm gets its update: the package manager owns those files, so the app
 /// can't swap itself as an AppImage can.
 pub(crate) fn open_releases_page() {
-    let _ = std::process::Command::new("xdg-open").arg("https://github.com/KenKaiii/LittleBoy/releases/latest").stdin(std::process::Stdio::null()).spawn();
+    let _ = std::process::Command::new("xdg-open").arg("https://github.com/chadowsaln/jarvis-shadow_dev/releases/latest").stdin(std::process::Stdio::null()).spawn();
 }
 
 #[cfg(test)]
@@ -542,10 +545,10 @@ mod tests {
 
     #[test]
     fn the_autostart_entry_quotes_the_program() {
-        let e = autostart_entry("/home/kai/Apps/LittleBoy 0.1.33.AppImage").expect("an entry");
+        let e = autostart_entry("/home/kai/Apps/JARVIS V2.AppImage").expect("an entry");
         assert!(e.starts_with("[Desktop Entry]\nType=Application\nName=JARVIS V2\n"));
-        assert!(e.contains("\nExec=\"/home/kai/Apps/LittleBoy 0.1.33.AppImage\"\n"), "{e}");
-        assert_eq!(exec_quoted("/usr/bin/littleboy").as_deref(), Some("\"/usr/bin/littleboy\""));
+        assert!(e.contains("\nExec=\"/home/kai/Apps/JARVIS V2.AppImage\"\n"), "{e}");
+        assert_eq!(exec_quoted("/usr/bin/jarvis-v2").as_deref(), Some("\"/usr/bin/jarvis-v2\""));
         // Characters a shell or the desktop would act on stay literal.
         assert_eq!(exec_quoted("/opt/a$b/50%/q\"t/b`t").as_deref(), Some("\"/opt/a\\\\$b/50%%/q\\\\\"t/b\\\\`t\""));
         assert_eq!(exec_quoted("/opt/back\\slash").as_deref(), Some("\"/opt/back\\\\\\\\slash\""));
@@ -555,17 +558,18 @@ mod tests {
 
     #[test]
     fn the_command_to_bind_names_this_copy() {
-        assert_eq!(launch_word("/usr/bin/littleboy"), "littleboy", "the package's own command");
-        assert_eq!(launch_word("/home/kai/Apps/LittleBoy_0.1.33_amd64.AppImage"), "/home/kai/Apps/LittleBoy_0.1.33_amd64.AppImage");
-        assert_eq!(launch_word("/home/kai/My Apps/LittleBoy.AppImage"), "'/home/kai/My Apps/LittleBoy.AppImage'");
-        assert_eq!(launch_word("/home/kai/it's/LittleBoy"), "'/home/kai/it'\\''s/LittleBoy'");
+        assert_eq!(launch_word("/usr/bin/jarvis_v2"), "jarvis_v2", "the package's own command");
+        assert_eq!(launch_word("/usr/bin/roamies"), "roamies", "legacy package command");
+        assert_eq!(launch_word("/home/kai/Apps/JARVIS_V2_0.1.0_amd64.AppImage"), "/home/kai/Apps/JARVIS_V2_0.1.0_amd64.AppImage");
+        assert_eq!(launch_word("/home/kai/My Apps/JARVIS V2.AppImage"), "'/home/kai/My Apps/JARVIS V2.AppImage'");
+        assert_eq!(launch_word("/home/kai/it's/JARVIS V2"), "'/home/kai/it'\\''s/JARVIS V2'");
     }
 
     #[test]
     fn an_entry_the_desktop_switched_off_counts_as_off() {
-        assert!(autostart_on(&autostart_entry("/usr/bin/littleboy").unwrap()));
-        assert!(!autostart_on("[Desktop Entry]\nExec=littleboy\nHidden=true\n"));
-        assert!(!autostart_on("[Desktop Entry]\nExec=littleboy\nX-GNOME-Autostart-enabled=false\n"));
+        assert!(autostart_on(&autostart_entry("/usr/bin/jarvis_v2").unwrap()));
+        assert!(!autostart_on("[Desktop Entry]\nExec=jarvis_v2\nHidden=true\n"));
+        assert!(!autostart_on("[Desktop Entry]\nExec=jarvis_v2\nX-GNOME-Autostart-enabled=false\n"));
         assert!(!autostart_on("[Desktop Entry]\nHidden = True\n"));
         assert!(autostart_on("[Desktop Entry]\nHidden=false\n"));
     }

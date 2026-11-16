@@ -48,6 +48,20 @@ function copy(name, from) {
 }
 for (const name of process.argv.slice(2)) copy(name, process.cwd());
 EOF
+# Keep only the host's better-sqlite3 prebuild so AppImage/linuxdeploy doesn't try to resolve
+# deps for other platforms/ABIs (e.g. musl prebuilds lack libc.musl on glibc hosts).
+if [ -d dist/node_modules/better-sqlite3/prebuilds ]; then
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64) keep="linux-x64.node" ;;
+    Linux-aarch64|Linux-arm64) keep="linux-arm64.node" ;;
+    *) keep="" ;;
+  esac
+  if [ -n "$keep" ]; then
+    for f in dist/node_modules/better-sqlite3/prebuilds/*; do
+      [ "$(basename "$f")" = "$keep" ] || rm -f "$f"
+    done
+  fi
+fi
 # The recorded beats (beats/make.mjs): the audio and its index, not the script.
 mkdir -p dist/beats && cp beats/index.json beats/*.pcm dist/beats/
 echo '{"type":"module"}' > dist/package.json

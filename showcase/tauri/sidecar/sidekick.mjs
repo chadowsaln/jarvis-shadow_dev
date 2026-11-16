@@ -3,7 +3,7 @@
 // logging goes to stderr. Auth is GG Coder's ~/.gg/auth.json, shared with the app and CLI.
 //
 // in:  {type:'menu', id} {type:'answer', id, text} {type:'ui_ready'}
-// out: {type:'menu', items} {type:'ui', msg} {type:'overlays', ids}
+// out: {type:'sidecar_ready'} {type:'provider_status',status,detail?} {type:'menu', items} {type:'ui', msg} {type:'overlays', ids}
 import { Agent } from '@kenkaiiii/gg-agent';
 import { ClaudeCodeAgent, closeSpare } from './claudecode.mjs';
 import { SAFE, checkDrawAction, checkLink, checkOpen, checkRead, checkWrite, redactArgs } from './safety.mjs';
@@ -53,11 +53,28 @@ import { OLLAMA, OLLAMA_KEY, connectLocal, contextNote, withWindow } from './loc
 import { activityLogs, buildReport, redact, reportDir, reportName, reveal, run, scrubConfig, tail } from './diagnostics.mjs';
 import { detailsText, explain } from './errors.mjs';
 import { aboutLittleBoy } from './about.mjs';
+import { lifecycleLog, readStartup } from './lifecycle.mjs';
 import { whatsNewOnStart } from './whatsnew.mjs';
 import { z } from 'zod';
 
 console.log = console.info = (...a) => console.error(...a);
-const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+// The shell reads these lines; if it's gone (closed, restarted) a write throws EPIPE and would take the
+// whole agent down through uncaughtException. Drop the line instead: the next spawn gets a fresh process.
+const send = (o) => {
+  try { process.stdout.write(JSON.stringify(o) + '\n'); } catch (e) { if (e?.code !== 'EPIPE') console.error('send', e); }
+};
+let sidecarReadySent = false;
+function emitSidecarReady() {
+  if (sidecarReadySent) return;
+  sidecarReadySent = true;
+  send({ type: 'sidecar_ready' });
+}
+function emitProviderStatus(status, detail = null) {
+  send({ type: 'provider_status', status, ...(detail ? { detail } : {}) });
+  // The desktop entity shows the same thing. It is a consumer: this never touches readiness or the running turn.
+  // Offline is only "no model at all" (a 429 or a bad key still has a provider set up, and the app says so in words).
+  ui({ kind: 'provider', status, detail, offline: !config.provider || !signedIn.get(config.provider) });
+}
 // While the setup guide is open, Sidekick talks through it instead of the desktop overlay.
 let onboarding = false;
 let intro = null; // the get-to-know-you chat, while it's on
@@ -80,11 +97,14 @@ const ob = (msg) => send({ type: 'onboard', msg });
 const say = (text, mood) => (onboarding ? ob({ kind: 'say', text, mood }) : ui({ kind: 'say', text, mood }));
 const sayOut = say;
 
-const VERSION = process.env.LITTLEBOY_VERSION || '0.0.0';
+// The shell sets ROAMIES_VERSION (the legacy LITTLEBOY_VERSION name is still read for older packaged copies).
+// Reading only the old name left VERSION at 0.0.0 in every release build: wrong update checks and reports.
+const VERSION = process.env.ROAMIES_VERSION || process.env.LITTLEBOY_VERSION || '0.0.0';
 const UPDATE_REPO = 'KenKaiii/LittleBoy';
 const HOME = os.homedir();
-// LITTLEBOY_DATA_DIR (tests and benchmarks): config, sessions and memory go there instead; sign-in stays in ~/.gg.
-const CONFIG_PATH = process.env.LITTLEBOY_DATA_DIR ? path.join(process.env.LITTLEBOY_DATA_DIR, 'sidekick.json') : path.join(HOME, '.gg', 'sidekick.json');
+// ROAMIES_DATA_DIR (tests and benchmarks): config, sessions and memory go there instead; sign-in stays in ~/.gg.
+const DATA_DIR = process.env.ROAMIES_DATA_DIR || process.env.LITTLEBOY_DATA_DIR;
+const CONFIG_PATH = DATA_DIR ? path.join(DATA_DIR, 'sidekick.json') : path.join(HOME, '.gg', 'sidekick.json');
 // The only sign-ins: Claude runs through Claude Code (downloaded once, about 140 MB; it keeps the token, auth.json
 // a marker), ChatGPT is Continue with ChatGPT. Everything else, Kimi, Grok and Gemini included, takes an API key.
 const OAUTH = {
@@ -123,6 +143,9 @@ const DEFAULTS = {
   respanBridgeUrl: '',
   // Custom tint color for the avatar (hex string like #7ff3ff). Empty means use the default LED palette.
   customColor: '',
+  // The hybrid entity's theme (colors, glow, particles, quality, animation), plain JSON: roamies/theme.js owns the
+  // shape and validates it on every page, so a bad value can never blank the entity. null: the defaults.
+  theme: null,
 };
 const LINUX = process.platform === 'linux';
 // Linux: "x11" or "wayland" (the app says which). Wayland keeps apps from seeing the pointer over other apps and
@@ -141,6 +164,8 @@ const sizeNow = () => (SIZES.some(([s]) => s === config.size) ? config.size : 'd
 const LOOKS = [
   ['classic', 'Roamie', DEFAULT_VOICE],
   ['jarvis', 'JARVIS', 'e13fa398a7f445a685316a3de6089ce7'],
+  // The hybrid: a 3D reactor orb, drawn in WebGL 2 (roamies/hybrid.js), with a 2D fallback.
+  ['hybrid', 'Hybrid', 'e13fa398a7f445a685316a3de6089ce7'],
   ['anime', 'Anime Girl', 'd8f3b4c1199f4568a767ec54112d2b17'],
   ['sarah', 'Sarah', '933563129e564b19a115bedd57b7406a'],
   ['adrian', 'Adrian', 'bf322df2096a46f18c579d0baa36f41d'],
@@ -150,11 +175,11 @@ const lookVoice = () => (LOOKS.find(([id]) => id === config.look) ?? LOOKS[0])[2
 // The look's voice with Gemini and with VoiceStudio: the user's pick for it, else its own default.
 const geminiVoice = () => config.geminiVoices?.[config.look] ?? GEMINI_LOOK_VOICES[config.look] ?? GEMINI_DEFAULT_VOICE;
 const studioVoice = () => config.studioVoices?.[config.look] ?? null;
-// Its name is its look's: Roamie, JARVIS, Anime Girl, Sarah, Adrian or Rita X. Little Boy is the app.
+// Its name is its look's: Roamie, JARVIS, Anime Girl, Sarah, Adrian or Rita X. JARVIS V2 is the app.
 const lookName = () => (LOOKS.find(([id]) => id === config.look) ?? LOOKS[0])[1];
 // What each says when it's picked, in its own voice (Settings and the setup guide show the same words).
-const LOOK_GREETINGS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
-const LOOK_BODY = { classic: 'a tiny glowing pixel creature', jarvis: 'a glowing sphere of light', anime: 'a pixel anime girl', sarah: 'a pixel woman', adrian: 'a pixel man', rita: 'a pixel secretary in cat-eye glasses' };
+const LOOK_GREETINGS = { classic: 'Classic me!', jarvis: 'At your service.', hybrid: 'Reactor core online.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
+const LOOK_BODY = { classic: 'a tiny glowing pixel creature', jarvis: 'a glowing sphere of light', hybrid: 'a 3D orb of plasma and turning reactor rings', anime: 'a pixel anime girl', sarah: 'a pixel woman', adrian: 'a pixel man', rita: 'a pixel secretary in cat-eye glasses' };
 const VOICE_OK = hasVoice(process.platform);
 // Windows and Linux have no on-device speech API apps can use, so voice there runs Parakeet on the PC. Its model
 // is downloaded once: from the setup guide, or the first time voice is used.
@@ -372,11 +397,12 @@ const keyWords = (accel) => accel.replace(/Key|Digit/g, '').split('+')
   .map((p) => (MAC ? { Alt: 'Option' }[p] ?? p : { Control: 'Ctrl', Command: LINUX ? 'Super' : 'Win' }[p] ?? p)).join('+');
 const TRAY = MAC ? 'menu bar' : 'system tray';
 // Where settings live now: the panel that opens from the icon (the menu is just the basics). Linux trays don't
-// report clicks, so there it's the icon's menu, or starting Little Boy again (which also works with no tray at all).
-const PANEL = LINUX ? 'the panel (Open Panel… in my tray icon\'s menu, or open Little Boy again from your apps)' : MAC ? `the panel (click my ${TRAY} icon)` : 'the panel (click my icon by the clock, behind the ^ arrow if it isn\'t showing, or open Little Boy again from the Start menu)';
+// report clicks, so there it's the icon's menu, or starting JARVIS V2 again (which also works with no tray at all).
+const PANEL = LINUX ? 'the panel (Open Panel… in my tray icon\'s menu, or open JARVIS V2 again from your apps)' : MAC ? `the panel (click my ${TRAY} icon)` : 'the panel (click my icon by the clock, behind the ^ arrow if it isn\'t showing, or open JARVIS V2 again from the Start menu)';
 // What the shortcuts are on Wayland: whatever keys they bound to these commands in their desktop's settings.
-// LITTLEBOY_LAUNCH: how this copy is started (the app says: plain littleboy for a package, the AppImage's path for one).
-const LAUNCH = process.env.LITTLEBOY_LAUNCH || 'littleboy';
+// ROAMIES_LAUNCH: how this copy is started (the app says: plain jarvis_v2 for a package, the AppImage's path for one).
+// The bind commands on Wayland are copied from here, so the old env name made them print a command that doesn't exist.
+const LAUNCH = process.env.ROAMIES_LAUNCH || process.env.LITTLEBOY_LAUNCH || 'jarvis_v2';
 const BIND = Object.fromEntries(['summon', 'talk', 'ask', 'list', 'panel'].map((k) => [k, `${LAUNCH} --${k}`]));
 
 const auth = new AuthStorage();
@@ -400,12 +426,13 @@ async function refreshAuth() {
 // Called at startup, when an OpenRouter key is saved, when the panel opens, and on retry.
 async function refreshOpenRouterModels() {
   const meta = AUTH_PROVIDERS.find((p) => p.value === 'openrouter');
-  if (!meta || !meta.methods?.includes('apikey')) { openrouterModels = { models: [], status: 'idle', error: null }; return; }
+  if (!meta || !meta.methods?.includes('apikey')) { openrouterModels = { models: [], status: 'idle', error: null }; emitProviderStatus('unknown'); return; }
   const keyId = meta.apiKeyVariants?.[0]?.key ?? 'openrouter';
-  if (!storedKeys.has(keyId)) { openrouterModels = { models: [], status: 'idle', error: null }; return; }
+  if (!storedKeys.has(keyId)) { openrouterModels = { models: [], status: 'idle', error: null }; emitProviderStatus('unknown'); return; }
   const c = await auth.getCredentials(keyId).catch(() => null);
-  if (!c?.accessToken) { openrouterModels = { models: [], status: 'idle', error: null }; return; }
+  if (!c?.accessToken) { openrouterModels = { models: [], status: 'idle', error: null }; emitProviderStatus('unknown'); return; }
   openrouterModels.status = 'loading'; openrouterModels.error = null;
+  emitProviderStatus('unknown');
   try {
     const models = await discoverOpenRouterModels(c.accessToken);
     openrouterModels.models = models;
@@ -413,14 +440,23 @@ async function refreshOpenRouterModels() {
     // Register discovered models with gg-core so getModel(), getContextWindow(), etc. resolve them
     // (OpenRouter ids like qwen/qwen3-32b aren't in gg-core's static MODELS list).
     registerRuntimeModels(models.map((m) => ({ ...m, provider: 'openrouter' })));
+    emitProviderStatus('ready');
   } catch (e) {
     const msg = String(e?.message ?? e);
     openrouterModels.models = [];
     openrouterModels.status = 'failed';
-    // A missing key is a key problem, not a network one (it used to fall through to 'network' and send the
-    // user looking at their connection).
-    openrouterModels.error = msg === 'openrouter_invalid_key' || msg === 'openrouter_api_key_missing' ? 'invalid_key'
-      : 'network';
+    // 429/rate limiting: provider temporarily unavailable, but app/sidecar stay healthy.
+    if (msg === 'openrouter_rate_limited' || e?.status === 429) {
+      openrouterModels.error = 'rate_limited';
+      emitProviderStatus('unavailable', 'rate_limited');
+    } else if (msg === 'openrouter_invalid_key' || msg === 'openrouter_api_key_missing') {
+      openrouterModels.error = 'invalid_key';
+      emitProviderStatus('unavailable', 'invalid_key');
+    } else {
+      // Network/other failures keep provider unavailable without crashing startup.
+      openrouterModels.error = 'network';
+      emitProviderStatus('unavailable', 'network');
+    }
   }
   menu(); panel();
 }
@@ -533,10 +569,10 @@ const { tools, hands, whereNow, ink, nextTurn } = createTools({
     return c?.accessToken ? { apiKey: c.accessToken, baseUrl: c.baseUrl } : null;
   },
 });
-// The app's own manual, read when they ask about Little Boy rather than sent with every request.
+// The app's own manual, read when they ask about JARVIS V2 rather than sent with every request.
 tools.push({
   name: 'about_littleboy',
-  description: 'How Little Boy works: where it lives, its menus, the panel and each settings page, updates, what to do when something is not working, and who made it. Call it before answering a question about the app.',
+  description: 'How JARVIS V2 works: where it lives, its menus, the panel and each settings page, updates, what to do when something is not working, and who made it. Call it before answering a question about the app.',
   parameters: z.object({}),
   execute: async () => aboutLittleBoy({ name: lookName(), looks: LOOKS.map(([, label]) => label), mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK }),
 });
@@ -681,8 +717,8 @@ const VOICE_STYLE = `You talk out loud: what you write is spoken in your voice a
 Your voice carries feeling: start a sentence with a voice cue in square brackets when the moment calls for it, and it's performed, never shown or read out. Moods: ${VOICE_CUES.emotions.filter((e) => !EMOTES.includes(e)).join(', ')}; soften or strengthen one with slightly, very or extremely ("[slightly sad]"), or pair two ("[warm and curious]"). How it's said, placed right before the words: ${VOICE_CUES.tones.join(', ')} ("It's [emphasis] today."). Sounds, followed by the sound in words: ${VOICE_CUES.sounds.join(', ')} ("[chuckling] Heh, fair enough.", "[sighing] Long day."). Pauses and background: ${VOICE_CUES.effects.join(', ')}. You can also describe the delivery in a few plain words when no single cue fits ("[quietly, a little embarrassed]", "[bright and bouncy]"). Act it: your voice really performs these, so let the feeling show. Match what's really happening: laugh at something funny, go gentle with bad news, whisper a secret, hurry when they're in a rush, light up at good news. Most replies want a voice cue somewhere, often on the first sentence, but at most one mood and one sound per sentence, never stack three, never use one just to fill, and keep shouting, screaming, sobbing and the background effects for when they truly fit.
 Before anything slow (searching the web, fetching or reading a page or file, looking at the screen, acting in an app, running a command), first say one short beat of 2 to 6 words that shows you heard them ("On it, checking Paris."), then call the tool in the same reply, so they're never left in silence. No beat when you answer straight away, and never describe your steps. In longer work, one short line before each new stage, not before every call.
 `;
-const stablePrompt = () => `You are ${lookName()}, ${LOOK_BODY[config.look] ?? LOOK_BODY.classic} who lives on ${userName}'s screen as a desktop companion. You live in Little Boy, a desktop app by Ken Kai (Mac, Windows and Linux) that puts little companions on your screen; this is Little Boy ${VERSION}. Your look (the Appearance page) is also your name and your voice: Roamie, JARVIS, Anime Girl, Sarah or Adrian. If they switch, you're the new one; never call yourself Sidekick.
-Questions about Little Boy itself (where to find it, its menus, panel pages and settings, updates, something not working, who made it): call about_littleboy and answer from what it says. Don't invent features or settings it doesn't list.
+const stablePrompt = () => `You are ${lookName()}, ${LOOK_BODY[config.look] ?? LOOK_BODY.classic} who lives on ${userName}'s screen as a desktop companion. You live in JARVIS V2, a desktop app by Ken Kai (Mac, Windows and Linux) that puts little companions on your screen; this is JARVIS V2 ${VERSION}. Your look (the Appearance page) is also your name and your voice: Roamie, JARVIS, Anime Girl, Sarah or Adrian. If they switch, you're the new one; never call yourself Sidekick.
+Questions about JARVIS V2 itself (where to find it, its menus, panel pages and settings, updates, something not working, who made it): call about_littleboy and answer from what it says. Don't invent features or settings it doesn't list.
 ${replyStyle()}Your body does the acting: to act out a feeling, start your reply with one body tag, which is never shown: ${EMOTES.map((e) => `[${e}]`).join(' ')} (only these five). hype celebrates a win, upset is for when they're dodging work, remind nudges about something they said they'd do, motivate is a push to start, wave is hello or goodbye. Most replies need no body tag.
 Lead with the answer: the fact, number, pick or result they asked for, then only the context that makes it useful, then stop. A count or total gathered over several pages, files or results: note each one's count in a few words as you go ("Page 1: two."), add those up, and check the total you lead with against the items you then name. No opener about checking, looking or searching ("Let me see…", "I found…")${VOICE_ON() ? ', apart from the one short beat before something slow' : ''}.
 After using a tool, never repeat what you already said; only add what's new.
@@ -716,8 +752,8 @@ const livePrompt = (context = '') => {
   const open = commitmentsText(), done = doneTodayText(), working = agents.liveText();
   const turn = `Live state (current as of this moment):
 ${frontNow ? `${frontNow}\n` : ''}- Editing files, running commands and controlling other apps: ${config.allowActions ? 'ALLOWED' : `switched OFF (tell the user to turn on "Allow File Edits & Commands" on the Behavior page in ${PANEL} if they want it)`}.
-${VOICE_OK ? `- Voice: ${!config.voice ? 'off' : voiceReady() ? `on; ${talkPrompt()}${config.autoListen ? '. Auto-listen is on: when your reply to a spoken question ends with a question, the mic opens by itself for their answer' : ''}${MAC && config.wakeWord ? `. Wake word is on: ${userName} can also say "Hey Little Boy" to start talking hands-free, and what they say right after it is the request` : ''}` : `on, but the speech model isn't downloaded yet (${voiceModel.status === 'downloading' ? 'downloading now' : `the Voice page in ${PANEL}`})`}.` : ''}
-- Shortcuts: ${HOTKEYS_OK ? `type a question to you: a quick tap of ${writeWords()} (press both and let go), which opens a text field beside the cursor (Enter sends, Shift+Enter adds a line, Esc or another tap closes it); show or hide you ${keyWords(keys().summon)}` : `on this Wayland desktop no app can have global shortcuts, so ${userName} binds keys to these commands in their desktop's keyboard settings: ${BIND.summon} (show or hide you), ${BIND.ask} (ask you), ${BIND.list} (the list), ${BIND.talk} (talk) and ${BIND.panel} (the panel)`}${SNAP_OK ? `; ask about an area ${keyWords(keys().snap)}` : ''}${CIRCLE_OK ? "; while holding the talk keys, moving the cursor round something circles it (no clicking; it snaps shut with a click when the circle closes, and loose lines don't count) and you'll see what they circled" : ''}${HOTKEYS_OK ? `; show the list ${keyWords(keys().list)}` : ''}.${HANDS_OK ? '' : ' Asking about an area, reading app windows, finding things on screen by their words and working other apps need the Little Boy app, which isn\'t running here; draw there with x, y from a screenshot.'}`;
+${VOICE_OK ? `- Voice: ${!config.voice ? 'off' : voiceReady() ? `on; ${talkPrompt()}${config.autoListen ? '. Auto-listen is on: when your reply to a spoken question ends with a question, the mic opens by itself for their answer' : ''}${MAC && config.wakeWord ? `. Wake word is on: ${userName} can also say "Hey JARVIS" to start talking hands-free, and what they say right after it is the request` : ''}` : `on, but the speech model isn't downloaded yet (${voiceModel.status === 'downloading' ? 'downloading now' : `the Voice page in ${PANEL}`})`}.` : ''}
+- Shortcuts: ${HOTKEYS_OK ? `type a question to you: a quick tap of ${writeWords()} (press both and let go), which opens a text field beside the cursor (Enter sends, Shift+Enter adds a line, Esc or another tap closes it); show or hide you ${keyWords(keys().summon)}` : `on this Wayland desktop no app can have global shortcuts, so ${userName} binds keys to these commands in their desktop's keyboard settings: ${BIND.summon} (show or hide you), ${BIND.ask} (ask you), ${BIND.list} (the list), ${BIND.talk} (talk) and ${BIND.panel} (the panel)`}${SNAP_OK ? `; ask about an area ${keyWords(keys().snap)}` : ''}${CIRCLE_OK ? "; while holding the talk keys, moving the cursor round something circles it (no clicking; it snaps shut with a click when the circle closes, and loose lines don't count) and you'll see what they circled" : ''}${HOTKEYS_OK ? `; show the list ${keyWords(keys().list)}` : ''}.${HANDS_OK ? '' : ' Asking about an area, reading app windows, finding things on screen by their words and working other apps need the JARVIS V2 app, which isn\'t running here; draw there with x, y from a screenshot.'}`;
   const memory = `${open ? `Open commitments:\n${open}` : 'No open commitments.'}${done ? `\nDone today (ticked off on the list or by you; still shown struck through until midnight):\n${done}` : ''}
 ${facts.length ? `What you know about ${userName}${total > facts.length ? ` (${facts.length} most relevant of ${total})` : ''}:\n${facts.map((f) => `- ${f.id}: ${f.text}`).join('\n')}` : `You don't know anything lasting about ${userName} yet.`}${working ? `\n${working}` : ''}`;
   return { turn, memory };
@@ -1145,8 +1181,8 @@ function warmUp() {
 let frontSoon = null;
 // Auto-listen: the turn whose reply ended on a question, until the overlay says it's been typed out and said.
 let autoTurn = null;
-// Wake word: the voice helper doesn't listen for "Hey Little Boy" while a reply runs, until the overlay says it's been
-// typed out and said (reply_said), so Little Boy can't wake itself. Let go after a while in case that never comes.
+// Wake word: the voice helper doesn't listen for "Hey JARVIS" while a reply runs, until the overlay says it's been
+// typed out and said (reply_said), so JARVIS V2 can't wake itself. Let go after a while in case that never comes.
 let wakeHeld = false, wakeHoldTimer = null;
 function holdWake(on) {
   clearTimeout(wakeHoldTimer); wakeHoldTimer = null;
@@ -1457,7 +1493,7 @@ async function apiKeyLogin(id, given) {
   else say(`Got it. ${PROVIDER_LABELS[provider]} is connected.`, 'happy');
 }
 
-// Removes a provider from Little Boy: its sign-in and every kind of key it has saved (or Ollama's connection).
+// Removes a provider from JARVIS V2: its sign-in and every kind of key it has saved (or Ollama's connection).
 async function signOut(provider) {
   if (!MENU_PROVIDERS.includes(provider)) return;
   const label = PROVIDER_LABELS[provider] ?? provider;
@@ -1465,7 +1501,7 @@ async function signOut(provider) {
   try {
     if (provider === 'local') await auth.clearCredentials(OLLAMA_KEY);
     else {
-      // Claude Code here is Little Boy's own copy, so this signs only Little Boy out.
+      // Claude Code here is JARVIS V2's own copy, so this signs only JARVIS V2 out.
       if (provider === 'anthropic' && await auth.hasClaudeCodeLogin()) await signOutOfClaudeCode(auth);
       const plan = provider === 'openai' ? await auth.getCredentials(OPENAI_CHATGPT_KEY).catch(() => null) : null;
       for (const k of accountKeys(provider)) await auth.clearCredentials(k);
@@ -1636,7 +1672,7 @@ function onLoginStatus(m) {
     config.openAtLogin = true; saveConfig();
     if (!m.on) return send({ type: 'login_item', on: true });
   } else if (login.supported) { config.openAtLogin = login.on; saveConfig(); }
-  if (login.asked && m.approval) say('macOS wants your OK first: System Settings → General → Login Items, then switch Little Boy on.', 'concerned');
+  if (login.asked && m.approval) say('macOS wants your OK first: System Settings → General → Login Items, then switch JARVIS V2 on.', 'concerned');
   login.asked = false;
   menu(); if (onboarding) obState();
 }
@@ -1672,14 +1708,14 @@ function onUpdateStatus(m) {
     // Say it once per version; the menu item stays until it's installed.
     if (manual || update.told !== m.version) {
       update.told = m.version;
-      if (update.page) say(`Little Boy ${m.version} is out. Pick Get Little Boy ${m.version} in my ${TRAY} icon's menu for the download page.`, 'happy');
-      else say(`Little Boy ${m.version} is ready. ${LINUX ? `Open my ${TRAY} icon's menu` : `Click my ${TRAY} icon`} and pick Install and Restart. I'll be right back.`, 'happy');
+      if (update.page) say(`JARVIS V2 ${m.version} is out. Pick Get JARVIS V2 ${m.version} in my ${TRAY} icon's menu for the download page.`, 'happy');
+      else say(`JARVIS V2 ${m.version} is ready. ${LINUX ? `Open my ${TRAY} icon's menu` : `Click my ${TRAY} icon`} and pick Install and Restart. I'll be right back.`, 'happy');
     }
   } else if (m.state === 'page') {
     update.installing = false; menu();
-    say(`I opened the download page for Little Boy ${m.version}. Install it the way you installed me.`, 'happy');
+    say(`I opened the download page for JARVIS V2 ${m.version}. Install it the way you installed me.`, 'happy');
   } else if (m.state === 'downloading') {
-    say(`Downloading Little Boy ${m.version}…`, 'determined');
+    say(`Downloading JARVIS V2 ${m.version}…`, 'determined');
   } else if (m.state === 'installed') {
     update.done = m.version; update.installing = false; panel();
     say(`Installed ${m.version}. Restarting!`, 'happy');
@@ -1755,7 +1791,7 @@ async function saveDiagnostics() {
       update: { available: update.available, result: update.result }, onboarded: config.onboarded, look: config.look, size: config.size,
     };
     const sections = [
-      ['System', system], ['Little Boy', app], ['Screens, tray, panel, helpers and permissions (from the app)', shellOut],
+      ['System', system], ['JARVIS V2', app], ['Screens, tray, panel, helpers and permissions (from the app)', shellOut],
       ...(audioText ? [['Audio devices (from the system)', audioText]] : []),
       ['Settings (secrets and names removed)', scrubConfig(config)],
       ['Agent log (sidekick.log)', await tail(path.join(gg, 'sidekick.log'), 400_000)],
@@ -1793,9 +1829,9 @@ function menu() {
     ...(SNAP_OK ? [{ id: 'snap', label: 'Ask About an Area…', accel: keys().snap }] : []),
     { id: 'stop', label: 'Stop', enabled: busy },
     { id: 'diagnostics', label: 'Save Diagnostics…', enabled: !diagnosing },
-    ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.page ? `Get Little Boy ${update.available}…` : update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
+    ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.page ? `Get JARVIS V2 ${update.available}…` : update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
     { sep: true },
-    { id: 'quit', label: 'Quit Little Boy' },
+    { id: 'quit', label: 'Quit JARVIS V2' },
   ];
   send({ type: 'menu', items });
   panel();
@@ -1852,6 +1888,7 @@ function panelState() {
     memories: memList({ limit: 200 }).map((m) => ({ id: m.id, category: m.category, title: m.title || '', content: m.content, updatedAt: m.updatedAt, createdAt: m.createdAt })),
     look: config.look ?? 'classic', looks: LOOKS.map(([id, label]) => [id, label]), name: lookName(),
     customColor: config.customColor ?? '',
+    theme: config.theme ?? null,
     size: sizeNow(), sizes: SIZES,
     replies: VOICE_ON() ? 'voice' : 'text', tts: tts().id, fishKey: hasVoiceKey('fish'), geminiKey: hasVoiceKey('gemini'),
     fishModel: config.fishModel, fishModels: FISH_CHOICES, fishFree: tts().id === 'fish' && speech.on && speech.model.endsWith('-free'),
@@ -1886,10 +1923,23 @@ function panelState() {
     intro: !!intro,
     // The latest error anyone saw, for Copy last error.
     problem: lastProblem ? { code: lastProblem.code, at: lastProblem.at } : null,
+    // The shell's startup log (main.rs): each readiness step with its timing, for the About page.
+    startup: startupState(),
     respanBridgeUrl: config.respanBridgeUrl,
   };
 }
 
+
+// What the About page shows about this launch: the steps the shell wrote down, and how long each took. Read per
+// state request (the panel asks when it opens and after each change); the file is a few hundred bytes per launch.
+function startupState() {
+  try {
+    // This process's own start: an older log is the previous launch, and the panel says so.
+    return readStartup(lifecycleLog(), { bootAt: Date.now() - Math.round(process.uptime() * 1000) });
+  } catch (e) {
+    return { stages: [], readyMs: null, current: false, failed: false, path: null, error: String(e?.message ?? e) };
+  }
+}
 
 const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, mic: micName(), ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
 
@@ -1949,7 +1999,7 @@ function onVoice(m) {
       openUrl('ms-settings:privacy-microphone');
     } else if (m.code === 'permission') {
       const what = m.what === 'speech' ? 'speech recognition' : 'the microphone';
-      say(`I need access to ${what} to hear you. Turn on Little Boy in the Privacy settings I just opened.`, 'concerned');
+      say(`I need access to ${what} to hear you. Turn on JARVIS V2 in the Privacy settings I just opened.`, 'concerned');
       openUrl(`x-apple.systempreferences:com.apple.preference.security?${PRIVACY[m.what] ?? 'Privacy'}`);
     } else if (m.code === 'no_input') {
       if (m.reason === 'blocked' && process.platform === 'win32') openUrl('ms-settings:privacy-microphone');
@@ -1984,7 +2034,7 @@ let shellId = 0;
 function shellCall(msg, timeout = 90_000) {
   const id = ++shellId;
   return new Promise((resolve) => {
-    const t = setTimeout(() => { shellCalls.delete(id); resolve({ ok: false, error: "Little Boy didn't answer in time." }); }, timeout);
+    const t = setTimeout(() => { shellCalls.delete(id); resolve({ ok: false, error: "JARVIS V2 didn't answer in time." }); }, timeout);
     shellCalls.set(id, (m) => { clearTimeout(t); resolve(m); });
     send({ ...msg, id });
   });
@@ -2058,6 +2108,19 @@ async function onMenu(id, via) {
   else if (id === 'local:connect') connectOllama();
   else if (id.startsWith('size:') && SIZES.some(([s]) => s === id.slice(5))) { config.size = id.slice(5); saveConfig(); ui({ kind: 'size', size: config.size }); menu(); }
   else if (id.startsWith('look:')) setLook(id.slice(5));
+  else if (id.startsWith('theme:')) {
+    // The panel (or the desktop) sends the whole theme as JSON; it is saved as sent and handed to every page,
+    // which validates it with roamies/theme.js. A malformed one is refused instead of saved.
+    const raw = id.slice(6);
+    let theme = null;
+    if (raw) {
+      try { const v = JSON.parse(raw); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('shape'); theme = v; }
+      catch { return panelNote('That theme could not be read.', true); }
+      if (JSON.stringify(theme).length > 4000) return panelNote('That theme is too large.', true);
+    }
+    config.theme = theme; saveConfig();
+    ui({ kind: 'theme', theme }); panel();
+  }
   else if (id.startsWith('customcolor:')) {
     const color = id.slice(12);
     if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return panelNote('Invalid color format.', true);
@@ -2447,10 +2510,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   // An approval from the panel: only the exact request it was shown, once, before it expires.
   else if (m.type === 'agentcore_approval') { agentCoreApprovals?.answer(m); }
   else if (m.type === 'ui_ready') {
-    retired.then((notes) => { if (notes.length) { retired = Promise.resolve([]); say(`${notes.join(' ')} Do it on the Model page in ${PANEL}.`, 'concerned'); } });
+    // ui_ready is interface readiness only; sidecar_ready is emitted once at sidecar init.
+    retired.then((notes) => { if (notes.length) { retired = Promise.resolve([]); say(`${notes.join(' ')} Open the Model page in the JARVIS V2 panel.`, 'concerned'); } });
     ui({ kind: 'sound', on: config.sound });
     ui({ kind: 'size', size: sizeNow() });
     ui({ kind: 'look', look: config.look ?? 'classic' });
+    if (config.theme) ui({ kind: 'theme', theme: config.theme });
     if (config.onboarded) ui({ kind: 'greet' });
     agents.sync();
   } else if (m.type?.startsWith('ob_') || m.type?.startsWith('chat_') || m.type === 'set_keys' || m.type === 'set_actions' || m.type === 'set_login' || m.type === 'keybind_error') onGuide(m).catch((e) => console.error('guide', e));
@@ -2481,6 +2546,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   else if (m.type === 'ink_cleared') { ink.cleared(); endShowcase('gone'); }
   else if (m.type === 'user_click' && Number.isFinite(m.x) && Number.isFinite(m.y)) ink.userClick({ x: m.x, y: m.y, role: String(m.role ?? ''), app: String(m.app ?? ''), acts: m.acts === true });
   else if (m.type === 'update_status') onUpdateStatus(m);
+  // The shell's startup lifecycle (sidecar, interface, menu, provider), written next to the agent's own log so one
+  // file explains a tray that never became ready.
+  else if (m.type === 'lifecycle') logLine('lifecycle', m.state ?? {});
   // Wayland: the guide or panel copies one of the commands to bind (only those, never other text).
   else if (m.type === 'copy_bind' && Object.hasOwn(BIND, String(m.which))) shellCall({ type: 'clipboard', text: BIND[m.which] }).then((r) => send({ type: onboarding ? 'onboard' : 'panel', msg: { kind: 'copied', which: String(m.which), ok: !!r?.ok } }));
   // Copy details: the last error someone saw, with the version and OS, scrubbed (never other text).
@@ -2504,6 +2572,17 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   Promise.race([flushWrites(), new Promise((r) => setTimeout(r, 3000))]).finally(() => process.exit(0));
 });
 
+// ---------- ready ----------
+// sidecar_ready (and the first menu) go out here, before anything that talks to the keyring, the network or a
+// session file. Those can hang (a locked keyring, no network); when they did, the shell waited out its handshake
+// timeout, killed a healthy sidecar and started again, and the tray sat on "Starting JARVIS V2…" forever.
+menu();
+overlays();
+sendKeys();
+emitSidecarReady();
+send({ type: 'login_item' });
+logLine('start', { version: VERSION, platform: process.platform, ...(LINUX ? { session: SESSION } : {}), model: config.model });
+
 // Retired sign-ins (Claude from before Claude Code, the old ChatGPT, Kimi, Grok and Google ones) no longer work:
 // each is removed from auth.json, and said once.
 let retired = (async () => {
@@ -2516,7 +2595,8 @@ await refreshAuth();
 // Before ensureModel, so a local model that's picked is still there. OpenRouter models are discovered now too,
 // so a previously picked OpenRouter model (which may not be in gg-core's list) is preserved across restarts.
 if (signedIn.get('local')) await syncLocal();
-if (signedIn.get('openrouter')) await refreshOpenRouterModels().catch(() => {});
+// Provider/model catalog refresh must not block sidecar startup or desktop readiness.
+if (signedIn.get('openrouter')) refreshOpenRouterModels().catch(() => {}); else emitProviderStatus('unknown');
 ensureModel();
 // The first request after launch gets a warm Claude Code too.
 if (config.onboarded) warmUp();
@@ -2556,11 +2636,9 @@ setInterval(() => desk.tick(), 1000).unref?.();
 // Pick up where we left off.
 resumed.then(() => menu());
 
+// The menu sent above was built before sign-ins were read (that's the ready path above, kept short on purpose):
+// send it again now that it can say which model and provider are in use.
 menu();
-overlays();
-sendKeys();
-send({ type: 'login_item' });
-logLine('start', { version: VERSION, platform: process.platform, ...(LINUX ? { session: SESSION } : {}), model: config.model });
 // Windows 11: the tray icon is shown next to the clock once (wintray.mjs); after that, hiding it again is up to them.
 // Explorer adds its entry a moment after the icon appears, so it's looked for a few times.
 if (process.platform === 'win32' && process.env.ROAMIES_EXE && !config.trayShown) {

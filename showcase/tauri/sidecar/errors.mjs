@@ -1,6 +1,6 @@
 // One place that words every error a person sees. explain() turns whatever went wrong into one short line that says
 // what happened and what to do. The raw error never reaches the screen: it goes to the activity log and to Copy
-// details. Causes Little Boy doesn't recognise keep their area's code in the line, so a report can be traced.
+// details. Causes JARVIS V2 doesn't recognise keep their area's code in the line, so a report can be traced.
 import { redact } from './diagnostics.mjs';
 
 /** The longest a line may be. */
@@ -41,7 +41,7 @@ const AREAS = {
       ['E21', /Claude Code isn't installed/i, () => 'Claude Code is missing. Sign in with Claude again.', false, 'model'],
       ['E22', /not logged in|NotLoggedIn|\b401\b|unauthori[sz]ed|invalid_grant|token refresh failed|authentication_error|(?:invalid|incorrect).{0,6}api.?key/i, (c) => `My ${c.who} login stopped working. Sign in again.`, false, 'model'],
       ['E23', /insufficient_quota|credit balance|billing|payment required|\b402\b/i, () => 'This account is out of credit. Top up or switch model.', false, 'model'],
-      ['E24', /usage.?limit|quota|rate.?limit|\b429\b|too many requests/i, () => "I've hit this model's usage limit. Pick another model.", false, 'model'],
+      ['E24', /usage.?limit|quota|rate.?limit|\b429\b|too many requests/i, () => "AI provider is rate limited. Try again later.", false, 'model'],
       ['E25', /context.{0,20}(?:length|window)|prompt is too long|too many tokens|maximum context/i, () => 'This chat got too long. Start a new one.'],
       ['E26', /model_not_found|model.{0,40}(?:not found|does not exist|not available|not supported)/i, () => "That model isn't available. Pick another one.", false, 'model'],
       ['E27', /overloaded|\b5(?:0[0234]|29)\b|service unavailable|bad gateway|internal server error/i, (c) => `${c.who} is having trouble right now. Try again soon.`],
@@ -76,7 +76,7 @@ const AREAS = {
     code: 'E50',
     unknown: () => "I couldn't hear that (E50). Try again.",
     known: [
-      ['E51', /onnx|parakeet|voice model|model (?:file|load|missing|not found)/i, () => "My voice model didn't load. Restart Little Boy.", true],
+      ['E51', /onnx|parakeet|voice model|model (?:file|load|missing|not found)/i, () => "My voice model didn't load. Restart JARVIS V2.", true],
       ['E52', NET, () => 'Speech recognition needs the internet. Try again.'],
     ],
   },
@@ -155,7 +155,7 @@ export function everyLine(ctx = {}) {
 export function detailsText(problem, { version = '0.0.0', os = '' } = {}, scrub = {}) {
   const at = new Date(problem?.at ?? Date.now()).toISOString();
   return redact([
-    `Little Boy error ${problem?.code ?? '?'} (${problem?.area ?? '?'})`,
+    `JARVIS V2 error ${problem?.code ?? '?'} (${problem?.area ?? '?'})`,
     `Version: ${version}`,
     `OS: ${os}`,
     `Time: ${at}`,

@@ -539,7 +539,7 @@ export function checkLink(url) {
 export const isYes = (text) => /^\s*(y|yes|yeah|yep|yup|ok|okay|sure|go|go ahead|do it|run it|allow|confirm)\b/i.test(String(text ?? ''));
 
 
-// ---------- file management (Batch 4 / Little Boy) ----------
+// ---------- file management (Batch 4 / JARVIS V2) ----------
 // User-allowed folders for file tools: the home directory (and everything in it).
 const inHome = (abs, home) => {
   const h = slash(home), rh = realOf(h);

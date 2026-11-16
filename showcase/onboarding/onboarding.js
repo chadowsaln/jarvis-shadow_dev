@@ -1197,8 +1197,8 @@
   // ---------------------------------------------------------------- flow
   // ---------------------------------------------------------------- step 0: look and size
   // Picked here, previewed on the guide right away, saved by the app (Settings has the same choices).
-  const LOOKS = [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']], SIZES = [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']];
-  const LOOK_QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: 'Alright, let\'s do this.', rita: 'Shall we get to work?' }, SIZE_QUIPS = { default: 'Full size!', small: 'Fun size!', cursor: 'Tiny pointer me!' };
+  const LOOKS = [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['hybrid', 'Hybrid'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']], SIZES = [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']];
+  const LOOK_QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', hybrid: 'Reactor core online.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: 'Alright, let\'s do this.', rita: 'Shall we get to work?' }, SIZE_QUIPS = { default: 'Full size!', small: 'Fun size!', cursor: 'Tiny pointer me!' };
   const look = {
     radios(id, list, value, pickIt) {
       $(id).replaceChildren(...list.map(([v, label]) => {

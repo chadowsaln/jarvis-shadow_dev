@@ -1,6 +1,6 @@
 // OpenRouter model discovery and key checks: https://openrouter.ai/api/v1/models
 // Fetches the full OpenRouter model catalog using the account's API key,
-// so Little Boy is never restricted to a hardcoded subset (e.g. Qwen only).
+// so JARVIS V2 is never restricted to a hardcoded subset (e.g. Qwen only).
 // The catalog is also the cheapest way to check a key: one authenticated GET, no paid tokens.
 import { parseOpenRouterCatalog } from '@kenkaiiii/gg-core';
 
@@ -38,6 +38,7 @@ async function fetchCatalog(key, signal) {
     signal,
   });
   if (res.status === 401 || res.status === 403) throw new Error('openrouter_invalid_key');
+  if (res.status === 429) throw Object.assign(new Error('openrouter_rate_limited'), { status: 429 });
   if (!res.ok) throw Object.assign(new Error(`openrouter_${res.status}`), { status: res.status });
   const data = await res.json();
   // gg-core's canonical parser: it drops models without tool calling or a context window, and maps
@@ -83,8 +84,9 @@ export async function validateOpenRouterKey(apiKey, { signal } = {}) {
     return { ok: true, reason: null, status: null, models: models.slice(), skipped };
   } catch (e) {
     const msg = String(e?.message ?? e);
-    const status = e?.status ?? (msg === 'openrouter_invalid_key' ? 401 : null);
+    const status = e?.status ?? (msg === 'openrouter_rate_limited' ? 429 : null);
     if (msg === 'openrouter_invalid_key') return { ok: false, reason: 'key', status: 401, models: [], skipped: 0 };
+    if (msg === 'openrouter_rate_limited') return { ok: false, reason: 'rate_limited', status: 429, models: [], skipped: 0 };
     if (msg.startsWith('openrouter_') && status != null) return { ok: false, reason: 'http', status, models: [], skipped: 0 };
     return { ok: false, reason: 'network', status: null, models: [], skipped: 0 };
   }

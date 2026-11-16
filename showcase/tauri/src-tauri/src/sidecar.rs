@@ -40,18 +40,31 @@ pub(crate) static QUITTING: AtomicBool = AtomicBool::new(false);
 // Bumped per spawn, so a process replaced by a manual restart doesn't trigger an automatic one.
 static GENERATION: AtomicUsize = AtomicUsize::new(0);
 static CRASHES: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
-const BACKOFF_SECS: [u64; 3] = [1, 3, 10];
+static SIDEKAR_READY: AtomicBool = AtomicBool::new(false);
+// Any JSON line at all: a sidecar that is talking is starting, just slower than the handshake window.
+static SIDEKAR_TALKED: AtomicBool = AtomicBool::new(false);
+const BACKOFF_SECS: [u64; 4] = [1, 2, 4, 8];
+const HANDSHAKE_TIMEOUT_MS: u64 = 15_000;
 
 pub(crate) fn spawn_sidecar(app: &AppHandle) {
+    // Prevent running two sidecars for the same generation.
+    if GENERATION.load(Ordering::SeqCst) != 0 && app.state::<Sidecar>().0.lock().unwrap().is_some() {
+        return;
+    }
     let Some(node) = find_node() else {
-        fallback_menu(app, "Little Boy is missing a part; reinstall it");
+        crate::set_lifecycle_error(app, "JARVIS V2 is missing Node.js; install Node.js and restart");
+        fallback_menu(app, "JARVIS V2 is missing Node.js; install Node.js and restart");
         return;
     };
     let Some(script) = sidecar_script(app) else {
-        fallback_menu(app, "Little Boy is missing a part; reinstall it");
+        crate::set_lifecycle_error(app, "JARVIS V2 sidecar is missing; reinstall it");
+        fallback_menu(app, "JARVIS V2 sidecar is missing; reinstall it");
         return;
     };
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    SIDEKAR_READY.store(false, Ordering::SeqCst);
+    SIDEKAR_TALKED.store(false, Ordering::SeqCst);
+    crate::set_lifecycle_starting(app);
     let stderr = log_stdio("sidekick.log");
     let mut cmd = Command::new(node);
     hide_console(&mut cmd);
@@ -74,25 +87,67 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            fallback_menu(app, &format!("Little Boy failed to start: {e}"));
+            crate::set_lifecycle_error(app, &format!("JARVIS V2 sidecar failed to start: {e}"));
+            fallback_menu(app, &format!("JARVIS V2 sidecar failed to start: {e}"));
             return;
         }
     };
     *app.state::<Sidecar>().0.lock().unwrap() = child.stdin.take();
     let stdout = child.stdout.take().expect("piped stdout");
     let pid = child.id();
+
+    // Handshake timeout: sidecar must report ready within the window.
+    let app_timeout = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(HANDSHAKE_TIMEOUT_MS));
+        if QUITTING.load(Ordering::SeqCst) || GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if !SIDEKAR_READY.load(Ordering::SeqCst) {
+            // Talking but not ready: still starting (a slow keyring, say). Killing it here is what turned one slow
+            // start into a restart loop that never reached ready; wait for the process to end on its own instead.
+            if SIDEKAR_TALKED.load(Ordering::SeqCst) {
+                eprintln!("sidecar has not said ready yet (generation {generation}); still starting");
+                return;
+            }
+            crate::set_lifecycle_error(&app_timeout, "Sidecar handshake timeout");
+            eprintln!("sidecar handshake timeout (generation {generation})");
+            // Force restart path by ending this generation's process; reader thread handles backoff/restart.
+            #[cfg(unix)]
+            {
+                let _ = Command::new("/bin/kill").args(["-TERM", &pid.to_string()]).status();
+            }
+            #[cfg(not(unix))]
+            let _ = pid;
+        }
+    });
+
     let app = app.clone();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if QUITTING.load(Ordering::SeqCst) || GENERATION.load(Ordering::SeqCst) != generation {
+                break;
+            }
             let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+            SIDEKAR_TALKED.store(true, Ordering::SeqCst);
+            if msg.get("type").and_then(Value::as_str) == Some("sidecar_ready") {
+                SIDEKAR_READY.store(true, Ordering::SeqCst);
+            }
             let app2 = app.clone();
-            let _ = app.run_on_main_thread(move || handle_sidecar(&app2, msg));
+            let msg_gen = generation;
+            let _ = app.run_on_main_thread(move || {
+                if QUITTING.load(Ordering::SeqCst) || GENERATION.load(Ordering::SeqCst) != msg_gen {
+                    return;
+                }
+                handle_sidecar(&app2, msg);
+            });
         }
         end_orphans(pid, child.wait().ok());
         *app.state::<Sidecar>().0.lock().unwrap() = None;
         if QUITTING.load(Ordering::SeqCst) || GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
+        crate::set_lifecycle_sidecar_down(&app, "Sidecar stopped");
         let attempt = {
             let mut crashes = CRASHES.lock().unwrap();
             crashes.retain(|t| t.elapsed() < Duration::from_secs(300));
@@ -101,7 +156,8 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
         };
         let app2 = app.clone();
         if attempt > BACKOFF_SECS.len() {
-            let _ = app.run_on_main_thread(move || fallback_menu(&app2, "Little Boy stopped"));
+            crate::set_lifecycle_error(&app, "JARVIS V2 sidecar stopped");
+            let _ = app.run_on_main_thread(move || fallback_menu(&app2, "JARVIS V2 sidecar stopped"));
             return;
         }
         thread::sleep(Duration::from_secs(BACKOFF_SECS[attempt - 1]));

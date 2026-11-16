@@ -88,7 +88,7 @@ const CASES = [
   ['sign-in', new Error("Claude sign-in didn't finish. Try again."), 'Claude', "Claude sign-in didn't finish. Try again."],
   ['reply', new Error('401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'), 'Anthropic', 'My Anthropic login stopped working. Sign in again.'],
   ['reply', new Error('Not logged in'), 'OpenAI', 'My OpenAI login stopped working. Sign in again.'],
-  ['reply', new Error('429 Too Many Requests: rate limit reached'), 'OpenAI', "I've hit this model's usage limit. Pick another model."],
+  ['reply', new Error('429 Too Many Requests: rate limit reached'), 'OpenAI', "AI provider is rate limited. Try again later."],
   ['reply', new Error('You exceeded your current quota (insufficient_quota)'), 'OpenAI', 'This account is out of credit. Top up or switch model.'],
   ['reply', new Error('529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'), 'Anthropic', 'Anthropic is having trouble right now. Try again soon.'],
   ['reply', new Error('prompt is too long: 250000 tokens > 200000 maximum'), 'Anthropic', 'This chat got too long. Start a new one.'],
@@ -107,7 +107,7 @@ const CASES = [
   ['update', 'Permission denied (os error 13)', 'x', "I couldn't replace the app. Reinstall it from GitHub."],
   ['update', 'No space left on device (os error 28)', 'x', 'Not enough disk space for the update. Free some up.'],
   ['hearing', 'The network connection was lost.', 'x', 'Speech recognition needs the internet. Try again.'],
-  ['hearing', 'Load model from parakeet.onnx failed', 'x', "My voice model didn't load. Restart Little Boy."],
+  ['hearing', 'Load model from parakeet.onnx failed', 'x', "My voice model didn't load. Restart JARVIS V2."],
   ['screen', new Error('Screen Recording permission is off'), 'x', 'I need Screen Recording permission for that.'],
   ['screen', new Error("Roamies didn't answer in time."), 'x', 'The screenshot took too long. Try again.'],
   ['diagnostics', Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }), 'x', 'Not enough disk space for the diagnostics file.'],
@@ -133,11 +133,11 @@ const who = { home: '/Users/jane', user: 'jane' };
 const leaky = new Error('POST https://api.example.com/v1?api_key=SECRETVALUE failed for jane.doe@example.com with Authorization: Bearer abcdefghijklmnop123456 and sk-ant-REDACTME1234567890abcdef and eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJlLXZhbHVl in /Users/jane/.gg/auth.json {"refresh_token":"rt-0123456789"}');
 const problem = { ...explain('sign-in', leaky, { who: 'ChatGPT' }), area: 'sign-in', at: Date.UTC(2026, 10, 11, 9, 30) };
 const details = detailsText(problem, { version: '0.1.40', os: 'macOS 15.1 (darwin arm64)' }, who);
-assert.match(details, /^Little Boy error E10 \(sign-in\)\nVersion: 0\.1\.40\nOS: macOS 15\.1 \(darwin arm64\)\nTime: 2026-11-11T09:30:00\.000Z\nShown: Sign-in didn't work \(E10\)\. Try again\.\n\n/);
+assert.match(details, /^JARVIS V2 error E10 \(sign-in\)\nVersion: 0\.1\.40\nOS: macOS 15\.1 \(darwin arm64\)\nTime: 2026-11-11T09:30:00\.000Z\nShown: Sign-in didn't work \(E10\)\. Try again\.\n\n/);
 for (const secret of ['SECRETVALUE', 'jane.doe', 'abcdefghijklmnop123456', 'REDACTME', 'eyJhbGciOiJSUzI1NiJ9', '/Users/jane', 'rt-0123456789']) assert.ok(!details.includes(secret), `${secret} is scrubbed`);
 assert.match(details, /POST https:\/\/api\.example\.com\/v1\?api_key=<redacted> failed for <email>/);
 assert.ok(detailsText({ ...problem, raw: 'y'.repeat(20000) }, {}, who).length < 6400, 'details stay a pasteable size');
-assert.match(detailsText(undefined), /^Little Boy error \? \(\?\)/, 'nothing to report still makes text');
+assert.match(detailsText(undefined), /^JARVIS V2 error \? \(\?\)/, 'nothing to report still makes text');
 
 // Regression: prompt() kept readyAgent()'s message in a local `problem`, hiding problem(), so a failed request
 // crashed with "problem is not a function" instead of saying what went wrong.
