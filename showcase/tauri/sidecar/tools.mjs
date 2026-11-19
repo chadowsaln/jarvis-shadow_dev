@@ -1907,10 +1907,29 @@ A drawing stays until the user clears it or the window changes; your next drawin
           return r;
         }
         ui({ kind: 'browser', action: 'search', provider: 'exa', query: `Similar to ${String(url).slice(0, 80)}`, results: r.results, citations: r.citations, count: r.count, at: Date.now() });
-        return r;
+    },
+    },
+    {
+      name: 'pomodoro',
+      description: 'Start a Pomodoro timer for N minutes (default 25). When it ends, announce via voice. Use when user asks for Pomodoro/focus timer.',
+      parameters: z.object({ minutes: z.number().min(1).max(120).optional(), label: z.string().max(80).optional() }),
+      execute: async ({ minutes = 25, label = 'Pomodoro' }) => {
+        const ms = minutes * 60000;
+        setTimeout(() => { try { say(`${label} done.`); } catch {} }, ms);
+        return `Pomodoro started: ${minutes} min. I'll notify when done.`;
       },
     },
-
+    {
+      name: 'morse_practice',
+      description: 'Practice Morse code: converts text to Morse and speaks it. Use when user wants Morse training.',
+      parameters: z.object({ text: z.string().min(1).max(200) }),
+      execute: async ({ text }) => {
+        const map = { a:'.-',b:'-...',c:'-.-.',d:'-..',e:'.',f:'..-.',g:'--.',h:'....',i:'..',j:'.---',k:'-.-',l:'.-..',m:'--',n:'-.',o:'---',p:'.--.',q:'--.-',r:'.-.',s:'...',t:'-',u:'..-',v:'...-',w:'.--',x:'-..-',y:'-.--',z:'--..', '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.' };
+        const morse = text.toLowerCase().split('').map(c => (c === ' ' ? '/' : (map[c] || '?'))).join(' ');
+        try { say(morse.replace(/\./g, 'dit ').replace(/-/g, 'dah ')); } catch {}
+        return morse;
+      },
+    },
   ];
 
   // What's in front, for the live state. Quick and never fails: '' if the helper is missing, slow or denied.
