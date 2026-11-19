@@ -1915,7 +1915,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       parameters: z.object({ minutes: z.number().min(1).max(120).optional(), label: z.string().max(80).optional() }),
       execute: async ({ minutes = 25, label = 'Pomodoro' }) => {
         const ms = minutes * 60000;
-        setTimeout(() => { try { say(`${label} done.`); } catch {} }, ms);
+        setTimeout(() => { try { speak(`${label} done.`); ui({ kind: 'say', text: `${label} done.` }); } catch {} }, ms);
         return `Pomodoro started: ${minutes} min. I'll notify when done.`;
       },
     },
@@ -1926,7 +1926,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       execute: async ({ text }) => {
         const map = { a:'.-',b:'-...',c:'-.-.',d:'-..',e:'.',f:'..-.',g:'--.',h:'....',i:'..',j:'.---',k:'-.-',l:'.-..',m:'--',n:'-.',o:'---',p:'.--.',q:'--.-',r:'.-.',s:'...',t:'-',u:'..-',v:'...-',w:'.--',x:'-..-',y:'-.--',z:'--..', '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.' };
         const morse = text.toLowerCase().split('').map(c => (c === ' ' ? '/' : (map[c] || '?'))).join(' ');
-        try { say(morse.replace(/\./g, 'dit ').replace(/-/g, 'dah ')); } catch {}
+        try { speak(morse.replace(/\./g, 'dit ').replace(/-/g, 'dah ')); ui({ kind: 'say', text: morse }); } catch {}
         return morse;
       },
     },
