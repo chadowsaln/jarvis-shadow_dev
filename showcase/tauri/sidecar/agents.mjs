@@ -517,6 +517,8 @@ export function createAgents({ fork, ui, config, root, userName = 'The user', ru
         inputs: z.array(z.string().max(500)).max(10).optional(), deliver_to: z.string().max(500).optional(), continue: z.string().max(12).optional(),
         returns: z.enum(RETURNS).optional(),
       }),
+      // Starts a separate agent that writes files and runs commands on its own: it asks first, every launch.
+      permission: { level: 'trusted', requiresApproval: true, description: 'Start a background agent' },
       execute: async (args) => {
         const a = await start(args);
         return `Started ${a.id} "${a.title}" (${a.type}, returns ${a.returns}) in ${a.dir}. It shows in the corner of the screen. Write nothing more and call no other tools: the launch is your reply.`;
@@ -525,21 +527,26 @@ export function createAgents({ fork, ui, config, root, userName = 'The user', ru
     {
       name: 'tell_agent', description: 'Give an agent more instructions ("make the logo bigger"). A working one takes them on board; a finished one carries on in the same folder.',
       parameters: z.object({ id: z.string().max(12), message: z.string().min(1).max(2000) }),
+      permission: { level: 'trusted', requiresApproval: true, description: 'Give a running agent new instructions' },
       execute: async ({ id, message }) => steer(id, message),
     },
     {
       name: 'stop_agent', description: 'Stop a working agent. What it made so far stays in its folder.',
       parameters: z.object({ id: z.string().max(12) }),
+      permission: { level: 'trusted', requiresApproval: false, description: 'Stop a working agent' },
       execute: async ({ id }) => { if (!stop(id)) throw new Error(`${id} isn't working.`); return `Stopping ${id}.`; },
     },
     {
       name: 'answer_agent', description: `Answer an agent that is waiting for ${userName}'s yes, when they say it to you ("allow it", "no, don't"). Only with their answer, never on your own.`,
       parameters: z.object({ id: z.string().max(12), allow: z.boolean() }),
+      // Says yes on the person's behalf to another agent's request: asked every time.
+      permission: { level: 'trusted', requiresApproval: true, description: "Answer another agent's permission request" },
       execute: async ({ id, allow }) => { if (!answer(id, allow)) throw new Error(`${id} isn't waiting for an answer.`); return allow ? `Allowed; ${id} carries on.` : `Told ${id} no; it carries on without that.`; },
     },
     {
       name: 'agent_report', description: 'What an agent was asked, what it made and where: its history and file list.',
       parameters: z.object({ id: z.string().max(12) }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Read an agent’s history and files' },
       execute: async ({ id }) => report(id),
     },
   ];

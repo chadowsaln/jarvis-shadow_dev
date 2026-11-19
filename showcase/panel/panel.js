@@ -737,7 +737,21 @@
         note('Theme imported.');
       } } });
     const pct = (n) => `${Math.round(n * 100)}%`;
-    return group('Hybrid entity', 'The 3D orb\u2019s colors, glow, particles and motion. Shown by the Hybrid look above.', null,
+    // Following the work: the renderer asks theme.styleFor(state) each frame, so this is only the switch and the table
+    // it reads; picking a chip goes back to one structure.
+    const names = Object.fromEntries(T.STYLES.map(([id, label]) => [id, label]));
+    const STATES = [['idle', 'Idle'], ['listening', 'Listening'], ['thinking', 'Thinking'], ['tool_execution', 'Running a tool'], ['speaking', 'Speaking'], ['success', 'Success'], ['error', 'Error'], ['offline', 'Offline'], ['sleeping', 'Asleep']];
+    const map = STATES.map(([st, label]) => `${label}: ${names[T.STATE_STYLE?.[st]] ?? '\u2014'}`).join(' \u00b7 ');
+    const auto = t.styleMode === 'auto';
+    return group('Hybrid entity', auto
+      ? 'The orb follows what I am doing, morphing between six structures. Pick a style below to keep one instead.'
+      : 'The 3D orb\u2019s structure, colors, glow, particles and motion. Shown by the Hybrid look above. Each style brings its own palette; the colors below stay editable.', null,
+      // Re-rendered here as well as saved: a switch that only moves after a round trip feels stuck, and the map
+      // below only makes sense while the orb is following the work.
+      toggle('Follow my state', auto ? 'Idle, listening, thinking, tools, speaking: each has its own structure.' : 'Off: the style picked below is the one kept.', auto, () => { themeCommit({ styleMode: auto ? 'fixed' : 'auto' }); render('appearance'); }, 'themestylemode'),
+      picks('Style', T.STYLES.map(([id, name]) => [id, name]), t.style, (id) => { themeCommit({ ...T.withStyle(id), styleMode: 'fixed' }); render('appearance'); }, 'themestyle'),
+      // A paragraph, not a hint inside a row: the row's hint is clamped to two lines and this is the whole table.
+      auto ? el('p', { className: 'by', textContent: `State map \u2014 ${map}` }) : null,
       el('div', { className: 'setting' },
         el('span', {}, 'Preset', el('small', { textContent: 'A starting point; editing a color keeps it only while it still matches.' }))),
       picks('Preset', T.PRESETS.map(([id, name]) => [id, name]), t.preset, (id) => themeCommit(T.fromPreset(id)), 'themepreset'),
@@ -835,6 +849,8 @@
     const ar = state.arabic ?? {};
     const arVoices = ar.voices ?? [];
     const m = state.mic ?? { status: 'idle', inputs: [], pick: '' };
+    // Hearing: the on-device model, or Gemini's transcription (where the voice helper can hand its take over).
+    const h = state.hearing ?? { provider: 'local', cloud: false, models: [] };
     const inputs = m.inputs ?? [];
     const def = inputs.find((x) => x.default);
     const micLabel = (name) => inputs.find((x) => x.name === name)?.description || name;
@@ -850,6 +866,8 @@
           if (x === 'voice' && !hasKey) { ui.key = tts; render(`key-${tts}`); note(`Add a ${T} key to hear me talk.`); return; }
           act(`replies:${x}`);
         }, 'replies'),
+        picks('Speaking speed', [[0.9, 'Slower'], [1, 'Normal'], [1.1, 'Faster']], state.speechRate ?? 1, (x) => act(`speechrate:${x}`), 'speechrate',
+          { 0.9: 'A little slower. Pitch drops with it, like a tape.', 1: "The service's own pace.", 1.1: 'A little quicker. Pitch rises with it.' }),
         el('p', { className: 'sub', textContent: 'Voice provider' }),
         picks('Voice provider', Object.entries(TTS_NAMES), tts, (x) => {
           if (x !== 'voicestudio' && !state[`${x}Key`]) { ui.key = x; note(`Add a ${TTS_NAMES[x]} key to hear me talk.`); } // its key field opens with it
@@ -907,6 +925,84 @@
         v.on && v.ready ? link('Listen', () => act('listen'), { k: 'listen', aria: 'Start listening' }) : null,
         v.download && v.download.status !== 'downloading' ? el('div', { className: 'links' }, link(v.download.status === 'error' ? 'Retry the download' : `Download (${v.download.size})`, () => act('voicedl'), { k: 'voicedl' })) : null,
         v.mac ? toggle('Mute Mac while talking', 'Other sounds go quiet while you talk', v.mute, () => act('mutetalk'), 'mutetalk') : null) : null,
+      // Hearing: what turns a take into words. On-device is the default; Gemini identifies Arabic, English and the
+      // two mixed in one sentence by itself, which the on-device model on Windows and Linux can't read at all.
+      v && v.ready && h.cloud ? group('Hearing', 'What turns your voice into words.', null,
+        picks('Speech to text', [['local', 'On this computer'], ['gemini', 'Gemini']], h.provider, (x) => act(`hearing:${x}`), 'hearing', {
+          local: h.where ? `The speech model on ${h.where}. Nothing leaves your computer.` : 'Nothing leaves your computer.',
+          gemini: 'Google writes down each take, in whatever language you speak. The audio goes to Gemini.',
+        }),
+        h.provider === 'gemini' ? el('div', { className: 'reveal', 'data-anim': 'hearing-gemini' },
+          h.models?.length > 1 ? picks('Hearing model', h.models.map((m2) => [m2.id, m2.name]), h.model, (x) => act(`sttmodel:${x}`), 'sttmodel') : null,
+          el('div', { className: 'setting' },
+            el('span', {}, 'Gemini key', el('small', { textContent: h.shared ? 'Shared with the Model page' : h.key ? `Saved in ${where()}` : 'Needed for Gemini hearing' })),
+            el('span', { className: 'row-btns' },
+              link(ui.key === 'stt' ? 'Cancel' : h.shared ? 'Use another' : h.key ? 'Change' : 'Add', () => { ui.key = ui.key === 'stt' ? null : 'stt'; render('key-stt'); }, { k: 'addkey:stt', aria: h.key ? 'Change the Gemini hearing key' : 'Add a Gemini hearing key' }),
+              h.key && !h.shared && ui.key !== 'stt' ? armed('Remove', 'Confirm', 'sttkey-remove', 'sttkey_remove', 'Remove the Gemini hearing key') : null)),
+          keyForm('stt', 'Gemini', (key) => send({ type: 'panel_sttkey', key })),
+          el('p', { className: 'why wrap', textContent: "Each take's audio goes to Google to be written down, and nowhere else. If Gemini can't be reached, what this computer heard is used instead." }),
+        ) : null,
+        h.provider === 'gemini' && !h.key ? el('p', { className: 'why wrap late', textContent: 'Add a Gemini key, or the key from the Model page is used.' }) : null,
+      ) : null,
+    ];
+  }
+  // Connections: the two optional outside services. Each one is off until it's set up here, and JARVIS V2 works the
+  // same without either; the browser bridge is a third thing with the same vendor name, so it says so.
+  const CONN = {
+    development: 'Anything you test. Traces are labelled with it, nothing more.',
+    production: 'Your everyday use. Traces are labelled with it, nothing more.',
+  };
+  function connectionsPage() {
+    const r = state.respan ?? {};
+    const e = state.exa ?? {};
+    const setRespan = (settings) => send({ type: 'panel_respan', settings });
+    const respanLine = !r.enabled ? 'Off: nothing is recorded and nothing leaves this computer.'
+      : r.ready ? `Connected. ${r.stats?.traces ? `${r.stats.traces} trace${r.stats.traces === 1 ? '' : 's'} so far this session.` : 'Traces are sent as you use JARVIS.'}`
+        : r.status === 'not_configured' ? 'On, but no key is saved yet: nothing is sent until one is.'
+          : r.status === 'failed' ? `Not connected: ${r.reason || 'the SDK could not start'}.`
+            : r.keySaved ? 'Starting…' : 'On, but no key is saved yet.';
+    const exaLine = !e.enabled ? 'Off: the research tools say they are unavailable.'
+      : e.configured ? `Ready${e.source === 'env' ? ' (key from the environment)' : ''}.`
+        : 'No key saved yet: searching with Exa is unavailable.';
+    return [
+      group('Respan tracing', 'What each request did: model, provider, tokens, timing, tool calls and errors. Optional, and never needed for JARVIS to work.', null,
+        toggle('Send traces to Respan', 'Off means nothing is recorded', r.enabled, () => setRespan({ enabled: !r.enabled }), 'respan'),
+        el('div', { className: 'setting' },
+          el('span', {}, 'API key', el('small', { textContent: r.keySaved ? `Saved in ${where()}` : 'Needed to send traces' })),
+          el('span', { className: 'row-btns' },
+            link(ui.key === 'respan' ? 'Cancel' : r.keySaved ? 'Change' : 'Add', () => toggleKey('respan'), { k: 'addkey:respan', aria: r.keySaved ? 'Change the Respan API key' : 'Add a Respan API key' }),
+            r.keySaved && ui.key !== 'respan' ? armed('Remove', 'Confirm', 'respankey-remove', 'respankey_remove', 'Remove the Respan API key') : null)),
+        keyForm('respan', 'Respan', (key) => send({ type: 'panel_respankey', key })),
+        el('p', { className: `why wrap${r.status === 'failed' ? ' late' : ''}`, textContent: respanLine }),
+        r.keySaved ? el('div', { className: 'links' }, link('Test connection', () => send({ type: 'panel_respantest' }), { k: 'respantest', aria: 'Send a test trace to Respan' })) : null,
+        r.keySaved ? group(null, null, null,
+          el('p', { className: 'sub', textContent: 'Environment' }),
+          picks('Environment', [['development', 'Development'], ['production', 'Production']], r.env === 'production' ? 'production' : 'development', (v) => setRespan({ env: v }), 'respanenv', CONN),
+          toggle('Trace model requests', 'Model, provider, tokens, latency and errors', r.traceLlmRequests, () => setRespan({ traceLlm: !r.traceLlmRequests }), 'tracespan-llm'),
+          toggle('Trace tool calls', 'Which tools ran, how long they took and whether they failed', r.traceToolCalls, () => setRespan({ traceTools: !r.traceToolCalls }), 'tracespan-tools'),
+          toggle('Trace agent steps', 'Each planned step and whether it was allowed', r.traceAgentSteps, () => setRespan({ traceSteps: !r.traceAgentSteps }), 'tracespan-steps'),
+          toggle('Include prompts and replies', 'Needed for evaluation. Keys and e-mail addresses are removed first', r.capturePayloads, () => setRespan({ capturePayloads: !r.capturePayloads }), 'tracespan-payloads'),
+          toggle('Include tool arguments and results', 'Off: screen text and file contents stay on this computer', r.captureToolPayloads, () => setRespan({ captureToolPayloads: !r.captureToolPayloads }), 'tracespan-toolpayloads'),
+          toggle('Route model calls through Respan', 'OpenAI and OpenRouter only; your own providers are used otherwise', r.gateway, () => setRespan({ gateway: !r.gateway }), 'respangateway')) : null),
+      group('Respan browser bridge', 'Page reading, not tracing: an optional local bridge that lets JARVIS read authenticated Respan pages from your signed-in browser session.', null,
+        el('div', { className: 'setting' },
+          el('span', {}, 'Bridge URL', el('small', { textContent: 'http://localhost:18791 (default) or custom' })),
+          el('span', { className: 'row-btns' },
+            el('span', { className: 'px field' },
+              el('input', { type: 'url', id: 'respan-bridge-url', value: state.respanBridgeUrl ?? '', placeholder: 'http://localhost:18791', 'aria-label': 'Respan browser bridge URL', autocomplete: 'off', spellcheck: false, 'data-k': 'respan-bridge-url', on: { input: (ev) => { ui.respanBridgeUrl = ev.target.value; } } })),
+            btn(ui.respanBridgeUrl !== undefined ? 'Save' : 'Set', () => { const v = (ui.respanBridgeUrl ?? '').trim(); send({ type: 'panel_respanbridge', url: v }); }, { k: 'respan-bridge-save', aria: (ui.respanBridgeUrl ?? '').trim() ? 'Save Respan bridge URL' : 'Set Respan bridge URL' }),
+            (ui.respanBridgeUrl ?? '').trim() ? link('Clear', () => send({ type: 'panel_respanbridge', url: '' }), { k: 'respan-bridge-clear', aria: 'Clear Respan bridge URL' }) : null))),
+      group('Exa', 'Web search and multi-source research the agent can use instead of opening a browser. Optional: without it the other search providers are used.', null,
+        toggle('Use Exa for search and research', 'Off means the research tools say they are unavailable', e.enabled !== false, () => send({ type: 'panel_exa', settings: { enabled: e.enabled === false } }), 'exa'),
+        el('div', { className: 'setting' },
+          el('span', {}, 'API key', el('small', { textContent: e.keySaved ? `Saved in ${where()}` : 'Needed for search and research' })),
+          el('span', { className: 'row-btns' },
+            link(ui.key === 'exa' ? 'Cancel' : e.keySaved ? 'Change' : 'Add', () => toggleKey('exa'), { k: 'addkey:exa', aria: e.keySaved ? 'Change the Exa API key' : 'Add an Exa API key' }),
+            e.keySaved && ui.key !== 'exa' ? armed('Remove', 'Confirm', 'exakey-remove', 'exakey_remove', 'Remove the Exa API key') : null)),
+        keyForm('exa', 'Exa', (key) => send({ type: 'panel_exakey', key })),
+        el('p', { className: 'why wrap', textContent: exaLine }),
+        el('p', { className: 'why wrap', textContent: 'A key is checked with one real search before it is saved. Research runs are paid per run, so JARVIS asks before starting one.' }),
+        e.configured ? el('div', { className: 'links' }, link('Test connection', () => send({ type: 'panel_exatest' }), { k: 'exatest', aria: 'Run one small Exa search to test the key' })) : null),
     ];
   }
   // Wayland: the commands to bind to keys in the desktop's settings (no app may hold its own shortcuts there).
@@ -939,14 +1035,6 @@
         BIND_ROWS.filter(([k]) => b[k]).map(([k, label]) => el('div', { className: 'setting' },
           el('span', {}, label, ui.bindShown.has(k) ? el('small', { className: 'cmd', textContent: b[k] }) : null),
           link('Copy', () => send({ type: 'copy_bind', which: k }), { k: `bind-${k}`, aria: `Copy the command for ${label.toLowerCase()}` })))) : null,
-      group('Respan browser bridge', 'Optional: local HTTP bridge for reading authenticated Respan content from your signed-in browser session.', null,
-        el('div', { className: 'setting' },
-          el('span', {}, 'Bridge URL', el('small', { textContent: 'http://localhost:18791 (default) or custom' })),
-          el('span', { className: 'row-btns' },
-            el('span', { className: 'px field' },
-              el('input', { type: 'url', id: 'respan-bridge-url', value: state.respanBridgeUrl ?? '', placeholder: 'http://localhost:18791', 'aria-label': 'Respan browser bridge URL', autocomplete: 'off', spellcheck: false, 'data-k': 'respan-bridge-url', on: { input: (e) => { ui.respanBridgeUrl = e.target.value; } } })),
-            btn(ui.respanBridgeUrl !== undefined ? 'Save' : 'Set', () => { const v = (ui.respanBridgeUrl ?? '').trim(); send({ type: 'panel_respanbridge', url: v }); }, { k: 'respan-bridge-save', aria: v ? 'Save Respan bridge URL' : 'Set Respan bridge URL' }),
-            v ? link('Clear', () => send({ type: 'panel_respanbridge', url: '' }), { k: 'respan-bridge-clear', aria: 'Clear Respan bridge URL' }) : null))),
     ];
   }
   // Who made Roamies: Ken, live (he's drawn like the looks but isn't one), and where to find him.
@@ -1044,7 +1132,7 @@
   }
 
   // ---------------------------------------------------------------- render
-  const PANES = { home, memory, model: modelPage, appearance: appearancePage, voice: voicePage, behavior: behaviorPage, about: aboutPage, whatsnew: whatsNewPage };
+  const PANES = { home, memory, model: modelPage, appearance: appearancePage, voice: voicePage, behavior: behaviorPage, connections: connectionsPage, about: aboutPage, whatsnew: whatsNewPage };
   // focusKey: what to focus after (a data-k, or an element id); otherwise whatever had focus keeps it.
   function render(focusKey, animate = false, refocus = true) {
     if (!state) return;
@@ -1356,6 +1444,13 @@
           inputs: [{ name: 'alsa_input.pci-0000_00_1f.3.analog-stereo', description: 'Built-in Audio Analog Stereo', default: false },
             { name: 'bluez_input.41:42:EF:AB:FC:2C', description: 'Pro 10s', default: true }] },
       arabic: { support: true, evidence: 'model', note: "Fish's S2 models list Arabic. How it sounds depends on the voice.", voice: null, voices: null },
+      // ?hearing=gemini: Gemini hears instead of the on-device model; &sttkey: its key is saved.
+      speechRate: 1,
+      hearing: {
+        provider: new URLSearchParams(location.search).get('hearing') === 'gemini' ? 'gemini' : 'local',
+        cloud: true, key: new URLSearchParams(location.search).has('sttkey'), shared: new URLSearchParams(location.search).has('shared'),
+        model: 'gemini-3.5-transcribe', models: [{ id: 'gemini-3.5-transcribe', name: 'Gemini Transcribe' }], where: "this computer's speech model",
+      },
       sound: true, actions: false, login: { on: true },
       update: { available: new URLSearchParams(location.search).has('update') && new URLSearchParams(location.search).get('update') !== 'failed' ? '0.9.1' : null, installing: false, checking: false, result: null },
       intro: false,

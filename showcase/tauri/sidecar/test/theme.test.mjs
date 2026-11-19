@@ -47,6 +47,68 @@ assert.equal(T.fromPreset('nope').preset, null, 'an unknown preset is the defaul
 // Blue must never be baked in: another preset really is a different theme.
 assert.notEqual(T.fromPreset('reactor-red').core, T.fromPreset('jarvis-blue').core);
 
+// ---- the six orb styles ----
+ok(T.STYLES.map(([id]) => id), ['hybrid', 'ring', 'weave', 'torus', 'burst', 'spokes', 'arcs'], 'the styles the settings offer');
+assert.equal(T.DEFAULTS.style, 'hybrid', 'the merged orb is the default');
+for (const [id, label, palette] of T.STYLES) {
+  assert.ok(label, `${id} has a label`);
+  const t = T.withStyle(id, T.fromPreset('jarvis-blue'));
+  assert.equal(t.style, id, `${id} is applied`);
+  if (palette) for (const part of T.PARTS) assert.equal(t[part], palette[part], `${id} brings its ${part}`);
+  ok(T.normalize(t).problems, [], `${id} needs no repairs`);
+}
+{
+  // A style is a structure, not a lock: colors stay editable, and a style with a palette can be given new ones.
+  const red = T.withStyle('burst', T.fromPreset('jarvis-blue'));
+  const edited = T.normalize({ ...red, core: '#ff0000' }).theme;
+  assert.equal(edited.core, '#ff0000');
+  assert.equal(edited.style, 'burst', 'editing a color keeps the structure');
+  assert.equal(T.stylePalette('hybrid'), null, 'Hybrid keeps the colors already set');
+  const kept = T.withStyle('hybrid', red);
+  assert.equal(kept.core, red.core, 'switching back to Hybrid does not repaint it');
+  assert.equal(kept.style, 'hybrid');
+}
+{
+  const { theme, problems } = T.normalize({ style: 'spiral' });
+  ok(problems, ['style: not one of the orb styles']);
+  assert.equal(theme.style, 'hybrid', 'an unknown style falls back to the merged orb');
+}
+// The style survives a trip through the theme file and a restart.
+{
+  const t = T.withStyle('arcs');
+  assert.equal(T.parse(T.serialize(t)).theme.style, 'arcs');
+}
+
+// ---- following the work: a state draws its own structure ----
+const STATES = ['idle', 'listening', 'thinking', 'tool_execution', 'speaking', 'success', 'error', 'offline', 'sleeping'];
+assert.equal(T.DEFAULTS.styleMode, 'auto', 'following the state is what the orb does unless told otherwise');
+assert.equal(JSON.stringify(Object.keys(T.STATE_STYLE)), JSON.stringify(STATES), 'every state has a structure');
+for (const [state, id] of Object.entries(T.STATE_STYLE)) {
+  assert.ok(T.STYLE_IDS.includes(id), `${state} draws a style that exists`);
+}
+{
+  const auto = T.normalize({ styleMode: 'auto', style: 'torus' }).theme;
+  assert.equal(T.styleFor('thinking', auto), T.STATE_STYLE.thinking, 'thinking gets its own structure');
+  assert.equal(T.styleFor('listening', auto), 'weave');
+  assert.equal(T.styleFor('speaking', auto), 'torus');
+  assert.equal(T.styleFor('nope', auto), 'torus', 'a state nobody mapped falls back to the picked style');
+  assert.notEqual(T.STATE_STYLE.error, T.STATE_STYLE.success, 'an error does not look like a success');
+  const fixed = T.normalize({ styleMode: 'fixed', style: 'torus' }).theme;
+  assert.equal(T.styleFor('thinking', fixed), 'torus', 'off means one structure, whatever the state');
+  assert.equal(T.styleFor('thinking', fixed), fixed.style);
+}
+{
+  const { theme, problems } = T.normalize({ styleMode: 'sometimes' });
+  ok(problems, ['styleMode: not fixed or auto']);
+  assert.equal(theme.styleMode, 'auto');
+}
+{
+  const t = T.normalize({ styleMode: 'fixed', style: 'burst' }).theme;
+  const back = T.parse(T.serialize(t)).theme;
+  assert.equal(back.styleMode, 'fixed', 'the mode is saved with the theme');
+  assert.equal(back.style, 'burst');
+}
+
 // ---- validation ----
 {
   const { theme, problems } = T.normalize({ core: 'blue', glowIntensity: 99, particles: 1e9, quality: 'ultra', animate: 'yes' });

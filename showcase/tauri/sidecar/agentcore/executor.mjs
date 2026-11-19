@@ -284,6 +284,16 @@ export function createExecutor({
       log({ type: 'cancel_requested', reason });
       try { currentAbort?.abort(reason); } catch {}
     },
+    /**
+     * Start a new run: clears cancel/pause/revoke so the next request can act again. Approvals already revoked or
+     * consumed in the store stay dead - this reopens the executor, never an approval.
+     */
+    reset(reason = 'new run') {
+      cancelled = false;
+      pauseRequested = false;
+      revoked = false;
+      log({ type: 'executor_reset', reason });
+    },
     revoke,
     async executeStep(plan, step, ctx) { return executeStep(plan, step, ctx); },
     async runReadySteps(plan, ctx, opts) { return runReadySteps(plan, ctx, opts); },

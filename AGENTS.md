@@ -13,6 +13,7 @@ Linux (beta) uses the same voice helper (`voice-win` builds for Linux too: ALSA 
 ```sh
 cd showcase/tauri/sidecar && npm ci     # install sidecar deps
 npm test                                # sidecar tests (reply stream, storage, pointing, safety, voice model download)
+npm run test:hear -- ar.wav en.wav      # live Gemini hearing smoke test (needs GEMINI_API_KEY; --mock runs offline)
 npm run build                           # bundle the sidecar into dist/
 cd .. && ./build.sh dev                 # web files + sidecar + debug `cargo build`
 ./build.sh                              # release bundle for this OS (signs on macOS if a Developer ID is in the keychain)

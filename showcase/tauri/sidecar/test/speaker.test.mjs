@@ -373,3 +373,19 @@ console.log('bundled beats: passed');
   sp.setProvider('nope'); assert.equal(sp.provider, 'fish', 'unknown providers are ignored');
   console.log('speaker provider tests: passed');
 }
+{
+  // Speaking speed: the playback rate the audio is handed over with follows it (44100 × 1.1), so the same audio
+  // plays quicker or slower; the audio itself is untouched.
+  const { sp, out } = setup();
+  sp.setKey('k'); await tick();
+  assert.equal(sp.rate, 1, 'the service\'s own pace by default');
+  assert.equal(sp.playRate, 44100);
+  sp.setRate(1.1);
+  assert.equal(sp.playRate, 48510);
+  const r = sp.start(); r.say('Speed.'); r.end();
+  made[0].onAudio(new Uint8Array([1, 0, 2, 0]));
+  assert.equal(out.at(-1).rate, 48510, 'the pieces go out at the chosen rate');
+  sp.setRate(9); assert.equal(sp.rate, 1.3, 'clamped to the useful range');
+  sp.setRate('quick'); assert.equal(sp.rate, 1, 'anything that is not a number is the normal pace');
+  console.log('speaker rate tests: passed');
+}

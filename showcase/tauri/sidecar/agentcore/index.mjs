@@ -11,10 +11,14 @@ import { guardTools, createAgentCoreRuntime } from './runtime.mjs';
 
 export const AGENT_CORE_FLAG = 'ROAMIES_AGENT_CORE';
 
-/** Feature flag: disabled by default. Enable only with explicit truthy value. */
+/**
+ * Feature flag: ON by default (V2.1). Every tool call goes through the router and executor unless the host turns
+ * the core off with an explicit falsy value ("0", "false", "no", "off"). An unset or empty value means on:
+ * the safe path must be the one everybody is on, not an opt-in.
+ */
 export function isAgentCoreEnabled(env = process.env) {
   const v = String(env?.[AGENT_CORE_FLAG] ?? '').toLowerCase().trim();
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  return !(v === '0' || v === 'false' || v === 'no' || v === 'off');
 }
 
 function defaultSafetyPreflight({ safety = {} } = {}) {

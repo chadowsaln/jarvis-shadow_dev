@@ -8,7 +8,7 @@
 ## Implementation status (as of 2026-11-15)
 
 - **Rebranding/config (partial):** Tauri app identity updated to `JARVIS V2` / `0.1.0` / `ai.jarvis.v2` (`tauri.conf.json`, `Cargo.toml` `jarvis_v2`, sidecar `jarvis-v2-sidekick`, tray/autostart naming adjusted in places). Legacy `Roamies`/`Little Boy`/`ROAMIES_*` names remain across many UI strings, paths, env vars, and docs.
-- **V2.1 Linux Computer Control (partial/WIP):** scaffolding exists in `showcase/tauri/sidecar/computer-control/` and Linux tools were added in `showcase/tauri/sidecar/tools.mjs` (`linux_*`), but end-to-end integration and acceptance criteria (AT-SPI2 runtime, input simulation setup, Portal/OCR flow, verification integration, permissions/approval behavior in live sessions) are **not fully verified**.
+- **V2.1 Linux Computer Control (partial/WIP):** the agent core is now **on by default at `trusted`**, every tool declares permission metadata, and the full tool surface is offered through the router/executor (see `docs/desktop-operator-batch1.md`). The Linux `computer-control/` scaffolding remains **not working**: the AT-SPI adapter calls methods that don't exist (`ChildCount` is a property), `linux_ocr` never OCRs, the portal capture returns no pixels, and input simulation does not check the ydotoold socket. End-to-end acceptance (AT-SPI2, input simulation, Portal/OCR, verification) is still **unverified** and tracked as Batch 3 in `docs/desktop-operator-audit.md`.
 - **V2.2–V2.6:** not implemented.
 - **Packaging/build:** Linux `.deb`/`.rpm` builds succeeded in this environment (with AppImage packaging failing via `linuxdeploy` in attempts); bundled Node runtime was removed from app external bins to avoid `/usr/bin/node` conflicts (system Node.js >=22 required). Updater artifact signing requires `TAURI_SIGNING_PRIVATE_KEY`. This document remains the target architecture/spec; sections below should be read against the actual implementation state.
 
@@ -99,7 +99,7 @@ And verifies the file exists with correct content.
 - Multi-agent — Rejected: premature, single agent with strong tools is sufficient
 
 **Consequences**:
-- `ROAMIES_AGENT_CORE=1` becomes default in V2.1
+- The agent core is the default path since V2.1 (`ROAMIES_AGENT_CORE=0` is the explicit escape hatch)
 - All tools must declare permission metadata
 - `guardTools()` wrapping is mandatory
 

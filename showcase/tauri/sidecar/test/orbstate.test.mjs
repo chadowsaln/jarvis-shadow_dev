@@ -24,8 +24,8 @@ const run = (...events) => {
 const nameOf = (...events) => run(...events).name;
 
 // ---- the states exist, and idle is what nothing does ----
-assert.equal(S.STATES.length, 8);
-for (const n of ['idle', 'listening', 'thinking', 'tool_execution', 'speaking', 'success', 'error', 'offline']) assert.ok(S.isState(n), n);
+assert.equal(S.STATES.length, 9);
+for (const n of ['idle', 'listening', 'thinking', 'tool_execution', 'speaking', 'success', 'error', 'offline', 'sleeping']) assert.ok(S.isState(n), n);
 assert.equal(S.reduce(null, { type: 'nothing' }, 0).name, 'idle', 'no state and no event is idle');
 assert.equal(nameOf({ type: 'unknown' }), 'idle', 'an unknown event changes nothing');
 assert.equal(nameOf({}), 'idle', 'an event with no type changes nothing');
@@ -74,6 +74,25 @@ assert.equal(nameOf({ type: 'listen_end' }), 'idle', 'a cancelled listen that ne
   assert.equal(nameOf({ type: 'provider', status: 'unavailable', offline: true }, { type: 'provider', status: 'ready' }), 'idle');
   assert.equal(nameOf({ type: 'provider', status: 'unavailable' }), 'idle',
     'an unavailable provider that is not "no model at all" is not offline (a rate limit, say)');
+}
+
+// ---- sleeping: the pointer has been still a while; only a quiet entity dozes, and any activity wakes it ----
+{
+  assert.equal(nameOf({ type: 'sleep' }), 'sleeping');
+  assert.equal(nameOf({ type: 'sleep' }, { type: 'wake' }), 'idle', 'a moved pointer wakes it');
+  assert.equal(nameOf({ type: 'sleep' }, { type: 'sleep' }), 'sleeping', 'dozing twice is dozing once');
+  assert.equal(nameOf({ type: 'turn_start' }, { type: 'sleep' }), 'thinking', 'a turn going on never dozes');
+  assert.equal(nameOf({ type: 'listen_start' }, { type: 'sleep' }), 'listening', 'nor does listening');
+  assert.equal(nameOf({ type: 'failure', reason: 'x' }, { type: 'sleep' }), 'error', 'nor an error still showing');
+  assert.equal(nameOf({ type: 'sleep' }, { type: 'clear' }), 'idle', 'and a new chat brings it back');
+  assert.equal(nameOf({ type: 'sleep' }, { type: 'provider', status: 'ready' }), 'sleeping', 'a provider tick is not a wake');
+  assert.equal(S.fromFrame({ sleepy: 1 }), 'sleeping');
+  assert.equal(S.fromFrame({ sleepy: 0.2 }), 'idle', 'a pointer that just moved is not asleep');
+  assert.equal(S.fromFrame({ sleepy: 1, mode: 'listen' }), 'listening', 'listening outranks dozing');
+  // A dozing entity is stronger than a resting one, so an event-driven sleep is not washed out by an idle frame.
+  assert.equal(S.strongest('sleeping', 'idle'), 'sleeping');
+  assert.equal(S.strongest('sleeping', 'listening'), 'listening');
+  assert.equal(S.strongest('sleeping', 'error'), 'error');
 }
 
 // ---- duplicates never re-render ----

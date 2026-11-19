@@ -65,6 +65,9 @@ struct VoiceModel(Mutex<Option<String>>);
 /// The microphone the user picked for listening (None: the system default). The sidecar owns the setting; the shell
 /// hands it to the voice helper and keeps it for the next start.
 struct MicPick(Mutex<Option<String>>);
+/// Whether each take's audio is handed over with its words (for hearing that happens elsewhere: Gemini). The sidecar
+/// owns the setting; the shell hands it to the voice helper and keeps it for the next start.
+struct TakeAudio(AtomicBool);
 /// macOS: the "drag me into the list" panel the hands helper shows under System Settings.
 struct PermGuide(Mutex<Option<Child>>);
 
@@ -1905,6 +1908,14 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
             if let Some(dir) = msg.get("model").and_then(Value::as_str) {
                 *app.state::<VoiceModel>().0.lock().unwrap() = Some(dir.to_owned());
             }
+            // Hand the take over (or stop): hearing that runs elsewhere reads the audio too. A running helper
+            // switches at once; a new one is started with it below.
+            if let Some(audio) = msg.get("audio").and_then(Value::as_bool) {
+                let state = app.state::<TakeAudio>();
+                if state.0.swap(audio, Ordering::Relaxed) != audio {
+                    to_voice(app, &json!({ "cmd": "audio", "on": audio }));
+                }
+            }
             // The Microphone picker ("" is the system default). A running helper switches over at once.
             if let Some(mic) = msg.get("mic").and_then(Value::as_str) {
                 let mic = mic.trim();
@@ -1992,6 +2003,7 @@ fn main() {
         .manage(TalkChord(Mutex::new(vec!["control".into(), "option".into()])))
         .manage(VoiceModel(Mutex::new(None)))
         .manage(MicPick(Mutex::new(None)))
+        .manage(TakeAudio(AtomicBool::new(false)))
         .manage(PermGuide(Mutex::new(None)))
         .manage(Lifecycle::new())
         .invoke_handler(tauri::generate_handler![buddy, ink_wait, set_hot, set_hit_rects, sidecar_send, set_typing, perm_status, perm_request, perm_guide, screen_check, open_settings, onboarding_finish, guide_close, panel_hide, esc_watch, relaunch, focus_guide, guide_aside, drag_window])

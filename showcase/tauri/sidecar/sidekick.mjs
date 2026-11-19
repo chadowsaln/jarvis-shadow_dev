@@ -44,7 +44,10 @@ import { createSpeaker } from './speaker.mjs';
 import { arabicSupport } from './lang.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { GEMINI_CHOICES, GEMINI_DEFAULT_VOICE, GEMINI_LOOK_VOICES, GEMINI_MODEL, GEMINI_VOICES } from './gemini.mjs';
+import { STT_MODEL, STT_MODELS, sttAccount, transcribe } from './stt.mjs';
 import { createSecrets, retryLoad, runInput } from './secrets.mjs';
+import { initRespan, respanStatus, startRequestTrace, endRequestTrace, recordLlmTurn, recordToolCall, recordAgentStep, flushRespan, shutdownRespan, gatewayTarget } from './respan.mjs';
+import { exaSearch, exaStatus, setExaEnabled, setExaKey } from './exa.mjs';
 import { showTrayIcon } from './wintray.mjs';
 import { createActivity } from './activity.mjs';
 import { canCircle, canSnap, hasHands, hasHotkeys, hasVoice, linuxSession, micTrouble, needsVoiceModel, platformLine, samePair, seesPointer, writeChord, writeChords } from './platform.mjs';
@@ -138,9 +141,30 @@ const DEFAULTS = {
   fishModel: FISH_CHOICES[0].id, // Drama 3 (most expressive) or S2.1 Pro (natural pace, cheaper)
   geminiVoices: {}, // look → the Gemini voice it speaks in, where picked in the setup guide or the panel (else GEMINI_LOOK_VOICES)
   geminiModel: GEMINI_MODEL, // Flash Lite (quick, cheaper) or Flash (studio quality)
+  // How fast the voice plays (1: the service's own pace). Tempo and pitch move together, like a tape.
+  speechRate: 1,
+  // Hearing: 'local' (the Mac's own recognizer, or Parakeet on Windows and Linux) or 'gemini' (its transcription
+  // model, which identifies Arabic, English and the two mixed on its own). The on-device one is always the fallback.
+  stt: 'local',
+  sttModel: STT_MODEL,
+  sttKeySaved: false, // the key was saved for hearing (Linux only reads the keyring then, see voiceKey)
   // Respan authenticated browser bridge URL (optional). When set, enables reading authenticated Respan platform
   // content from the user's signed-in browser session via a local extension/bridge (http://localhost:18791).
+  // This is page reading, not tracing: the observability settings below are a separate feature.
   respanBridgeUrl: '',
+  // Respan observability (optional, off until a key is saved). The key lives in the secure store, never in this file.
+  respanEnabled: false,
+  respanEnv: 'development', // development | production, a span attribute only
+  respanKeySaved: false,
+  respanTraceLlm: true,
+  respanTraceTools: true,
+  respanTraceSteps: true,
+  respanCapturePayloads: true, // the LLM turn's own words (scrubbed); tool args/results stay local
+  respanCaptureToolPayloads: false,
+  respanGateway: false, // optional routing through Respan's OpenAI-compatible gateway (off by default)
+  // Exa (optional). The key is saved in the secure store when entered in the panel; EXA_API_KEY still works.
+  exaEnabled: true,
+  exaKeySaved: false,
   // Custom tint color for the avatar (hex string like #7ff3ff). Empty means use the default LED palette.
   customColor: '',
   // The hybrid entity's theme (colors, glow, particles, quality, animation), plain JSON: roamies/theme.js owns the
@@ -232,6 +256,142 @@ async function voiceKey(id) {
   return shared ? [shared, 'shared'] : [null, false];
 }
 const secrets = createSecrets({ hands: process.env.ROAMIES_HANDS || '', dataDir: path.join(path.dirname(CONFIG_PATH), 'sidekick') });
+
+// ---------- Respan observability (optional) ----------
+// The key comes from the secure store (or RESPAN_API_KEY for headless runs). The SDK is only loaded when Respan is
+// on, so a host that never enables it never pays for it; a failure here leaves telemetry off and JARVIS running.
+const RESPAN_KEY = 'respan-key';
+async function respanKey() {
+  try { const saved = await secrets.get(RESPAN_KEY); if (saved) return String(saved).trim(); } catch { /* no keyring: fall through to env */ }
+  return String(process.env.RESPAN_API_KEY || '').trim();
+}
+async function bootRespan() {
+  const key = await respanKey();
+  config.respanKeySaved = !!key;
+  const st = await initRespan({
+    enabled: !!config.respanEnabled,
+    apiKey: key,
+    environment: config.respanEnv,
+    gateway: !!config.respanGateway,
+    traceLlmRequests: config.respanTraceLlm !== false,
+    traceToolCalls: config.respanTraceTools !== false,
+    traceAgentSteps: config.respanTraceSteps !== false,
+    capturePayloads: config.respanCapturePayloads !== false,
+    captureToolPayloads: !!config.respanCaptureToolPayloads,
+    logger: (e) => logLine(e.type, e),
+  }).catch((e) => ({ status: 'failed', reason: String(e?.message || e).slice(0, 200) }));
+  logLine('respan', { status: st.status, gateway: !!config.respanGateway, env: config.respanEnv });
+  return st;
+}
+let respanBootP = bootRespan();
+// Settings from the Connections page: save, then rebuild telemetry with them (the old client is shut down first).
+const RESPAN_SETTINGS = {
+  enabled: ['respanEnabled', 'bool'], env: ['respanEnv', 'env'], gateway: ['respanGateway', 'bool'],
+  traceLlm: ['respanTraceLlm', 'bool'], traceTools: ['respanTraceTools', 'bool'], traceSteps: ['respanTraceSteps', 'bool'],
+  capturePayloads: ['respanCapturePayloads', 'bool'], captureToolPayloads: ['respanCaptureToolPayloads', 'bool'],
+};
+async function applyRespanSettings(patch = {}) {
+  for (const [k, [key, kind]] of Object.entries(RESPAN_SETTINGS)) {
+    if (!(k in patch)) continue;
+    config[key] = kind === 'env' ? (patch[k] === 'production' ? 'production' : 'development') : !!patch[k];
+  }
+  saveConfig();
+  respanBootP = bootRespan();
+  const st = await respanBootP;
+  if (panelOpen) panel();
+  panelNote(st.ready ? 'Respan settings saved.'
+    : st.status === 'off' ? 'Respan is off: nothing is traced.'
+      : `Respan settings saved, but it is not connected: ${st.reason || st.status}.`, !st.ready && st.status !== 'off');
+  return st;
+}
+// The key is only stored once the SDK actually starts with it, so a typo never replaces a working key.
+async function respanKeyLogin(given) {
+  const key = String(given || '').trim().slice(0, 512);
+  if (!key) return panelNote('Paste a Respan API key first.', true);
+  const st = await initRespan({ enabled: true, apiKey: key, environment: config.respanEnv, capturePayloads: false, logger: (e) => logLine(e.type, e) });
+  if (!st.ready) { respanBootP = bootRespan(); return panelNote(`That Respan key didn't work: ${st.reason || 'the SDK could not start'}.`, true); }
+  try { await secrets.set(RESPAN_KEY, key); } catch (e) {
+    respanBootP = bootRespan();
+    const p = problem('key', e, { store: KEY_STORE });
+    return panelNote(p.text, true, p);
+  }
+  config.respanKeySaved = true; config.respanEnabled = true; saveConfig();
+  respanBootP = bootRespan();
+  await respanBootP.catch(() => {});
+  if (panelOpen) panel();
+  panelNote('Respan key saved. Tracing is on.');
+}
+async function removeRespanKey() {
+  try { await secrets.delete(RESPAN_KEY); } catch { return panelNote("I couldn't remove that key. Try again in a moment.", true); }
+  config.respanKeySaved = false; config.respanEnabled = false; saveConfig();
+  respanBootP = bootRespan();
+  if (panelOpen) panel();
+  panelNote('Respan key removed. Tracing is off.');
+}
+// Connection test: start the SDK with the saved key, send one small trace and flush it, then put the real settings
+// back. It proves the key and the network; whether the span appears in the dashboard is Exa's side of the story, so
+// the note says so rather than claiming more.
+async function respanTest() {
+  const key = await respanKey();
+  if (!key) return panelNote('Save a Respan API key first: there is nothing to test yet.', true);
+  const st = await initRespan({ enabled: true, apiKey: key, environment: config.respanEnv, capturePayloads: false, logger: (e) => logLine(e.type, e) });
+  if (!st.ready) { respanBootP = bootRespan(); return panelNote(`Respan could not start: ${st.reason || st.status}.`, true); }
+  const t = startRequestTrace({ sessionId: 'connection-test', turn: null, provider: 'jarvis', model: 'connection-test' });
+  recordLlmTurn(t, { provider: 'jarvis', model: 'connection-test', usage: { inputTokens: 4, outputTokens: 2 }, ms: 1 });
+  recordToolCall(t, { name: 'connection_test', ms: 1 });
+  endRequestTrace(t, { ok: true });
+  const sent = await flushRespan({ timeoutMs: 5000 });
+  respanBootP = bootRespan();
+  await respanBootP.catch(() => {});
+  return panelNote(sent
+    ? 'Test trace sent to Respan. If it does not appear within a minute, check the key and the environment.'
+    : 'The SDK started but the test trace could not be sent (offline?). Nothing about your chats was held back.', !sent);
+}
+
+// ---------- Exa (optional search and research) ----------
+// The key is in the same secure store as the voices. The provider is switched on/off here, never in a tool.
+const EXA_KEY = 'exa-api-key';
+async function exaSavedKey() {
+  try { const s = await secrets.get(EXA_KEY); return s ? String(s).trim() : null; } catch { return null; }
+}
+const exaLoaded = (async () => { setExaEnabled(config.exaEnabled !== false); const k = await exaSavedKey(); setExaKey(k); config.exaKeySaved = !!k; })();
+// What the Connections page shows, with no key in it.
+const exaInfo = () => ({ ...exaStatus({}), keySaved: !!config.exaKeySaved });
+// One tiny real search is the only honest way to check a key; Exa bills it like any other search.
+async function exaCheck(key) {
+  setExaKey(key);
+  const r = await exaSearch({ query: 'JARVIS V2 connection test', numResults: 1 }, {});
+  if (!r.ok) { setExaKey(await exaSavedKey()); return r; }
+  return r;
+}
+async function exaKeyLogin(given) {
+  const key = String(given || '').trim().slice(0, 512);
+  if (!key) return panelNote('Paste an Exa API key first.', true);
+  const r = await exaCheck(key);
+  if (!r.ok) { if (panelOpen) panel(); return panelNote(r.hint || `That Exa key didn't work${r.httpStatus ? ` (HTTP ${r.httpStatus})` : ''}.`, true); }
+  try { await secrets.set(EXA_KEY, key); } catch (e) {
+    const p = problem('key', e, { store: KEY_STORE });
+    return panelNote(p.text, true, p);
+  }
+  setExaKey(key);
+  config.exaKeySaved = true; config.exaEnabled = true; saveConfig();
+  if (panelOpen) panel();
+  panelNote('Exa key saved. Search and research tools are ready.');
+}
+async function removeExaKey() {
+  try { await secrets.delete(EXA_KEY); } catch { return panelNote("I couldn't remove that key. Try again in a moment.", true); }
+  setExaKey(null);
+  config.exaKeySaved = false; saveConfig();
+  if (panelOpen) panel();
+  panelNote('Exa key removed.');
+}
+async function exaTest() {
+  const key = (await exaSavedKey()) || String(process.env.EXA_API_KEY || '').trim();
+  if (!key) return panelNote('Save an Exa API key first: there is nothing to test yet.', true);
+  const r = await exaCheck(key);
+  setExaKey(await exaSavedKey());
+  return panelNote(r.ok ? 'Exa answered: the key works.' : r.hint || `Exa did not answer: ${r.error || r.status}.`, !r.ok);
+}
 let voiceProblemAt = 0;
 // Beats made on this computer (a Gemini voice's, or a Fish voice the app doesn't ship) are kept, so each voice
 // and model's are only made once.
@@ -257,10 +417,64 @@ const speech = createSpeaker({
 // The Gemini voice speaks with the AI's Gemini key unless it has one of its own: after that key is added, changed or
 // removed on the Model page, the voice follows.
 async function syncGeminiVoiceKey() {
+  // Hearing follows the same key when it has none of its own.
+  if (stt.kind !== 'own') await sttKey().then(([k, kind]) => { stt.key = k; stt.kind = kind; }).catch(() => {});
   if (ttsKeys.gemini === 'own') return;
   if (tts().id === 'gemini') await useTts('gemini');
   else ttsKeys.gemini = (await voiceKey('gemini').catch(() => [null, false]))[1];
 }
+// ---------- hearing: which model turns the take into words ----------
+// The on-device recognizer is the default and the fallback (Apple Speech on macOS, Parakeet on Windows and Linux).
+// Gemini can take the take's own audio instead: its transcription model identifies the language itself, which is
+// what makes Arabic, English and the two mixed in one sentence work on Windows and Linux, where the on-device model
+// is English-only. Only the helper's own take is sent, only while this is on, and only to Google.
+const STT_KEY = 'gemini-stt';
+// The helpers that can hand their take over: the Rust one (Windows, Linux) records it and says so. The Mac's
+// recognizer does Arabic through the Mac's own languages and never hands its audio back, so it stays local.
+const CLOUD_AUDIO = NEEDS_MODEL;
+const stt = { key: null, kind: false }; // kind: 'own' (saved for hearing), 'shared' (the AI's Gemini key) or false
+let hearingNow = null, sttToldAt = 0;   // the take being transcribed, and when hearing last complained
+async function sttKey() {
+  const own = LINUX && !config.sttKeySaved ? null : await secrets.get(STT_KEY).catch(() => null);
+  if (own) return [own, 'own'];
+  const shared = await brainGeminiKey();
+  return shared ? [shared, 'shared'] : [null, false];
+}
+/** Which model hears: 'local' or 'gemini' (and Gemini only where the helper can hand its audio over). */
+const hearing = () => (CLOUD_AUDIO && config.stt === 'gemini' ? 'gemini' : 'local');
+const cloudHearing = () => hearing() === 'gemini' && !!stt.key;
+// Point hearing at a provider. A service with no key stays on the on-device one, so talking never stops working.
+async function useHearing(id) {
+  if (id !== 'gemini' || !CLOUD_AUDIO) { config.stt = 'local'; saveConfig(); voiceConfig(); menu(); panel(); return; }
+  [stt.key, stt.kind] = await sttKey().catch(() => [null, false]);
+  config.stt = stt.key ? 'gemini' : 'local';
+  saveConfig(); voiceConfig(); menu(); panel();
+}
+// A key for hearing on its own (else the AI's Gemini key is used, as the Gemini voice does).
+async function sttKeyLogin({ given = null, note = null } = {}) {
+  const say = note ? (text, mood, p) => { sayOut(text, mood); note(text, mood === 'concerned', p); } : sayOut;
+  const key = (given ?? (await ask({ prompt: 'Paste your Gemini API key', placeholder: 'Gemini API key', mask: true })))?.trim();
+  if (!key) return note?.('Paste your Gemini key first.', true);
+  if (!/^[\x21-\x7e]{8,512}$/.test(key)) return say("That doesn't look like a Gemini key. Copy it again from aistudio.google.com.", 'concerned');
+  const a = await sttAccount(key);
+  if (!a.ok) return say(a.reason === 'key' ? "That key didn't work. Copy it again from aistudio.google.com and retry." : "I couldn't reach Gemini. Check the connection and try again.", 'concerned');
+  try { await secrets.set(STT_KEY, key); config.sttKeySaved = true; } catch (e) {
+    const p = problem('key', e, { store: KEY_STORE });
+    return say(p.text, 'concerned', p);
+  }
+  stt.key = key; stt.kind = 'own';
+  config.stt = 'gemini'; saveConfig(); voiceConfig(); menu(); panel(); if (onboarding) obState();
+  say('I hear you through Gemini now, in Arabic or English. The take\'s audio goes to Google to be written down.', 'happy');
+}
+async function removeSttKey() {
+  try { await secrets.delete(STT_KEY); } catch { return say("I couldn't remove that key. Try again in a moment.", 'concerned'); }
+  config.sttKeySaved = false;
+  [stt.key, stt.kind] = await sttKey().catch(() => [null, false]);
+  if (!stt.key) config.stt = 'local';
+  saveConfig(); voiceConfig(); menu(); panel();
+  say(stt.key ? "Hearing key removed. I'll use the Gemini key from the Model page." : 'Hearing key removed. I hear you with this computer again.', 'happy');
+}
+
 // The voices picked for each language with a service ({} when none were).
 const langVoicesFor = (id) => (config.voiceLangs && typeof config.voiceLangs[id] === 'object' && config.voiceLangs[id]) || {};
 // Point the speaker at a service, with its voice and model. Its key is set after (a change of service clears it).
@@ -279,6 +493,7 @@ async function useTts(id, key) {
   if (speech.provider === id) speech.setKey(key);
 }
 aimSpeaker(tts().id);
+speech.setRate(config.speechRate ?? 1);
 
 // ---------- microphone (which one listens) ----------
 // The list comes from the shell's voice helper (`--devices`: PipeWire's sources on Linux, the system's mics on
@@ -574,6 +789,8 @@ tools.push({
   name: 'about_littleboy',
   description: 'How JARVIS V2 works: where it lives, its menus, the panel and each settings page, updates, what to do when something is not working, and who made it. Call it before answering a question about the app.',
   parameters: z.object({}),
+  // Reads the app's own manual: no side effects, nothing to approve.
+  permission: { level: 'observe', requiresApproval: false, description: "Read the app's manual" },
   execute: async () => aboutLittleBoy({ name: lookName(), looks: LOOKS.map(([, label]) => label), mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK }),
 });
 // Background agents (agents.mjs): each runs in its own process on the model picked when it starts.
@@ -589,6 +806,16 @@ const agents = createAgents({
 });
 tools.push(...agents.tools);
 let requestNo = 0; // the request being answered (nextTurn), for holdAfterLaunch
+// Respan tracing for the request in flight (null when telemetry is off or not ready).
+let currentTrace = null;
+const traceToolStart = new Map();
+function logAgentCore(e) {
+  logLine(`agentcore_${e.type}`, e);
+  // The executor is the authority on whether a step ran: its word is what observability should show.
+  if (['step_completed', 'step_failed', 'step_denied', 'step_cancelled'].includes(e.type)) {
+    recordAgentStep(currentTrace, { title: e.tool || 'step', status: e.type.slice(5) });
+  }
+}
 holdAfterLaunch(tools, () => requestNo);
 
 // ---------- agent core (LITTLEBOY_AGENT_CORE) ----------
@@ -598,25 +825,33 @@ holdAfterLaunch(tools, () => requestNo);
 // to that exact action. The model cannot reach a tool's execute() any other way. The safety hook itself lives in
 // agentcore/preflight.mjs, where it is tested.
 let agentCoreApprovals = null, agentCore = null;
-if (isAgentCoreEnabled()) {
-  agentCoreApprovals = createApprovalChannel({
+// Put the current tool list behind the agent core's router and executor, in place. Called at startup and again
+// whenever the list is rebuilt (the Respan bridge setting), so a rebuilt list can never be the unwrapped one.
+function armAgentCore() {
+  agentCoreApprovals ||= createApprovalChannel({
     send,
     showPanel: () => send({ type: 'panel_show' }),
     ttlMs: 60_000,
     logger: (e) => logLine(`agentcore_${e.type}`, e),
   });
-  agentCore = createAgentCoreRuntime({
+  const rt = createAgentCoreRuntime({
     tools,
     approvalChannel: agentCoreApprovals,
     safety: { preflight: agentCorePreflight },
-    logger: (e) => logLine(`agentcore_${e.type}`, e),
+    logger: logAgentCore,
   });
   // The chat gets only what may run: the tools that declare what they do. Nothing else is offered, and every offer
   // still goes through the router, the safety checks and (when the policy asks) the panel.
-  tools.splice(0, tools.length, ...agentCore.tools);
+  tools.splice(0, tools.length, ...rt.tools);
+  return rt;
+}
+if (isAgentCoreEnabled()) {
+  agentCore = armAgentCore();
   console.error(`[agentcore] on: level ${agentCore.grantedLevel ?? 'none'}, tools ${tools.map((t) => t.name).join(', ') || 'none'}`
     + ` (${agentCore.skipped} without permission metadata left out${agentCore.asked.length ? `, asking first for ${agentCore.asked.join(', ')}` : ''})`
     + `${agentCore.levelError ? ` ${agentCore.levelError}` : ''}`);
+} else {
+  console.error('[agentcore] off (ROAMIES_AGENT_CORE=0): tools run without the router');
 }
 
 // The step trail: plan_steps names the parts; a part marked "now" ticks off when the other tool calls of that
@@ -899,6 +1134,9 @@ function makeAgent(cc) {
     transportSessionId: session?.id ? `roamies-${session.id}` : undefined, // OpenCode Go routes and caches by it
     // No native search: the web_search tool works on every provider, and its results don't fill the context.
     resolveCredentials: async () => {
+      // Optional gateway routing: only when the person turned it on, and only for the providers Respan serves.
+      const gw = gatewayTarget({ provider: config.provider });
+      if (gw) return { apiKey: gw.apiKey };
       const c = await credsFor();
       return { apiKey: c.accessToken, ...(c.accountId !== undefined ? { accountId: c.accountId } : {}) };
     },
@@ -982,7 +1220,15 @@ function onQuizDone(part, picks) {
 }
 const takeQuizNote = () => { const q = quizDone; quizDone = null; return q && Date.now() - q.at < 30 * 60_000 ? q.note : null; };
 // Every way a request is cancelled is logged with what did it, so a reply that never came can be traced.
-function interruptQuietly(by) { if (busy) { quiet = true; logLine('stopped', { by }); controller?.abort(); } }
+function interruptQuietly(by) {
+  if (!busy) return;
+  quiet = true;
+  logLine('stopped', { by });
+  // Stop means stop at the execution layer too: the running tool is aborted, and any further call this run is denied.
+  agentCore?.stop(by);
+  agentCoreApprovals?.denyAll('the request was stopped');
+  controller?.abort();
+}
 
 // The live block is per-call state, not conversation: never save it.
 const withoutLive = (msgs) => msgs.map((m) => {
@@ -1167,7 +1413,13 @@ async function readyAgent() {
   try { cc = await claudeCodeRoute(); } catch (e) { return aloud(problem('reply', e, { who: PROVIDER_LABELS[config.provider] })); }
   if (agent && agentRoute !== (cc ? 'claude-code' : 'api')) agent = null; // signed in or out of Claude meanwhile
   if (!agent) {
-    try { const c = await credsFor(); credsBaseUrl = c.baseUrl; credsAccountId = c.accountId; } catch { credsBaseUrl = undefined; credsAccountId = undefined; }
+    try {
+      const c = await credsFor(); credsBaseUrl = c.baseUrl; credsAccountId = c.accountId;
+      // Gateway mode sends these calls to Respan instead (the key comes from resolveCredentials); the provider's own
+      // endpoint stays the fallback, so turning telemetry off always restores direct calls.
+      const gw = gatewayTarget({ provider: config.provider });
+      if (gw) { credsBaseUrl = gw.baseUrl; credsAccountId = undefined; logLine('respan_gateway', { provider: config.provider }); }
+    } catch { credsBaseUrl = undefined; credsAccountId = undefined; }
     makeAgent(cc);
   }
   return null;
@@ -1191,7 +1443,7 @@ function holdWake(on) {
   wakeHeld = on;
   if (MAC) send({ type: 'wake_hold', on });
 }
-const autoListenOn = () => VOICE_OK && !!config.voice && !!config.autoListen && voiceReady() && !intro;
+const autoListenOn = () => VOICE_OK && !!config.voice && !!config.autoListen && canHear() && !intro;
 // The agents' news waits for a quiet moment (desk.tick): nothing running or queued, not listening, the last reply
 // typed out and said (reply_said, or 90 s), no field open, and none of that changing for 1.5 s.
 let voiceBusy = false, saidPending = false, saidCap = null;
@@ -1215,6 +1467,8 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
   menu();
   controller = new AbortController();
   agent.setSignal(controller.signal);
+  // A new request reopens the executor: the last run's stop/revoke was for that run, not this one.
+  agentCore?.reset('new request');
   // "Send an agent to…": the agents' corner hatches one instead of the thought cloud while the brief is written.
   const agentish = !intro && !news && wantsAgent(text);
   turnImage = image;
@@ -1254,6 +1508,10 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
     const turn = nextTurn();
     requestNo = turn;
     logLine('request', { turn, model: config.model, chars: text.length, image: !!image, session: session?.id });
+    // One trace per request: conversation id and turn id travel with every span it produces.
+    await respanBootP.catch(() => {});
+    await exaLoaded.catch(() => {});
+    currentTrace = startRequestTrace({ sessionId: session?.id ?? null, turn, provider: config.provider, model: config.model });
     const use = { t: Date.now(), model: config.model, calls: 0, tools: 0, in: 0, cacheRead: 0, cacheWrite: 0, out: 0 };
     const soon = frontSoon; frontSoon = null;
     frontNow = soon && Date.now() - soon.at < 8000 ? await soon.p : await whereNow();
@@ -1302,6 +1560,7 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
         const seen = (u.inputTokens ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
         if (seen) lastInput = { session: session?.id, tokens: seen, measured: true };
         use.calls++; use.in += u.inputTokens ?? 0; use.cacheRead += u.cacheRead ?? 0; use.cacheWrite += u.cacheWrite ?? 0; use.out += u.outputTokens ?? 0;
+        recordLlmTurn(currentTrace, { provider: config.provider, model: config.model, usage: u, ms: Number.isFinite(e.durationMs) ? e.durationMs : null, input: text, output: lastReply || '' });
         if (process.env.ROAMIES_USAGE) console.error(`[usage] in=${u.inputTokens ?? '?'} cacheRead=${u.cacheRead ?? 0} cacheWrite=${u.cacheWrite ?? 0} out=${u.outputTokens ?? '?'}`);
       }
       else if (e.type === 'thinking_delta') ui({ kind: 'agent', e: { type: 'thinking', text: e.text } });
@@ -1320,6 +1579,7 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
         if (SLOW_TOOLS.has(e.name)) voice?.beat(); // nothing said yet: "One sec." so it's never silent
         use.tools++;
         logLine('tool', { turn, id: e.toolCallId, name: e.name, args: redactArgs(e.name, e.args ?? {}) });
+        if (currentTrace) traceToolStart.set(e.toolCallId, { at: Date.now(), name: e.name, args: e.args ?? {} });
         toolNames.set(e.toolCallId, e.name);
         if (process.env.ROAMIES_USAGE) { toolT.set(e.toolCallId, Date.now()); console.error(`[tool] ${e.name} ${JSON.stringify(e.args ?? {}).slice(0, 160)}`); }
         ui({ kind: 'agent', e: { type: 'tool', id: e.toolCallId, anim: anim(e.name, e.args ?? {}) } });
@@ -1327,6 +1587,7 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
       } else if (e.type === 'tool_call_end') {
         if (toolNames.get(e.toolCallId) === 'send_agent') { if (e.isError) release(); else { launched = true; hold = null; hatching = false; } }
         activity.end(e.toolCallId, e.isError); panel();
+        { const st = traceToolStart.get(e.toolCallId); if (st) { recordToolCall(currentTrace, { name: st.name, args: st.args, result: e.isError ? null : e.result, ms: e.durationMs ?? (Date.now() - st.at), isError: !!e.isError, reason: e.isError ? String(typeof e.result === 'string' ? e.result : '') : null }); traceToolStart.delete(e.toolCallId); } }
         logLine(e.isError ? 'tool_error' : 'tool_done', { turn, id: e.toolCallId, ms: e.durationMs, result: String(e.result ?? '').replace(/\s+/g, ' ').slice(0, e.isError ? 1000 : 400) });
         if (e.isError && toolNames.get(e.toolCallId) !== 'plan_steps') trail.error(typeof e.result === 'string' ? e.result : '');
         if (process.env.ROAMIES_USAGE) console.error(`[tool_end] ${e.isError ? 'ERROR' : 'ok'} ${Date.now() - (toolT.get(e.toolCallId) ?? Date.now())}ms ${String(typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')).replace(/\s+/g, ' ').slice(0, 160)}`);
@@ -1353,8 +1614,12 @@ async function prompt(text, image = null, note = '', byVoice = false, news = nul
     ui({ kind: 'agent', e: stalled ? { type: 'error', message: stallMessage(), speech: voice?.id ?? null } : { type: 'done', speech: voice?.id ?? null, ...(listen ? { listen } : {}) } });
     logUsage({ ...use, ms: Date.now() - use.t });
     logLine('request_done', { turn, ms: Date.now() - use.t, calls: use.calls, tools: use.tools, in: use.in, cacheRead: use.cacheRead, cacheWrite: use.cacheWrite, out: use.out });
+    endRequestTrace(currentTrace, { ok: !controller.signal.aborted, error: controller.signal.aborted ? 'the request was stopped' : null });
+    currentTrace = null;
   } catch (err) {
     lastFailed = true;
+    endRequestTrace(currentTrace, { ok: false, error: String(err?.message || err) });
+    currentTrace = null;
     hatchOff();
     if (controller.signal.aborted) voice?.abort(); else { spoken?.flush(); voice?.end(); }
     if (controller.signal.aborted && quiet) ui({ kind: 'agent', e: { type: 'done' } });
@@ -1894,6 +2159,7 @@ function panelState() {
     fishModel: config.fishModel, fishModels: FISH_CHOICES, fishFree: tts().id === 'fish' && speech.on && speech.model.endsWith('-free'),
     geminiVoice: geminiVoice(), geminiVoices: GEMINI_VOICES, geminiShared: ttsKeys.gemini === 'shared',
     geminiModel: config.geminiModel, geminiModels: GEMINI_CHOICES,
+    speechRate: speech.rate,
     studio: tts().local ? studioState() : null,
     // Which microphone listens: the picker's list, the pick, and which device is really recording (and whether a pick
     // fell back to the default because it isn't connected).
@@ -1911,11 +2177,18 @@ function panelState() {
         voices: id === 'gemini' ? GEMINI_VOICES : id === 'voicestudio' ? (speech.local?.voices ?? []) : null,
       };
     })(),
+    // Hearing: the on-device recognizer or Gemini, the key it uses (its own, or the AI's Gemini key), and whether
+    // the helper on this machine can hand its take over at all.
+    hearing: {
+      provider: hearing(), cloud: CLOUD_AUDIO, on: cloudHearing(), key: !!stt.key, shared: stt.kind === 'shared', kind: stt.kind,
+      model: config.sttModel, models: STT_MODELS, where: MAC ? 'this Mac' : 'this computer',
+    },
     voice: VOICE_OK ? {
-      on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, talkKey: keys().talkKey, ready: voiceReady(), mac: MAC, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, wakeWord: !!config.wakeWord,
+      on: !!config.voice, keys: HOTKEYS_OK ? talkSymbols() : null, talkKey: keys().talkKey, ready: canHear(), mac: MAC, mute: config.muteWhileTalking !== false, autoListen: !!config.autoListen, wakeWord: !!config.wakeWord,
       // Whether the key works right now, and the words the panel shows for it (talkkey.mjs).
       locked: talk.locked, hint: talk.hint, summary: talk.summary, holdHint: talk.holdHint,
-      download: NEEDS_MODEL && config.voice && !voiceReady() ? { status: voiceModel.status, pct: voiceModel.total ? Math.floor((voiceModel.done / voiceModel.total) * 100) : 0, size: sizeLabel() } : null,
+      // Offered only while it's what hearing needs: with Gemini hearing on, the model is optional.
+      download: NEEDS_MODEL && config.voice && !voiceReady() && !cloudHearing() ? { status: voiceModel.status, pct: voiceModel.total ? Math.floor((voiceModel.done / voiceModel.total) * 100) : 0, size: sizeLabel() } : null,
     } : null,
     sound: !!config.sound, actions: !!config.allowActions,
     login: login.supported ? { on: login.on } : null,
@@ -1926,6 +2199,9 @@ function panelState() {
     // The shell's startup log (main.rs): each readiness step with its timing, for the About page.
     startup: startupState(),
     respanBridgeUrl: config.respanBridgeUrl,
+    // Connections: the two optional services, each with its own switch and key state (never the key itself).
+    respan: { ...respanStatus(), enabled: !!config.respanEnabled, keySaved: !!config.respanKeySaved, env: config.respanEnv, gateway: !!config.respanGateway },
+    exa: exaInfo(),
   };
 }
 
@@ -1941,7 +2217,10 @@ function startupState() {
   }
 }
 
-const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && voiceReady(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, mic: micName(), ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
+// Listening needs a way to turn a take into words: the on-device model, or Gemini hearing (which needs no model at
+// all: the helper is only the recorder then).
+const canHear = () => voiceReady() || cloudHearing();
+const voiceConfig = () => send({ type: 'voice_config', enabled: VOICE_OK && config.voice && canHear(), mute: config.muteWhileTalking !== false, sound: !!config.sound, wake: MAC && !!config.wakeWord, mic: micName(), audio: cloudHearing(), ...(NEEDS_MODEL ? { model: MODEL_DIR } : {}) });
 
 // Progress goes to the setup guide often and to the tray menu now and then.
 let modelShownAt = 0, modelMenuAt = 0;
@@ -1954,7 +2233,7 @@ function modelUpdate(force) {
   if (force || now - modelMenuAt > 3000) { modelMenuAt = now; menu(); }
 }
 async function getVoiceModel() {
-  if (!NEEDS_MODEL || voiceReady() || voiceModel.status === 'downloading') return;
+  if (!NEEDS_MODEL || voiceReady() || cloudHearing() || voiceModel.status === 'downloading') return;
   Object.assign(voiceModel, { status: 'downloading', error: null });
   logLine('voice_model', { phase: 'start', dir: MODEL_DIR });
   modelUpdate(true);
@@ -1983,12 +2262,20 @@ const startVoiceDownload = () => {
 const PRIVACY = { microphone: 'Privacy_Microphone', speech: 'Privacy_SpeechRecognition' };
 function onVoice(m) {
   if (m.type === 'voice_state') { voiceBusy = m.state === 'listening' || m.state === 'processing'; stir(); }
-  if (m.type === 'voice_state' && m.state === 'listening') { interruptQuietly('listening'); speech.stop(); warmUp(); } // talking over it stops it
+  if (m.type === 'voice_state' && m.state === 'listening') {
+    // A new take: whatever the last one was still having transcribed is no longer what's being said.
+    if (hearingNow) { hearingNow.controller.abort(); hearingNow = null; }
+    interruptQuietly('listening'); speech.stop(); warmUp();
+  } // talking over it stops it
   else if (m.type === 'voice_state' && m.state === 'processing') frontSoon = { at: Date.now(), p: whereNow() };
-  else if (m.type === 'voice' && m.text?.trim()) {
+  else if (m.type === 'voice' && (m.text?.trim() || m.audio)) {
     // Key release to the words arriving (mic tail and the recogniser finishing), to see what that step costs.
-    if (typeof m.ms === 'number') logLine('voice_final', { ms: m.ms, via: String(m.via ?? ''), chars: m.text.trim().length });
-    onSpoken(m.text.trim(), m.area);
+    if (typeof m.ms === 'number') logLine('voice_final', { ms: m.ms, via: String(m.via ?? ''), chars: String(m.text ?? '').trim().length });
+    const text = String(m.text ?? '').trim();
+    // The take's own audio, when Gemini hears: its transcript replaces the on-device one, and stands in for it
+    // where the on-device model can't read the language at all (Arabic on Windows and Linux).
+    if (m.audio && cloudHearing()) return void hearInCloud(m, text);
+    if (text) onSpoken(text, m.area);
   }
   else if (m.type === 'voice_state' && m.state === 'idle' && snap?.waitingVoice) snap.waitingVoice = false;
   else if (m.type === 'voice_error') {
@@ -2015,6 +2302,30 @@ function onVoice(m) {
   }
 }
 
+// One take, transcribed by Gemini. The on-device words stand if it can't: a cloud service being down never costs
+// someone their question, and the reason is said once rather than on every take.
+async function hearInCloud(m, local) {
+  if (hearingNow) hearingNow.controller.abort();
+  const controller = new AbortController();
+  const mine = (hearingNow = { controller, at: Date.now() });
+  const r = await transcribe(m.audio, { key: stt.key, model: config.sttModel, signal: controller.signal, log: (k, v) => logLine(k, v) })
+    .catch((e) => ({ ok: false, reason: 'error', message: e.message }));
+  if (hearingNow !== mine) return; // a newer take took over: its words are the ones that count
+  hearingNow = null;
+  if (r.ok) return onSpoken(r.text, m.area);
+  if (r.reason === 'cancelled') return;
+  const said = {
+    key: "My Gemini hearing key isn't working, so I used what this computer heard.",
+    rate: 'Gemini is busy right now, so I used what this computer heard.',
+    network: "I couldn't reach Gemini, so I used what this computer heard.",
+    too_long: 'That was a long take; I used what this computer heard.',
+  }[r.reason];
+  if (said && Date.now() - sttToldAt > 10 * 60_000) { sttToldAt = Date.now(); say(said, 'concerned'); }
+  else if (!said) problem('hearing', `gemini stt: ${r.reason} ${r.message ?? ''}`.trim());
+  if (local) return onSpoken(local, m.area);
+  if (r.reason === 'empty') say("I heard you but couldn't make out the words. Try again a little closer to the mic?", 'concerned');
+}
+
 const overlays = () => send({ type: 'overlays', ids: ['sidekick'] });
 
 // What a second launch asked for (littleboy --list | --talk | --ask).
@@ -2024,7 +2335,7 @@ async function onCli(action) {
   if (action === 'ask') return onMenu('ask');
   if (action !== 'talk' || !VOICE_OK) return;
   if (!config.voice) return say(`Voice is off. Switch it on on the Voice page in ${PANEL}.`, 'happy');
-  if (!voiceReady()) return startVoiceDownload();
+  if (!canHear()) return startVoiceDownload();
   send({ type: 'talk_toggle' });
 }
 
@@ -2065,14 +2376,21 @@ function onWriteTap() {
 async function onMenu(id, via) {
   if (id === 'show') ui({ kind: 'summon', show: true });
   else if (id === 'ask') await typeToAsk();
-  else if (id === 'stop') { const cancelled = busy; if (busy) logLine('stopped', { by: via === 'esc' ? 'esc' : 'stop' }); endIntro(); controller?.abort(); speech.stop(); ink.stop(cancelled); }
+  else if (id === 'stop') {
+    const cancelled = busy;
+    if (busy) logLine('stopped', { by: via === 'esc' ? 'esc' : 'stop' });
+    agentCore?.stop(via === 'esc' ? 'esc' : 'stop');
+    agentCoreApprovals?.denyAll('the request was stopped');
+    endIntro(); controller?.abort(); speech.stop(); ink.stop(cancelled);
+  }
   else if (id === 'new') {
     endIntro();
     freshSession('new'); menu();
     say('Fresh start. What are we doing?', 'happy');
   } else if (id.startsWith('forget:')) { await forgetFact(id.slice(7)); menu(); }
   else if (id === 'panel') send({ type: 'panel_show' });
-  else if (id === 'quit') send({ type: 'quit' });
+  // Quit: send what is buffered first, briefly, so the last traces are not lost with the process.
+  else if (id === 'quit') { await flushRespan({ timeoutMs: 800 }).catch(() => {}); await shutdownRespan({ quiet: true }).catch(() => {}); send({ type: 'quit' }); }
   // The panel asks first in its own words, so this one doesn't ask again.
   else if (id === 'forgetall:yes') { const n = await clearFacts(); menu(); panelNote(`Forgot ${n} thing${n === 1 ? '' : 's'}.`); }
   else if (id === 'forgetall') {
@@ -2150,13 +2468,21 @@ async function onMenu(id, via) {
     if (!key) panelNote(WAYLAND && previous ? `Remove the ${previous} binding from Keyboard settings too.` : 'The talk key was cleared; the modifier shortcut still works.');
     else if (WAYLAND) panelNote(`In your desktop's Keyboard Shortcuts settings, bind ${key} to the Talk to me command, roamies --talk.`);
     else if (!config.voice) panelNote(`Saved ${key}. It listens once Voice control is on.`);
-    else if (!voiceReady()) panelNote(`Saved ${key}. It listens once the voice model is downloaded.`);
+    else if (!canHear()) panelNote(`Saved ${key}. It listens once the voice model is downloaded.`);
     else panelNote(`Press ${key} to listen; press it again or pause to send.`);
   }
   else if (id === 'voicestudio_check') { await speech.checkLocal(); menu(); if (onboarding) obState(); }
   else if (id.startsWith('geminimodel:') && GEMINI_CHOICES.some((c) => c.id === id.slice(12))) {
     config.geminiModel = id.slice(12); saveConfig(); if (tts().id === 'gemini') speech.setModel(config.geminiModel); menu();
   }
+  // Hearing: the on-device model, or Gemini's transcription (which needs a key and a helper that can hand it over).
+  else if (id === 'hearing:local' || id === 'hearing:gemini') useHearing(id.slice(8)).catch((e) => console.error('hearing', e.message));
+  else if (id.startsWith('sttmodel:') && STT_MODELS.some((m) => m.id === id.slice(9))) { config.sttModel = id.slice(9); saveConfig(); panel(); }
+  else if (id.startsWith('speechrate:')) {
+    const v = Number(id.slice(11));
+    if (Number.isFinite(v) && v >= 0.75 && v <= 1.3) { config.speechRate = v; speech.setRate(v); saveConfig(); panel(); }
+  }
+  else if (id === 'sttkey_remove') removeSttKey().catch((e) => console.error('stt key remove', e.message));
   else if (id === 'sound') { config.sound = !config.sound; saveConfig(); ui({ kind: 'sound', on: config.sound }); voiceConfig(); menu(); }
   else if (id === 'actions') {
     config.allowActions = !config.allowActions; agents.setAllow(config.allowActions); saveConfig(); menu(); // live section picks this up
@@ -2177,7 +2503,7 @@ async function onMenu(id, via) {
   else if (id === 'voicedl') startVoiceDownload();
   else if (id === 'voice') {
     config.voice = !config.voice; saveConfig(); voiceConfig(); sendKeys(); menu(); panel(); // the talk key row locks with it
-    if (config.voice && !voiceReady()) return startVoiceDownload();
+    if (config.voice && !canHear()) return startVoiceDownload();
     say(config.voice ? `Voice is on. ${talkHow()} to talk to me.` : `Voice is off. You can still ask me from my ${TRAY} icon.`, 'happy');
   }
 }
@@ -2499,13 +2825,29 @@ createInterface({ input: process.stdin }).on('line', (line) => {
           return c?.accessToken ? { apiKey: c.accessToken, baseUrl: c.baseUrl } : null;
         },
       });
-      // Replace the tools array in place
+      // Replace the tools array in place, then put the new list behind the same router (never leave it unwrapped).
       tools.splice(0, tools.length, ...newTools);
+      if (isAgentCoreEnabled()) agentCore = armAgentCore();
       panelNote(trimmed ? `Respan bridge URL saved: ${trimmed}` : 'Respan bridge URL cleared (will use default).');
     } else {
       panelNote('Invalid Respan bridge URL. Must be a localhost/127.0.0.1 address.', true);
     }
-  } else if ((m.type === 'panel_fishkey' || m.type === 'panel_geminikey') && typeof m.key === 'string') voiceKeyLogin({ provider: m.type === 'panel_geminikey' ? 'gemini' : 'fish', given: m.key.slice(0, 1000), note: panelNote }).catch((e) => console.error('voice key', e));
+  } else if (m.type === 'panel_respan' && m.settings && typeof m.settings === 'object') applyRespanSettings(m.settings).catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_respankey' && typeof m.key === 'string') respanKeyLogin(m.key).catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_respankey_remove') removeRespanKey().catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_respantest') respanTest().catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_exa' && m.settings && typeof m.settings === 'object') {
+    const on = m.settings.enabled !== false;
+    config.exaEnabled = on;
+    setExaEnabled(on);
+    saveConfig();
+    if (panelOpen) panel();
+    panelNote(on ? 'Exa is on.' : 'Exa is off: the research tools report that they are unavailable.');
+  } else if (m.type === 'panel_exakey' && typeof m.key === 'string') exaKeyLogin(m.key).catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_exakey_remove') removeExaKey().catch((e) => panelNote(String(e?.message || e), true));
+  else if (m.type === 'panel_exatest') exaTest().catch((e) => panelNote(String(e?.message || e), true));
+  else if ((m.type === 'panel_fishkey' || m.type === 'panel_geminikey') && typeof m.key === 'string') voiceKeyLogin({ provider: m.type === 'panel_geminikey' ? 'gemini' : 'fish', given: m.key.slice(0, 1000), note: panelNote }).catch((e) => console.error('voice key', e));
+  else if (m.type === 'panel_sttkey' && typeof m.key === 'string') sttKeyLogin({ given: m.key.slice(0, 1000), note: panelNote }).catch((e) => console.error('stt key', e));
   else if (m.type === 'answer') { pending.get(m.id)?.(m.text ?? null); pending.delete(m.id); }
   // An approval from the panel: only the exact request it was shown, once, before it expires.
   else if (m.type === 'agentcore_approval') { agentCoreApprovals?.answer(m); }
@@ -2656,6 +2998,9 @@ midnightClean();
 // Look for updates shortly after launch, then every 6 hours.
 setTimeout(() => checkUpdates(), 20_000);
 setInterval(() => checkUpdates(), 6 * 3600_000);
+// Who hears: the saved Gemini key (if any) is read once before the first voice_config, so the helper is told from
+// the start whether its take should be handed over. A keyring that can't be read leaves hearing on-device.
+await sttKey().then(([k, kind]) => { stt.key = k; stt.kind = kind; }).catch(() => {});
 voiceConfig();
 // First run (or setup never finished): open the guide.
 // v2 added the "Control apps" (Accessibility) permission: people who finished setup before that

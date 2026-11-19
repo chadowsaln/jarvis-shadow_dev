@@ -2,16 +2,17 @@
 // pages already get (the sidekick's ui messages, the agent's pose, the voice meter) and answers "what should the orb
 // look like". Nothing here can make the app ready, start a turn or change a tool: the visual layer only listens.
 //
-// States: idle, listening, thinking, tool_execution, speaking, success, error, offline.
+// States: idle, listening, thinking, tool_execution, speaking, success, error, offline, sleeping.
 // A reducer, not a spinner: `reduce(state, event, now)` is pure (same input, same output), so duplicate, late and
 // malformed events are testable — they leave the state alone instead of flickering the entity.
 // Classic script (window.Roamie.orbState), also readable from Node for the tests.
 (() => {
   const R = (window.Roamie = window.Roamie || {});
-  const STATES = ['idle', 'listening', 'thinking', 'tool_execution', 'speaking', 'success', 'error', 'offline'];
+  const STATES = ['idle', 'listening', 'thinking', 'tool_execution', 'speaking', 'success', 'error', 'offline', 'sleeping'];
   // Higher wins when several things are true at once (a turn that is speaking while a tool runs stays
-  // tool_execution: the work is what matters, the voice is how it reports).
-  const RANK = { offline: 9, error: 8, tool_execution: 7, thinking: 6, speaking: 5, listening: 4, success: 3, idle: 1 };
+  // tool_execution: the work is what matters, the voice is how it reports). Sleeping outranks idle: an entity that
+  // has dozed off stays dim until something actually happens, rather than flickering back the moment nothing is.
+  const RANK = { offline: 9, error: 8, tool_execution: 7, thinking: 6, speaking: 5, listening: 4, success: 3, sleeping: 2, idle: 1 };
   // How long a momentary state holds before the entity settles back (ms).
   const HOLD = { success: 1600, error: 5000 };
   const EMPTY = { name: 'idle', since: 0, until: 0, reason: null, seq: 0 };
@@ -27,6 +28,7 @@
    *   listen_start/end      the microphone opened/closed (listening)
    *   provider              the AI provider's own state: ready | unavailable (offline only while no model at all)
    *   failure               something the app reported as failed (error, briefly)
+   *   sleep / wake          the pointer has been still for a while (sleeping) / it moved again (idle)
    *   clear                 back to idle (a new chat, dismiss)
    * Unknown types, missing fields and events that change nothing return the same state (no re-render, no flicker).
    */
@@ -62,6 +64,11 @@
         return base.name === 'speaking' ? hold('success') : base;
       case 'failure':
         return hold('error', typeof event.reason === 'string' ? event.reason.slice(0, 120) : null);
+      case 'sleep':
+        // Nothing is happening: only a quiet entity dozes, never one that is working or listening.
+        return base.name === 'idle' || base.name === 'sleeping' ? set('sleeping') : base;
+      case 'wake':
+        return base.name === 'sleeping' ? set('idle') : base;
       case 'provider': {
         // 'unavailable' is not the entity's problem while the app is otherwise fine (an OpenRouter 429, say): only
         // an app with no model at all reads as offline, and that comes from the sidecar's provider_status.
@@ -83,6 +90,8 @@
     if (f?.tooling) return 'tool_execution';
     if (f?.mode === 'think') return 'thinking';
     if (f?.mode === 'talk' || f?.speaking) return 'speaking';
+    // The page already knows how long the pointer has been still (env.sleepy): dozing is that, not a timer here.
+    if (f?.sleeping || f?.sleepy > 0.5) return 'sleeping';
     return 'idle';
   }
 

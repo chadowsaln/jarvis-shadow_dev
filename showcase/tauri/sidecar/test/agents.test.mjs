@@ -252,6 +252,8 @@ assert.match(agentSystem('maker', { dir: '/x', returns: 'answer' }), /report is 
   const openRule = (p, h, o) => checkOpen(String(p).replace(home, '/Users/ken'), '/Users/ken', o);
   const mk = () => createAgents({ fork, ui: (m) => events.push(m.e), config, root, userName: 'Ken', runner: '/x/agentrun.mjs', safety: { checkRead, checkWrite, checkOpen: openRule, checkLink }, home, now: () => T });
   const mgr = mk();
+  // Every agent tool declares what it may do: the agent core offers only tools that do (Batch 1).
+  for (const t of mgr.tools) assert.ok(t.permission && typeof t.permission.level === 'string', `${t.name} declares a permission level`);
   const tick = () => new Promise((r) => setTimeout(r, 400));
   const lastOf = (type) => events.filter((e) => e.type === type).at(-1);
 

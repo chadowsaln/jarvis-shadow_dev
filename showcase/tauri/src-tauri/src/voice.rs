@@ -48,6 +48,10 @@ pub(crate) fn start_voice(app: &AppHandle) {
     if let Some(mic) = app.state::<MicPick>().0.lock().unwrap().clone() {
         cmd.arg("--mic").arg(mic);
     }
+    // Hearing that runs elsewhere (Gemini) reads each take too: the helper hands its audio over with the words.
+    if app.state::<TakeAudio>().0.load(Ordering::Relaxed) {
+        cmd.arg("--take-audio");
+    }
     // Debug builds: ROAMIES_TEST_AUDIO=<wav> stands in for the microphone, to test talking with no mic (CI, Docker).
     #[cfg(debug_assertions)]
     if let Some(wav) = std::env::var_os("ROAMIES_TEST_AUDIO") {
@@ -302,7 +306,9 @@ fn handle_voice(app: &AppHandle, msg: Value) {
         Some("final") => {
             to_overlays(app, &ui);
             // area: the part of the screen marked with the pen while talking (a PNG, its rect and the strokes).
-            to_sidecar(app, &json!({ "type": "voice", "text": msg.get("text"), "area": msg.get("area"), "ms": msg.get("ms"), "via": msg.get("via") }));
+            // The take's audio (base64 WAV) rides along when the app asked for it: hearing that runs elsewhere
+            // (Gemini) transcribes it, and the sidecar decides which words are used.
+            to_sidecar(app, &json!({ "type": "voice", "text": msg.get("text"), "area": msg.get("area"), "ms": msg.get("ms"), "via": msg.get("via"), "audio": msg.get("audio"), "rate": msg.get("rate") }));
         }
         Some("error") => {
             let mut m = msg.clone();

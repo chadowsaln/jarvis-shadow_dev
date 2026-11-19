@@ -615,7 +615,7 @@
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', () => { if (down) down.o.c.mover.dragging = false; down = null; });
 
-    let last = performance.now(), skip = false, blank = false, nap = 0, lastSig = '';
+    let last = performance.now(), skip = false, blank = false, nap = 0, lastSig = '', sleepy = 0;
     R.wake = () => { if (nap) { clearTimeout(nap); nap = 0; requestAnimationFrame(frame); } };
     const replay = (now, dt) => {
       if (!trail.length) return;
@@ -650,11 +650,15 @@
       last = now;
       replay(now, dt);
       const idle = (now - pointer.last) / 1000;
+      // The pointer has been still a while: the entity dozes. This is the one signal the orb reads for it, so
+      // sleeping is the app's real state, not a timer the renderer invented.
+      const dozing = idle > 12 ? 1 : 0;
+      if (dozing !== sleepy) { sleepy = dozing; R.orb?.event({ type: dozing ? 'sleep' : 'wake' }); }
       if (gone && !blank) place(null, dt);
       blank = gone;
       for (const o of list) {
         const { env, c } = o, m = c.mover;
-        env.t += dt; env.reduced = reducedMQ.matches; env.sleepy = idle > 12 ? 1 : 0;
+        env.t += dt; env.reduced = reducedMQ.matches; env.sleepy = dozing;
         env.mouse.active = pointer.active && idle < 6;
         env.mouse.x = pointer.x; env.mouse.y = pointer.y; env.mouse.vx = pointer.vx; env.mouse.vy = pointer.vy;
         env.mouse.inside = env.mouse.active && pointer.x >= 0 && pointer.y >= 0 && pointer.x <= W && pointer.y <= H;

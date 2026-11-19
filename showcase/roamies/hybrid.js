@@ -35,7 +35,7 @@
     const now = (st.t ?? 0) * 1000;
     // The frame's own reading (a tool running, the mic on, the voice meter) plus whatever the app's events left
     // standing (a success flash, an error, no provider at all): the stronger of the two wins.
-    const frame = R.orbState?.fromFrame({ mode: st.mode, tooling: st.tooling, speaking: st.voice != null && st.voice > 0 }, now) ?? 'idle';
+    const frame = R.orbState?.fromFrame({ mode: st.mode, tooling: st.tooling, speaking: st.voice != null && st.voice > 0, sleepy: st.sleepy }, now) ?? 'idle';
     const seen = R.orb?.name?.() ?? 'idle';
     const state = R.orbState?.strongest?.(frame, seen) ?? frame;
     e.resize(size, size, Math.min(1.5, env.dpr || 1));
@@ -72,6 +72,16 @@
     cy + Math.sin(a) * rr * tilt,
   ];
 
+  // Which structure this frame wants, resolved the same way the 3D renderer resolves it (the cursor form uses it to
+  // pick its glyph): the strongest state the app reports, then the theme's own style or the state's.
+  const styleNow = (st, theme) => {
+    const now = (st?.t ?? 0) * 1000;
+    const frame = R.orbState?.fromFrame({ mode: st?.mode, tooling: st?.tooling, speaking: st?.voice != null && st.voice > 0, sleepy: st?.sleepy }, now) ?? 'idle';
+    const seen = R.orb?.name?.() ?? 'idle';
+    const name = R.orbState?.strongest?.(frame, seen) ?? frame;
+    return R.theme?.styleFor ? R.theme.styleFor(name, theme) : 'hybrid';
+  };
+
   return {
     id: 'hybrid',
 
@@ -99,9 +109,13 @@
     // The LED orb: a plasma core, three rings at their own angles, and the neural dots. Slow on purpose: it is the
     // safety net, not the show.
     led(k, cx, cy, rad, st, theme) {
-      const P = k.P || 4, t = st?.t ?? 0, L = k.L;
-      const level = clamp(st?.level ?? st?.voice ?? 0, 0, 1);
-      const lvl = (v) => clamp(Math.round(v), 0, L);
+      const P = k.P || 4, L = k.L;
+      // Dozing: the same orb, barely alight, moving at a crawl (the 3D renderer does the same in its own way).
+      const asleep = (st?.sleepy ?? 0) > 0.5;
+      const t = (st?.t ?? 0) * (asleep ? 0.18 : 1);
+      const level = clamp(st?.level ?? st?.voice ?? 0, 0, 1) * (asleep ? 0.15 : 1);
+      const dim = asleep ? 0.35 : 1;
+      const lvl = (v) => clamp(Math.round(v * dim), 0, L);
       // The shell: dithered plasma.
       const r0 = Math.round(rad);
       for (let y = -r0; y <= r0; y++) for (let x = -r0; x <= r0; x++) {
@@ -139,22 +153,90 @@
       }
     },
 
-    // Cursor form: a small HUD reticle with the orb's heart in the middle and a tick at the hotspot.
+    /**
+     * Cursor form: the structure, reduced to the few marks that still read at this size (a glyph of nine cells or so),
+     * plus the tick at the hotspot. Each style keeps its own signature here, so the cursor says what the orb is doing
+     * even when the widget itself is hidden behind the pointer.
+     */
     cursor(k, cx, cy, hx, hy, st) {
       const L = k.L, t = st?.t ?? 0, level = clamp(st?.level ?? st?.voice ?? 0, 0, 1);
       const spin = t * (st?.mode === 'think' ? 2.4 : 0.9);
-      const r = 4.6 + level * 1.2;
-      for (let i = 0; i < 64; i++) {
-        if (((i + 4) % 16) < 3) continue;
-        const a = (i / 64) * TAU + spin;
-        k.put(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 3);
+      const r = 4.8 + level * 1.1;
+      const style = styleNow(st, R.theme?.current);
+      const dot = (x, y, l = L - 1) => k.put(Math.round(x), Math.round(y), l);
+      // A ring of cells on an ellipse, drawn as points (the LED grid has nothing thinner).
+      const arc = (rx, ry, a0, a1, n, l = L - 1) => {
+        for (let i = 0; i < n; i++) {
+          const a = a0 + ((a1 - a0) * i) / (n - 1 || 1);
+          dot(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, l);
+        }
+      };
+      if (style === 'ring') {
+        // A machined bezel with three gaps, a smaller broken track inside it, and a dark middle with a pin in it.
+        for (let i = 0; i < 40; i++) {
+          if ((i % 13) > 9) continue;
+          const a = (i / 40) * TAU + spin * 0.35;
+          dot(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 4);
+        }
+        arc(r * 0.62, r * 0.62, Math.PI * 0.15 - spin * 0.6, Math.PI * 1.5 - spin * 0.6, 26, 3);
+        dot(cx, cy, L);
+      } else if (style === 'arcs') {
+        // Two heavy broken tracks at their own radii, a few hairlines out of the middle, a bright pin.
+        arc(r, r, 0.15 + spin * 0.2, 2.1 + spin * 0.2, 30, 4);
+        arc(r * 0.66, r * 0.66, 2.6 - spin * 0.3, 4.9 - spin * 0.3, 24, 3);
+        for (const a of [0.7, 2.4, 3.9, 5.5]) {
+          for (let s = 0.3; s <= 1; s += 0.35) dot(cx + Math.cos(a) * r * s, cy + Math.sin(a) * r * s, 2);
+        }
+        dot(cx, cy, L);
+      } else if (style === 'weave') {
+        // Three loops crossing in different planes: the tangle, shrunk to what fits.
+        arc(r, r * 0.55, 0, TAU, 34, 4);
+        arc(r * 0.86, r * 0.86, spin * -0.8, spin * -0.8 + TAU, 30, 3);
+        arc(r * 0.95, r * 0.32, spin * 1.4, spin * 1.4 + TAU, 26, 3);
+        dot(cx, cy, 2);
+      } else if (style === 'torus') {
+        // Two smooth enclosing rings and the sweep of light running round the outer one.
+        arc(r, r * 0.72, 0, TAU, 36, 3);
+        arc(r * 0.55, r * 0.55, 0, TAU, 24, 2);
+        const head = -spin * 1.2;
+        arc(r * 0.92, r * 0.66, head - 0.5, head + 0.5, 9, L);
+        dot(cx, cy, L);
+      } else if (style === 'burst') {
+        // Short radial streaks in every direction, dashed, out of a tight hot middle.
+        for (let i = 0; i < 15; i++) {
+          const a = (i / 15) * TAU + spin * 0.25;
+          const far = 0.72 + ((i * 7) % 5) / 16;
+          dot(cx + Math.cos(a) * r * 0.22, cy + Math.sin(a) * r * 0.22, 3);
+          dot(cx + Math.cos(a) * r * (far - 0.22), cy + Math.sin(a) * r * (far - 0.22), 3);
+          dot(cx + Math.cos(a) * r * far, cy + Math.sin(a) * r * far, 2);
+        }
+        dot(cx, cy, L);
+      } else if (style === 'spokes') {
+        // Fan clusters: three short spines in each of five directions, with a bead strung at their ends.
+        for (let f = 0; f < 5; f++) {
+          const base = (f / 5) * TAU + spin * 0.3;
+          for (let j = -1; j <= 1; j++) {
+            const a = base + j * 0.16;
+            for (let s = 0.35; s <= 1.01; s += 0.3) dot(cx + Math.cos(a) * r * s, cy + Math.sin(a) * r * s, j === 0 ? 4 : 3);
+          }
+          dot(cx + Math.cos(base) * r * 1.08, cy + Math.sin(base) * r * 1.08, 4);
+        }
+        dot(cx, cy, 3);
+      } else {
+        // Hybrid: the reticle it has always been — an open bezel and the heart in the middle.
+        for (let i = 0; i < 64; i++) {
+          if (((i + 4) % 16) < 3) continue;
+          const a = (i / 64) * TAU + spin;
+          dot(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 3);
+        }
+        dot(cx, cy, L);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          dot(cx + dx * (r + 1), cy + dy * (r + 1), 2);
+        }
       }
-      k.put(cx, cy, L);
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        k.put(cx + dx * (r + 1), cy + dy * (r + 1), 2);
-      }
+      // The hotspot tick: from the pointer's own position to the body, so it's always clear what it's attached to.
       const dx = cx - hx, dy = cy - hy, n = Math.hypot(dx, dy) || 1;
-      for (let i = 0; i <= 2; i++) k.put(hx + (dx / n) * i, hy + (dy / n) * i, i === 0 ? L : L - 1);
+      for (let i = 0; i <= 2; i++) dot(hx + (dx / n) * i, hy + (dy / n) * i, i === 0 ? L : L - 1);
     },
 
     // The patch the 3D render needs, in CSS px: the kit widens its drawing area to hold all of it, so the rings and
@@ -173,7 +255,9 @@
     // The 3D layer, over the grid. Returns true when it drew (the kit uses that to know the frame is alive).
     over(ctx, env, st) {
       if (!view.on) return false;
-      return paint(ctx, env, { ...st, level: st.level ?? st.voice ?? 0 }, R.theme?.current);
+      // While listening, the level is the microphone's (what was heard); otherwise it's the voice's.
+      const level = st.level ?? (st.mode === 'listen' ? st.heard ?? 0 : st.voice ?? 0);
+      return paint(ctx, env, { ...st, level }, R.theme?.current);
     },
 
     // Tests and diagnostics: the live renderer (null when WebGL 2 isn't there at all).

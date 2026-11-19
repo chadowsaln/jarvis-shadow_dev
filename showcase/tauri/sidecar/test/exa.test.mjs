@@ -1,7 +1,7 @@
 // Exa integration tests (Batch 11): mock-only, no network, no API key required.
 // Run: node showcase/tauri/sidecar/test/exa.test.mjs
 import assert from 'node:assert/strict';
-import { exaStatus, exaSearch, exaGetContents, exaFindSimilar } from '../exa.mjs';
+import { exaStatus, exaSearch, exaGetContents, exaFindSimilar, exaResearch, setExaEnabled, setExaKey } from '../exa.mjs';
 import { createTools } from '../tools.mjs';
 import { describe } from '../activity.mjs';
 
@@ -81,10 +81,172 @@ console.log('exa tests: start');
   assert.equal(r.ok, true);
   assert.equal(r.results[0].url, 'https://example.com');
   assert.ok(r.citations[0].url === 'https://example.com');
-  assert.equal(seenBody.text.maxCharacters, 20000);
+  assert.equal(seenBody.text.maxCharacters, 50000, 'contents text is capped at Exa\'s documented 50000');
   const bad = await exaGetContents({ urls: [] }, { env: { EXA_API_KEY: 'k' }, fetchImpl: async () => { throw new Error('no'); } });
   assert.equal(bad.ok, false);
   console.log('exa get contents: passed');
+}
+
+// --- documented search types only, legacy ones labelled, 429 retried after the delay Exa asks for
+{
+  const bad = await exaSearch({ query: 'q', type: 'keyword' }, { env: { EXA_API_KEY: 'k' }, fetchImpl: async () => { throw new Error('must not fetch'); } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /Unsupported search type/);
+  assert.match(bad.hint, /auto/);
+  let seenBody;
+  const fetchImpl = async (_url, init) => {
+    seenBody = JSON.parse(init.body);
+    return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ results: [] }) };
+  };
+  const legacy = await exaSearch({ query: 'q', type: 'fast' }, { env: { EXA_API_KEY: 'k' }, fetchImpl });
+  assert.equal(legacy.ok, true);
+  assert.match(legacy.note, /legacy/);
+  assert.equal(seenBody.type, 'fast');
+
+  let tries = 0;
+  const limited = await exaSearch({ query: 'q' }, {
+    env: { EXA_API_KEY: 'k' },
+    fetchImpl: async () => {
+      tries++;
+      if (tries === 1) return { ok: false, status: 429, headers: { get: (h) => (h === 'retry-after' ? '0' : 'application/json') }, json: async () => ({ error: { message: 'slow down' } }) };
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ results: [{ url: 'https://ok.example' }] }) };
+    },
+  });
+  assert.equal(tries, 2, 'a 429 is retried once after the delay');
+  assert.equal(limited.ok, true);
+  assert.equal(limited.results[0].url, 'https://ok.example');
+
+  const exhausted = await exaSearch({ query: 'q' }, {
+    env: { EXA_API_KEY: 'k' },
+    fetchImpl: async () => ({ ok: false, status: 429, headers: { get: (h) => (h === 'retry-after' ? '0' : 'application/json') }, json: async () => ({ error: { message: 'slow down' } }) }),
+  });
+  assert.equal(exhausted.ok, false);
+  assert.match(exhausted.hint, /rate limiting/);
+  console.log('exa search types and rate limits: passed');
+}
+
+// --- contents: summary, subpages, ids, and per-page outcomes kept honest
+{
+  let seenBody;
+  const fetchImpl = async (_url, init) => {
+    seenBody = JSON.parse(init.body);
+    return {
+      ok: true, status: 200, headers: { get: () => 'application/json' },
+      json: async () => ({
+        results: [
+          { id: 'https://ok.example', title: 'Fine', url: 'https://ok.example', text: 'hello', status: 'success' },
+          { id: 'https://gone.example', status: 'not_found', error: 'CRAWL_NOT_FOUND' },
+        ],
+        statuses: [{ id: 'https://ok.example', status: 'success' }, { id: 'https://gone.example', status: 'not_found' }],
+      }),
+    };
+  };
+  const r = await exaGetContents({ urls: ['https://ok.example', 'https://gone.example'], summary: 'prices', subpages: 2, maxAgeHours: 0 }, { env: { EXA_API_KEY: 'k' }, fetchImpl });
+  assert.equal(r.ok, true);
+  assert.equal(seenBody.summary.query, 'prices');
+  assert.equal(seenBody.subpages, 2);
+  assert.equal(seenBody.maxAgeHours, 0);
+  assert.equal(r.results[0].status, 'success');
+  assert.equal(r.results[1].status, 'not_found');
+  assert.match(r.results[1].error, /CRAWL_NOT_FOUND/);
+  assert.deepEqual(r.failed, ['https://gone.example'], 'a page that could not be read is named, not silently empty');
+  assert.equal(r.statuses.length, 2);
+
+  // ids and urls are mutually exclusive, as Exa documents.
+  const both = await exaGetContents({ urls: ['https://a.example'], ids: ['01abc'] }, { env: { EXA_API_KEY: 'k' }, fetchImpl });
+  assert.equal(both.ok, false);
+  assert.match(both.error, /not both/);
+  const byId = await exaGetContents({ ids: ['01abc'] }, { fetchImpl, env: { EXA_API_KEY: 'k' } });
+  assert.equal(byId.ok, true);
+  assert.deepEqual(seenBody.ids, ['01abc']);
+  assert.equal(seenBody.urls, undefined);
+  console.log('exa contents options: passed');
+}
+
+// --- research: create, poll, retrieved sources kept apart from the generated answer
+{
+  const calls = [];
+  let polls = 0;
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? 'POST', body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith('/agent/runs')) {
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ id: 'agent_run_1', status: 'queued' }) };
+    }
+    polls++;
+    const done = polls >= 2;
+    return {
+      ok: true, status: 200, headers: { get: () => 'application/json' },
+      json: async () => (done
+        ? {
+          id: 'agent_run_1', status: 'completed', costDollars: { total: 0.025 },
+          output: {
+            text: 'Robotics moved toward general-purpose humanoids.',
+            structured: { themes: ['humanoids'] },
+            grounding: [{ field: 'text', confidence: 0.8, citations: [{ title: 'Robotics weekly', url: 'https://news.example/robots' }, { title: 'Lab paper', url: 'https://paper.example/humanoid' }] }],
+          },
+        }
+        : { id: 'agent_run_1', status: 'running' }),
+    };
+  };
+  const r = await exaResearch({ query: 'latest robotics', effort: 'low' }, { env: { EXA_API_KEY: 'k' }, fetchImpl, pollMs: 1 });
+  assert.equal(r.ok, true);
+  assert.equal(r.runId, 'agent_run_1');
+  assert.equal(r.generated, true, 'the answer is Exa\'s writing, and says so');
+  assert.match(r.answer, /humanoids/);
+  assert.deepEqual(r.structured, { themes: ['humanoids'] });
+  assert.deepEqual(r.sources.map((s) => s.url), ['https://news.example/robots', 'https://paper.example/humanoid'], 'retrieved pages are listed separately');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].body.effort, 'low');
+  assert.ok(calls.slice(1).every((c) => c.method === 'GET' && c.url.includes('/agent/runs/agent_run_1')));
+
+  const failed = await exaResearch({ query: 'q' }, {
+    env: { EXA_API_KEY: 'k' }, pollMs: 1,
+    fetchImpl: async (url) => (String(url).endsWith('/agent/runs')
+      ? { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ id: 'agent_run_2', status: 'queued' }) }
+      : { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ id: 'agent_run_2', status: 'failed', error: 'internal' }) }),
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.runStatus, 'failed');
+  assert.match(failed.error, /internal/);
+
+  // A run that outlives its cap is reported unfinished, with its id, instead of polling forever.
+  const capped = await exaResearch({ query: 'q', maxDurationMs: 1000 }, {
+    env: { EXA_API_KEY: 'k' }, pollMs: 1200,
+    fetchImpl: async (url) => (String(url).endsWith('/agent/runs')
+      ? { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ id: 'agent_run_3', status: 'queued' }) }
+      : { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ id: 'agent_run_3', status: 'running' }) }),
+  });
+  assert.equal(capped.ok, false);
+  assert.equal(capped.status, 'timeout');
+  assert.equal(capped.runId, 'agent_run_3');
+
+  const unsupported = await exaResearch({ query: 'q', effort: 'turbo' }, { env: { EXA_API_KEY: 'k' }, fetchImpl });
+  assert.equal(unsupported.ok, false);
+  assert.match(unsupported.error, /Unsupported effort/);
+  console.log('exa research: passed');
+}
+
+// --- the key can come from the secure store, and the provider can be switched off
+{
+  setExaKey('exa-saved-secret');
+  const saved = exaStatus({});
+  assert.equal(saved.configured, true);
+  assert.equal(saved.source, 'saved');
+  assert.equal(JSON.stringify(saved).includes('exa-saved-secret'), false);
+  const r = await exaSearch({ query: 'q' }, { env: {}, fetchImpl: async () => ({ ok: false, status: 401, headers: { get: () => 'application/json' }, json: async () => ({ error: { message: 'denied' } }) }) });
+  assert.equal(r.ok, false);
+  assert.match(r.hint, /Connections page/);
+  setExaEnabled(false);
+  const off = exaStatus({});
+  assert.equal(off.configured, false);
+  assert.equal(off.enabled, false);
+  assert.match(off.note, /turned off/);
+  const blocked = await exaSearch({ query: 'q' }, { fetchImpl: async () => { throw new Error('must not fetch'); } });
+  assert.equal(blocked.status, 'not_configured');
+  setExaEnabled(true);
+  setExaKey(null);
+  assert.equal(exaStatus({ env: {} }).source, null, 'clearing the saved key falls back to the environment');
+  console.log('exa key source and switch: passed');
 }
 
 // --- find similar normalization
@@ -135,6 +297,10 @@ console.log('exa tests: start');
     assert.equal(by[n].permission.level, 'observe');
     assert.equal(by[n].permission.requiresApproval, false);
   }
+  // Research costs real money per run, so it asks first even at the trusted default.
+  assert.ok(by.exa_research, 'exa_research tool missing');
+  assert.equal(by.exa_research.permission.level, 'observe');
+  assert.equal(by.exa_research.permission.requiresApproval, true);
   const st = await by.exa_search_status.execute({});
   assert.equal(st.status, 'not_configured');
   assert.ok(events.some((e) => e.kind === 'browser' && e.action === 'exa_status'));

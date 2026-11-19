@@ -9,7 +9,7 @@ import { createWebFetchTool, createWebSearchTool, runSideWebSearch, runSideWebSe
 import { getSystemStatus } from './sysinfo.mjs';
 import { captureViaPortal, detectTesseract, ocrImage, readImageDataUrl, removeTemp, screenAnswerText } from './screen.mjs';
 import { BROWSER_ACTIONS, browserDiscover, browserOpenUrl, browserStatusText, detectAuthOrCaptchaWall, detectPageLang, fetchReadablePage, filterBrowserApps, getDefaultBrowserInfo, isRespanPlatformUrl, readRespanAuthenticatedPage, respanBridgeStatus, respanReadNote, summarizeSearchResults } from './browser.mjs';
-import { exaStatus, exaSearch, exaGetContents, exaFindSimilar } from './exa.mjs';
+import { EXA_SEARCH_TYPES, exaStatus, exaSearch, exaGetContents, exaFindSimilar, exaResearch } from './exa.mjs';
 import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
 import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
@@ -906,7 +906,10 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
     {
       name: 'take_screenshot',
       description: "Look at the user's screen. target: 'front' = just the window they're working in (best default when they say 'this' or 'here'), an app name like 'browser', 'Safari', 'Figma' or 'Notes' (works even if it's hidden behind other windows), 'window:<id>' from list_windows, or 'screen' for everything.",
-      parameters: z.object({ target: z.string().optional() }), execute: screenshot,
+      parameters: z.object({ target: z.string().optional() }),
+      // The picture leaves this computer for the AI model, so the person is asked every time (see Batch 1 audit).
+      permission: { level: 'observe', requiresApproval: true, description: 'Look at the screen (the picture goes to the AI model)' },
+      execute: screenshot,
     },
     // The hands helper's tools: on macOS always (they explain what's missing), elsewhere when the helper is there.
     ...(process.platform === 'darwin' || HANDS ? [
@@ -924,6 +927,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
         name: 'read_window',
         description: "List the buttons, links, fields, checkboxes and other controls in an app's front window (id, role, label, value), plus the text on screen and the text scrolled out of view above and below it, so you can read a whole page without scrolling or a screenshot. Needed before act_in_app steps that use ids. To mark or click something by its visible words you don't need this: use draw or click_text with text. target: 'front', an app name, or 'browser'.",
         parameters: z.object({ target: z.string().optional() }),
+        permission: { level: 'observe', requiresApproval: false, description: 'Read the controls and text of a window' },
         execute: async ({ target = 'front' }) => readWindow(target),
       },
       {
@@ -940,6 +944,8 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
             x: z.number().optional(), y: z.number().optional(), seconds: z.number().optional(),
           })).min(1).max(40),
         }),
+        // Trusted at the host's default level, like typing in an app: risky clicks still ask inside the tool.
+        permission: { level: 'trusted', requiresApproval: false, description: 'Click, fill and press keys in another app' },
         executionMode: 'sequential',
         execute: async ({ target = 'front', steps: given }, ctx) => {
           const asked = String(target || 'front');
@@ -1035,13 +1041,18 @@ molecule (smiles, label) for chemistry. model (parts [{shape: box|sphere|cylinde
 quiz (questions [{text, options: 2 to 4, answer: the right option word for word, explain}], up to ${LIMITS.questions}) for "test me": they answer by clicking and see right or wrong at once, and their score comes to you with their next message, so say a line and stop: never ask the questions in words too, or ask them for their answers or score.
 Actions: type (text into the field at; needs actions allowed), copy (text to the clipboard), open (url), handoff (task), button (text + action {do: ask|open|copy, value}: a likely next step they can click), emote (name: hype, wave, upset, remind, motivate), sfx (name). tone: accent, teal, amber, coral, lilac, sky, lime, red, white.
 A drawing stays until the user clears it or the window changes; your next drawing replaces it. At most ${LIMITS.cardsShown} cards show at once (one more closes the oldest), so make a point with the fewest cards. Every drawn piece gets an id (p1, p2 …) in the result. To change what's drawn ("make that red", "move it left", "never mind"): edit [{do: recolor|move|erase|clear, part, tone, dx, dy}] with no beats. Up to 12 beats, 40 marks each.${POINTER_OK ? '' : " On this desktop (Wayland) clicks and hovers in other apps can't be seen: never use wait; beats play one after another, so say each step's line in an order that reads well without pausing."}`,
-      parameters: DrawArgs, executionMode: 'sequential', timeoutMs: 30 * 60_000,
+      parameters: DrawArgs,
+      // Drawing is the assistant's own channel: assist, not trusted. Typing and opening from a mark still need the
+      // actions toggle (checkDrawAction), which is the setting that governs them.
+      permission: { level: 'assist', requiresApproval: false, description: 'Draw on the screen (typing/opening needs actions allowed)' },
+      executionMode: 'sequential', timeoutMs: 30 * 60_000,
       execute: draw,
     },
     {
       name: 'see_photo',
       description: "Look at a picture before naming its parts. Give the same query (a thing with a Wikipedia page) or url you will give draw's photo mark: you get that picture back, so you can see where each part is. Needed once before a photo with labels; a photo without labels doesn't need it.",
       parameters: z.object({ query: z.string().max(100).optional(), url: z.string().max(2000).optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Look at a picture from the web' },
       execute: async ({ query, url }) => {
         const p = await photos.see({ query, url });
         return { content: [
@@ -1093,7 +1104,8 @@ A drawing stays until the user clears it or the window changes; your next drawin
         const exists = await fs.stat(expand(p)).then(() => true, () => false);
         const v = checkWrite(p, HOME, { exists, own });
         const f = allowed(v);
-        if (v.level === ASK && !(await confirm(v.reason, ctx))) throw new Error(`${userName} said no, so I didn't write ${p}.`);
+        // The executor already asked for this exact write (fingerprint-bound) when the core is on: don't ask twice.
+        if (v.level === ASK && !ctx?.approved && !(await confirm(v.reason, ctx))) throw new Error(`${userName} said no, so I didn't write ${p}.`);
         await fs.mkdir(path.dirname(f), { recursive: true });
         await fs.writeFile(f, content, 'utf8');
         return `Wrote ${content.length} characters to ${f}.`;
@@ -1101,12 +1113,14 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'run_command', description: `Run a shell command in ${where} and return its output. Use it for what the other tools can't do (counting, sorting, wc, mdfind, git, moving or copying); to open a file, folder, app or link use the open tool, which needs no yes. Prefer write_file for creating or editing files (several files: one write_file call each, in the same turn); never edit with sed -i or tee, and never make files in a shell loop (for/while), which always needs a yes. A > redirect into a new file is fine; overwriting an existing file, and commands that change things, make the user confirm first, which is slow.`,
-      parameters: z.object({ command: z.string() }), executionMode: 'sequential', timeoutMs: 190_000, // up to 2 min to answer, then the 60 s run
+      parameters: z.object({ command: z.string() }),
+      permission: { level: 'trusted', requiresApproval: true, description: 'Run a shell command' },
+      executionMode: 'sequential', timeoutMs: 190_000, // up to 2 min to answer, then the 60 s run
       execute: async ({ command }, ctx) => {
         if (!allowActions()) throw new Error(actionsOff);
         const v = classifyCommand(command, HOME, { exists: existsSync, cwd: workdir, own });
         if (v.level === BLOCK) throw new Error(`Blocked for safety: ${v.reason} Don't try to get around this; tell ${userName} what you wanted to do instead.`);
-        if (v.level === ASK && !(await confirm(`Run \`${command.length > 70 ? command.slice(0, 67) + '…' : command}\`?${v.reason ? ' ' + v.reason : ''}`, ctx))) {
+        if (v.level === ASK && !ctx?.approved && !(await confirm(`Run \`${command.length > 70 ? command.slice(0, 67) + '…' : command}\`?${v.reason ? ' ' + v.reason : ''}`, ctx))) {
           throw new Error(`${userName} said no, so the command didn't run.`);
         }
         const [sh, shArgs, shOpts] = shellFor(command);
@@ -1176,7 +1190,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
             if (matches.length > 1) throw new Error(`There's more than one app like "${wanted}": ${matches.slice(0, 6).map(appLine).join(', ')}. Ask which one, then start it by its id.`);
             throw new Error(`There's no app called "${wanted}" on ${THIS_COMPUTER} (not installed, or it has another name). Don't look for it another way; tell ${userName} and carry on.`);
           }
-          if (!(await confirm(`Open ${app.name}?`, ctx))) throw new Error(`${userName} said no, so ${app.name} wasn't opened.`);
+          if (!ctx?.approved && !(await confirm(`Open ${app.name}?`, ctx))) throw new Error(`${userName} said no, so ${app.name} wasn't opened.`);
           const wasOpen = (await runningApps(list)).some((r) => r.app.id === app.id);
           const { via } = await launchInstalledApp(app.id, { apps: list });
           return `Launched ${app.name} (${app.id})${via === 'gtk-launch' ? ' with gtk-launch' : ''}.${wasOpen ? ' It was already open, so this brought another window or moved it forward.' : ''}`;
@@ -1327,8 +1341,9 @@ A drawing stays until the user clears it or the window changes; your next drawin
           index: z.number().int().optional(),
           button: z.enum(['left', 'right', 'middle']).optional().default('left'),
         }),
-        permission: { level: 'sensitive', requiresApproval: true, description: 'Click a UI element on Linux desktop' },
-        execute: async (criteria) => {
+        // Same level as act_in_app (the same act on another platform); a risky label still asks here.
+        permission: { level: 'trusted', requiresApproval: false, description: 'Click a UI element on Linux desktop' },
+        execute: async (criteria, ctx) => {
           const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
           const driver = await createATSPIDriver();
@@ -1337,6 +1352,9 @@ A drawing stays until the user clears it or the window changes; your next drawin
             const element = await driver.findElement(criteria);
             if (!element) throw new Error('Element not found');
             if (!element.coordinates) throw new Error('Element has no coordinates');
+            if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {
+              throw new Error(`${userName} said no, so I didn't click "${element.name}".`);
+            }
             const centerX = element.coordinates.x + element.coordinates.width / 2;
             const centerY = element.coordinates.y + element.coordinates.height / 2;
             await input.click(centerX, centerY, criteria.button || 'left');
@@ -1353,7 +1371,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
           text: z.string().min(1),
           delayMs: z.number().int().min(0).max(1000).optional().default(10),
         }),
-        permission: { level: 'sensitive', requiresApproval: true, description: 'Type text on Linux desktop' },
+        permission: { level: 'trusted', requiresApproval: false, description: 'Type text on Linux desktop' },
         execute: async ({ text, delayMs = 10 }) => {
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
           const input = await getInputSimulator();
@@ -1368,7 +1386,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
           key: z.string().min(1).describe('Key to press (e.g., "Enter", "Tab", "Escape")'),
           modifiers: z.array(z.string()).optional().describe('Modifiers: "Control", "Shift", "Alt", "Meta"'),
         }),
-        permission: { level: 'sensitive', requiresApproval: true, description: 'Press a key on Linux desktop' },
+        permission: { level: 'trusted', requiresApproval: false, description: 'Press a key on Linux desktop' },
         execute: async ({ key, modifiers = [] }) => {
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
           const input = await getInputSimulator();
@@ -1388,7 +1406,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
           y: z.number().int(),
           durationMs: z.number().int().min(0).optional(),
         }),
-        permission: { level: 'sensitive', requiresApproval: true, description: 'Move mouse cursor on Linux desktop' },
+        permission: { level: 'assist', requiresApproval: false, description: 'Move the mouse cursor on Linux desktop' },
         execute: async ({ x, y, durationMs }) => {
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
           const input = await getInputSimulator();
@@ -1459,6 +1477,10 @@ A drawing stays until the user clears it or the window changes; your next drawin
       const baseFetch = createWebFetchTool(undefined, { guardUrl: guardFetch });
       const wrap = (tool, kind) => ({
         ...tool,
+        // Reads the public web; the URL rules still apply at the router and per redirect hop.
+        permission: kind === 'web_search'
+          ? { level: 'observe', requiresApproval: false, description: 'Search the web' }
+          : { level: 'observe', requiresApproval: false, description: 'Read a web page' },
         execute: async (args) => {
           try {
             const r = await tool.execute(args);
@@ -1583,6 +1605,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
     {
       name: 'open', description: 'Open a website, a file or folder, or an app by name (e.g. "Safari", "https://skool.com", "~/Documents"). Links open in the default browser; set app to open one in a particular browser or app (e.g. app "Safari" when the user says "in Safari").',
       parameters: z.object({ target: z.string(), app: z.string().optional() }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Open a website, file, folder or app' },
       execute: async ({ target, app }) => {
         let t = String(target).trim();
         // A bare web address ("example.com", "www.bbc.co.uk/news") is a link, not an app name: it used to fail as
@@ -1731,6 +1754,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       name: 'remember_commitment',
       description: `Save something ${userName} has committed to doing, or anything they ask to be reminded about, so you can remind them at the right moment. Use it whenever they say they will do something or say "remind me". kind: 'reminder' for a plain "remind me to X at/in …" (it clears itself once the nudge is given), 'commitment' (default) for something they say they'll do or finish ("I'll finish the slides by Friday"), which stays open until they say it's done. due: a relative time like "in 90s", "in 5m", "in 1h30m" or "in 2 days" (best for short timers), or a local time YYYY-MM-DDTHH:mm:ss, YYYY-MM-DDTHH:mm, or YYYY-MM-DD if only the day is known; omit if there's no time at all. Resolve words like "Thursday", "at 2" or "tonight" from the timestamp on their message. repeat: only when they ask for it again and again ("every morning", "every weekday at 9", "every 2 hours", "on Mondays and Thursdays"): one of daily, weekdays, weekends, weekly, monthly, yearly, "every N minutes|hours|days|weeks|months" (at least 5 minutes), or days like "mon,wed,fri". It needs due, set to the first time (e.g. tomorrow 09:00 for "every morning at 9"). A repeating 'reminder' moves to its next time each time it fires; a repeating 'commitment' (a habit they want held to, like the gym) moves on when they mark it done. One saved item covers the whole series: never save one per day.`,
       parameters: z.object({ text: z.string().min(2).max(200), due: z.string().optional(), kind: z.enum(['reminder', 'commitment']).optional(), repeat: z.string().max(60).optional() }),
+      permission: { level: 'trusted', requiresApproval: true, description: 'Save a reminder or commitment' },
       execute: async ({ text, due, kind, repeat }) => {
         const ms = parseDue(due);
         if (ms === undefined) throw new Error(`Couldn't read the time "${due}". Use YYYY-MM-DDTHH:mm or YYYY-MM-DD.`);
@@ -1747,6 +1771,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       name: 'update_commitment',
       description: 'Mark a saved commitment done or dropped, or change its due time (same format as remember_commitment; use "none" to clear it) or its repeat (same format; "none" stops it repeating). Done on a repeating one ticks off this time and moves it to the next; dropped ends the whole series, so only drop one when they want it gone for good.',
       parameters: z.object({ id: z.string(), status: z.enum(['open', 'done', 'dropped']).optional(), due: z.string().optional(), repeat: z.string().max(60).optional() }),
+      permission: { level: 'trusted', requiresApproval: true, description: 'Change a saved commitment' },
       execute: async ({ id, status, due, repeat }) => {
         const ms = due === undefined ? undefined : due === 'none' ? null : parseDue(due);
         if (ms === undefined && due !== undefined) throw new Error(`Couldn't read the time "${due}".`);
@@ -1762,6 +1787,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
     {
       name: 'forget_fact', description: 'Delete a saved fact that is wrong or that the user asks you to forget. Ids are in the memory section of the <live-state> block.',
       parameters: z.object({ id: z.string() }),
+      permission: { level: 'trusted', requiresApproval: true, description: 'Forget a saved fact' },
       execute: async ({ id }) => { const f = await forgetFact(id); if (!f) throw new Error(`No fact with id ${id}.`); return `Forgot: ${f.text}`; },
     },
     {
@@ -1773,11 +1799,13 @@ A drawing stays until the user clears it or the window changes; your next drawin
         now: z.array(z.number().int()).optional(),
         skipped: z.array(z.object({ step: z.number().int(), why: z.string() })).optional(),
       }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Show the steps of a task on screen' },
       execute: async (args) => { onPlan(args); return 'ok'; },
     },
     {
       name: 'show_list', description: "Show the user their list on screen (reminders and commitments, Today and Later). Use when they ask to see their list, to-dos or reminders; then answer in a few words, don't read it all out.",
       parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'Show the list on screen' },
       execute: async () => { showList(); return 'The list is on screen.'; },
     },
     {
@@ -1853,8 +1881,8 @@ A drawing stays until the user clears it or the window changes; your next drawin
       description: `Search the web using Exa (optional provider) as part of Browser Intelligence. Supports Arabic and English queries for general web, news, technical and programming research. Returns titles, URLs, snippets/extracted text, and source citations. Observe-only (no site actions). If Exa is not configured, returns status not_configured so other existing search providers can be used instead. Do not send private user data to Exa.`,
       parameters: z.object({
         query: z.string().min(1).max(2000).describe('Search query (Arabic or English).'),
-        numResults: z.number().int().min(1).max(10).optional().describe('Number of results (1-10, default 5).'),
-        type: z.string().optional().describe('Optional Exa search type, e.g. auto, neural, keyword.'),
+        numResults: z.number().int().min(1).max(20).optional().describe('Number of results (1-20, default 5).'),
+        type: z.enum(EXA_SEARCH_TYPES).optional().describe('Search type. "auto" (default) or "deep" for hard questions; "lite" is the cheapest.'),
         category: z.string().optional().describe('Optional category hint, e.g. news article, research paper, github, tweet.'),
         includeDomains: z.array(z.string()).optional().describe('Optional domains to include.'),
         excludeDomains: z.array(z.string()).optional().describe('Optional domains to exclude.'),
@@ -1875,14 +1903,18 @@ A drawing stays until the user clears it or the window changes; your next drawin
     },
     {
       name: 'exa_get_contents',
-      description: `Extract content from specific web page URLs using Exa (optional provider). Returns titles, URLs, extracted text/snippets, and citations. Observe-only; does not access login-protected browser sessions or bypass protections. If Exa is not configured, returns status not_configured.`,
+      description: `Extract content from specific web pages (or pages an earlier Exa search returned, by id) using Exa. Returns titles, URLs, extracted text, highlights, an optional summary, and per-page status (a page that could not be read says why). Reads JavaScript-rendered pages and PDFs, but never login-protected sessions. Observe-only. If Exa is not configured, returns status not_configured.`,
       parameters: z.object({
-        urls: z.array(z.string().min(1)).min(1).max(10).describe('One or more http(s) URLs to extract content from.'),
-        maxCharacters: z.number().int().min(200).max(20000).optional().describe('Max extracted text characters per page (200-20000, default 4000).'),
+        urls: z.array(z.string().min(1)).max(20).optional().describe('http(s) URLs to read (pass these or ids, not both).'),
+        ids: z.array(z.string().min(1)).max(20).optional().describe('Exa page ids from an earlier search.'),
+        maxCharacters: z.number().int().min(200).max(50000).optional().describe('Max extracted text characters per page (200-50000, default 4000).'),
+        summary: z.string().max(500).optional().describe('Ask Exa for a short summary focused on this question, instead of the whole page.'),
+        subpages: z.number().int().min(0).max(100).optional().describe('How many linked subpages to read per result (0 to 100).'),
+        maxAgeHours: z.number().int().min(-1).max(720).optional().describe('Cache age allowed in hours: 0 fetches live, -1 uses the cache only.'),
       }),
       permission: { level: 'observe', requiresApproval: false, description: 'Extract page contents via Exa (optional)' },
-      execute: async ({ urls, maxCharacters }) => {
-        const r = await exaGetContents({ urls, maxCharacters }, {});
+      execute: async ({ urls, ids, maxCharacters, summary, subpages, maxAgeHours }) => {
+        const r = await exaGetContents({ urls, ids, maxCharacters, summary, subpages, maxAgeHours }, {});
         if (!r.ok) {
           ui({ kind: 'browser', action: r.status === 'not_configured' ? 'exa_status' : 'error', source: 'exa_get_contents', provider: 'exa', status: r.status, urls, error: r.error, note: r.note, configured: r.status !== 'not_configured', at: Date.now() });
           return r;
@@ -1907,12 +1939,34 @@ A drawing stays until the user clears it or the window changes; your next drawin
           return r;
         }
         ui({ kind: 'browser', action: 'search', provider: 'exa', query: `Similar to ${String(url).slice(0, 80)}`, results: r.results, citations: r.citations, count: r.count, at: Date.now() });
+        return r;
+      },
     },
+    {
+      name: 'exa_research',
+      description: `Research a question across many sources with Exa's research agent: it searches, reads and cross-references pages, then writes an answer. Returns the written answer (generated) separately from the pages it actually read (sources with URLs), so cite the sources for facts and mark what is synthesis. Slow (up to a few minutes) and paid per run, so use it for real research questions (comparing technologies, what changed recently, gathering docs across sites), not for one lookup: exa_search does those. Observe-only, but it spends money.`,
+      parameters: z.object({
+        query: z.string().min(3).max(2000).describe('The research question, in full (Arabic or English).'),
+        effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'auto']).optional().describe('How hard to research: low is ~$0.03, medium ~$0.10, high ~$0.50. Default low.'),
+        maxMinutes: z.number().min(1).max(6).optional().describe('How long to wait for the run (default 3 minutes).'),
+      }),
+      // Costs money per run (Exa bills by effort), so it asks even at the trusted default; approval is fingerprint-bound.
+      permission: { level: 'observe', requiresApproval: true, description: 'Run a paid multi-source research run on Exa' },
+      execute: async ({ query, effort = 'low', maxMinutes = 3 }) => {
+        const r = await exaResearch({ query, effort, maxDurationMs: maxMinutes * 60_000 }, {});
+        if (!r.ok) {
+          ui({ kind: 'browser', action: r.status === 'not_configured' ? 'exa_status' : 'error', source: 'exa_research', provider: 'exa', status: r.status, query: String(query || ''), error: r.error, note: r.note, configured: r.status !== 'not_configured', at: Date.now() });
+          return r;
+        }
+        ui({ kind: 'browser', action: 'search', provider: 'exa', query: r.query, results: r.sources, citations: r.citations, count: r.sources.length, at: Date.now() });
+        return r;
+      },
     },
     {
       name: 'pomodoro',
       description: 'Start a Pomodoro timer for N minutes (default 25). When it ends, announce via voice. Use when user asks for Pomodoro/focus timer.',
       parameters: z.object({ minutes: z.number().min(1).max(120).optional(), label: z.string().max(80).optional() }),
+      permission: { level: 'assist', requiresApproval: false, description: 'Start a Pomodoro timer' },
       execute: async ({ minutes = 25, label = 'Pomodoro' }) => {
         const ms = minutes * 60000;
         setTimeout(() => { try { speak(`${label} done.`); ui({ kind: 'say', text: `${label} done.` }); } catch {} }, ms);
@@ -1923,6 +1977,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       name: 'morse_practice',
       description: 'Practice Morse code: converts text to Morse and speaks it. Use when user wants Morse training.',
       parameters: z.object({ text: z.string().min(1).max(200) }),
+      permission: { level: 'assist', requiresApproval: false, description: 'Read text out in Morse' },
       execute: async ({ text }) => {
         const map = { a:'.-',b:'-...',c:'-.-.',d:'-..',e:'.',f:'..-.',g:'--.',h:'....',i:'..',j:'.---',k:'-.-',l:'.-..',m:'--',n:'-.',o:'---',p:'.--.',q:'--.-',r:'.-.',s:'...',t:'-',u:'..-',v:'...-',w:'.--',x:'-..-',y:'-.--',z:'--..', '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.' };
         const morse = text.toLowerCase().split('').map(c => (c === ' ' ? '/' : (map[c] || '?'))).join(' ');

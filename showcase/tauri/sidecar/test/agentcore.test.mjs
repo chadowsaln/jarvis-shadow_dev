@@ -285,12 +285,17 @@ const meta = (level = 'assist', requiresApproval = false) => ({ permission: { le
 
 // ---- Feature flag + factory ----
 {
-  assert.equal(isAgentCoreEnabled({}), false);
+  // On by default since V2.1 (Batch 1): the safe path is the one everybody is on.
+  assert.equal(isAgentCoreEnabled({}), true);
+  assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: '' }), true);
   assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: '0' }), false);
   assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: 'false' }), false);
+  assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: 'off' }), false);
   assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: '1' }), true);
   assert.equal(isAgentCoreEnabled({ [AGENT_CORE_FLAG]: 'true' }), true);
-  const coreOff = createAgentCore({ env: {} });
+  const coreByDefault = createAgentCore({ env: {} });
+  assert.equal(coreByDefault.enabled, true);
+  const coreOff = createAgentCore({ env: { [AGENT_CORE_FLAG]: '0' } });
   assert.equal(coreOff.enabled, false);
   assert.deepEqual(coreOff.observe({ text: 'hello' }), { enabled: false });
   const coreOn = createAgentCore({ env: { [AGENT_CORE_FLAG]: '1' } });

@@ -6,6 +6,13 @@ import { createTools, shellFor } from '../tools.mjs';
 const noop = async () => {};
 const { tools } = createTools({ allowActions: false, ui: () => {}, ask: async () => false, openUrl: noop, onCommitments: noop, showList: noop, fmtWhen: String, commitmentsText: () => '', userName: 'Test' });
 
+// Batch 1: every tool the model can call declares what it may do. A tool without this metadata is never offered by
+// the agent core, so a missing line silently removes a capability - that is what this checks.
+for (const t of tools) {
+  assert.ok(t.permission && typeof t.permission.level === 'string', `${t.name} declares a permission level`);
+  assert.equal(typeof t.permission.requiresApproval, 'boolean', `${t.name} says whether it asks first`);
+}
+
 // Regression: the old fetch_url's url had format "uri", which OpenAI strict schemas reject, failing every OpenAI request.
 const formats = [];
 const walk = (name, node, at) => {

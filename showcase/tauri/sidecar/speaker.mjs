@@ -71,6 +71,10 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   const all = { ...PROVIDERS, fish: { ...PROVIDERS.fish, Voice: FishVoiceImpl, account }, ...providers };
   let P = all.fish; // the service in use
   let key = null, voice = P.defaultVoice, pref = P.pick ?? P.models[0], model = pref, seq = 0, current = null, checking = null;
+  // How fast the voice plays, as a multiplier of the service's own rate (1: as it comes). It moves tempo and pitch
+  // together, like a tape: the honest limit of doing it on the way to the speakers rather than at the service.
+  let rateMul = 1;
+  const playRate = () => Math.max(4000, Math.round((P.play ?? P.rate) * rateMul));
   // The user's picks per language for the service in use ({ ar, en }); a language with none uses its own voice.
   let langVoices = {};
   const voiceFor = (text) => pickVoice(text, { voices: langVoices, fallback: voice }).voice;
@@ -228,7 +232,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
         if (!shippedBeat && !chunks) { me.say(phrase); return true; }
         log('speech_beat', { id, ms: Date.now() - t0 });
         if (shippedBeat) emit({ kind: 'speech', id, rate: shippedBeat.rate, pcm: shippedBeat.pcm });
-        else for (const pcm of chunks) emit({ kind: 'speech', id, rate: P.play ?? P.rate, pcm });
+        else for (const pcm of chunks) emit({ kind: 'speech', id, rate: playRate(), pcm });
         return true;
       },
       end() { if (done || ended) return; ended = true; v.end(); },
@@ -252,7 +256,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
         onAudio: (pcm) => {
           if (done) return;
           if (!heard) { heard = true; if (m !== model) model = m; log('speech_first_audio', { id, model: m, ms: Date.now() - t0 }); }
-          emit({ kind: 'speech', id, rate: P.play ?? P.rate, pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString('base64') });
+          emit({ kind: 'speech', id, rate: playRate(), pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString('base64') });
         },
         onEnd: () => finish(true),
         onError: async (err) => {
@@ -296,6 +300,11 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
     },
     get pick() { return pref; },
     setVoice(v) { if ((v || P.defaultVoice) !== voice) beats = new Map(); voice = v || P.defaultVoice; if (key) warm(); },
+    /** How fast it speaks: 1 is the service's own pace (0.8–1.25 is the useful range). It applies to the next
+     *  piece of audio, and to a beat already made, since it's the playback rate that changes. */
+    setRate(v) { const n = Number(v); rateMul = Number.isFinite(n) ? Math.min(1.3, Math.max(0.75, n)) : 1; },
+    get rate() { return rateMul; },
+    get playRate() { return playRate(); },
     // The user's voices per language for the service in use ({ ar: id, en: id }): a sentence is read in the voice for
     // its own language, else the service's (the look's voice, the engine's default).
     setLangVoices(voices) { langVoices = voices && typeof voices === 'object' ? { ...voices } : {}; },

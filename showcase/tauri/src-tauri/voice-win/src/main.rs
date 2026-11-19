@@ -9,7 +9,9 @@
 // (sent for `roamies --talk`, which people bind to a key) starts a take, and sends it when it comes again or on a
 // pause. Exits when stdin closes.
 //
-// roamies-voice --model <dir> [--chord control,option] [--mic NAME]   normal use (Roamies starts it)
+// roamies-voice --model <dir> [--chord control,option] [--mic NAME] [--take-audio]   normal use (Roamies starts it)
+// --take-audio (or {"cmd":"audio","on":true}): each take's audio rides along with its final message, as a base64
+// WAV, for hearing that happens elsewhere (Gemini). Off unless asked: the default is on-device only.
 // roamies-voice --perms                                   prints {"type":"perms","mic":…}
 // roamies-voice --devices                                 prints {"type":"devices",…}: every mic, the default, formats
 // roamies-voice --record 2 [--out mic.wav] [--mic NAME]   dev: records the mic and says which device it used
@@ -177,6 +179,10 @@ struct Voice {
     final_until: Option<f64>,
     test_audio: Option<PathBuf>,
     ink: ink::Ink,
+    // Whether this take's audio rides along with its final message, and the take's WAV while it finishes (for
+    // hearing that happens elsewhere: Gemini's transcription). Off by default: the default is on-device only.
+    take_audio: bool,
+    take_wav: Option<String>,
     tx: Sender<Ev>,
     t0: Instant,
 }
@@ -210,8 +216,19 @@ impl Voice {
             final_until: None,
             test_audio,
             ink: ink::Ink::default(),
+            take_audio: false,
+            take_wav: None,
             tx,
             t0: Instant::now(),
+        }
+    }
+
+    /// Hand each take's audio over (or stop): the app says this when the user picks a hearing service that runs
+    /// elsewhere. Nothing is recorded differently; the take is simply kept once more, as a WAV.
+    fn set_take_audio(&mut self, on: bool) {
+        self.take_audio = on;
+        if !on {
+            self.take_wav = None;
         }
     }
 
@@ -343,7 +360,9 @@ impl Voice {
         self.heard_at = now;
         self.voice_at = now;
         self.read_at = now;
-        if self.engine.is_none() {
+        // No speech model is fine when the take is handed over: the words are written down somewhere else, and
+        // this is only the recorder.
+        if self.engine.is_none() && !self.take_audio {
             let code = if self.engine_error.is_some() { "recognition" } else { "model_missing" };
             emit(json!({ "type": "error", "code": code, "message": self.engine_error.clone().unwrap_or_default() }));
             return self.cancel();
@@ -448,6 +467,14 @@ impl Voice {
     fn close_take(&mut self, now: f64) {
         self.stop_audio();
         let audio = std::mem::take(&mut *self.buf.lock().unwrap());
+        // The take as a WAV, before it's read here, when something else is going to hear it. Its silent ends are
+        // trimmed, so a long quiet take isn't uploaded as mostly silence.
+        self.take_wav = if self.take_audio {
+            let words = trim_take(&audio, RATE);
+            (!words.is_empty()).then(|| base64(&wav_bytes(words, RATE)))
+        } else {
+            None
+        };
         match &self.engine {
             Some(engine) if self.spoke && engine.send(Job { take: self.take, audio, last: true }).is_ok() => self.final_until = Some(now + FINAL_TIMEOUT),
             _ => self.finalize(),
@@ -500,12 +527,20 @@ impl Voice {
         self.phase = Phase::Idle;
         let text = self.best.trim().to_string();
         let area = self.ink.take();
-        if !text.is_empty() {
-            // What was circled on screen while talking rides along with the words.
+        // A take with no words of its own can still be worth sending: its audio is what someone else reads.
+        let handed_over = self.take_wav.is_some();
+        if !text.is_empty() || handed_over {
+            // What was circled on screen while talking rides along with the words, and so does the take's audio
+            // when the app asked for it (a hearing service that runs elsewhere reads it too).
             let mut msg = json!({ "type": "final", "text": text });
             if let Some(a) = area {
                 msg["area"] = a;
                 log("sent what was said, with the circled area");
+            }
+            if let Some(audio) = self.take_wav.take() {
+                msg["audio"] = json!(audio);
+                msg["rate"] = json!(RATE);
+                log("sent the take's audio with it");
             }
             emit(msg);
         } else if let Some(f) = area.as_ref().and_then(|a| a["file"].as_str()) {
@@ -515,8 +550,8 @@ impl Voice {
             self.report_empty = false;
         }
         emit(json!({ "type": "state", "state": "idle" }));
-        // Listened but got no words: say so instead of closing silently.
-        if text.is_empty() && self.report_empty {
+        // Listened but got no words (and nothing was handed over): say so instead of closing silently.
+        if text.is_empty() && !handed_over && self.report_empty {
             emit(json!({ "type": "error", "code": "nothing_heard", "spoke": self.voice_at > self.listen_at + 0.05 }));
         }
         self.report_empty = false;
@@ -525,6 +560,7 @@ impl Voice {
     fn cancel(&mut self) {
         self.stop_audio();
         self.buf.lock().unwrap().clear();
+        self.take_wav = None;
         self.tail_until = None;
         self.final_until = None;
         self.take += 1;
@@ -538,6 +574,7 @@ impl Voice {
 
     /// Start listening hands-free without a key press (after an area snap). Ends on a pause or a tap.
     fn listen_now(&mut self) {
+        self.take_wav = None;
         if self.phase != Phase::Idle {
             return;
         }
@@ -582,6 +619,7 @@ impl Voice {
                     self.set_chord(&mods);
                 }
                 Some("mic") => self.set_mic(msg.get("name").and_then(Value::as_str).map(str::to_owned)),
+                Some("audio") => self.set_take_audio(msg.get("on").and_then(Value::as_bool) == Some(true)),
                 // Muting the speakers while listening is macOS-only for now.
                 _ => {}
             },
@@ -602,6 +640,64 @@ impl Voice {
         }
         false
     }
+}
+
+// ---------- the take, as audio ----------
+// Only used when something elsewhere is going to hear it (Gemini): a base64 WAV, 16-bit mono at the mic's rate,
+// with the silent ends trimmed. Nothing here is logged: the audio is the user's voice.
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let n = ((chunk[0] as u32) << 16)
+            | ((*chunk.get(1).unwrap_or(&0) as u32) << 8)
+            | (*chunk.get(2).unwrap_or(&0) as u32);
+        out.push(B64[(n >> 18) as usize & 63] as char);
+        out.push(B64[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// The take without its silent ends (a little kept either side): a speech model invents words from a long silence.
+fn trim_take(samples: &[f32], rate: u32) -> &[f32] {
+    let loud = |v: f32| v.abs() >= 0.012;
+    let mut a = 0;
+    let mut b = samples.len();
+    while a < b && !loud(samples[a]) {
+        a += 1;
+    }
+    if a == b {
+        return &samples[0..0];
+    }
+    while b > a + 1 && !loud(samples[b - 1]) {
+        b -= 1;
+    }
+    let pad = (rate as f32 * 0.18) as usize;
+    &samples[a.saturating_sub(pad)..(b + pad).min(samples.len())]
+}
+
+fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
+    let n = samples.len() as u32;
+    let mut out = Vec::with_capacity(44 + (n as usize) * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + n * 2).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(n * 2).to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    out
 }
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -663,6 +759,7 @@ fn main() {
         }
     };
     let mut voice = Voice::new(engine, arg(&args, "--test-audio").map(PathBuf::from), tx.clone(), arg(&args, "--mic"));
+    voice.set_take_audio(args.iter().any(|a| a == "--take-audio"));
     if let Some(c) = arg(&args, "--chord") {
         voice.set_chord(&c.split(',').map(str::to_owned).collect::<Vec<_>>());
     }
@@ -779,6 +876,81 @@ mod tests {
         assert_eq!(v.mic.as_deref(), Some("Unknown Studio Mic"));
         v.handle(Ev::Cmd(json!({ "cmd": "mic", "name": "  " })));
         assert_eq!(v.mic, None, "blank means the system default");
+    }
+
+    // The take handed to a hearing service elsewhere: a base64 WAV, its silent ends trimmed.
+    #[test]
+    fn the_take_becomes_a_wav_with_its_silence_trimmed() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        let samples = vec![0.5f32; 1600];
+        let wav = wav_bytes(&samples, RATE);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), RATE, "the mic's rate, stated");
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1, "mono");
+        assert_eq!(wav.len(), 44 + 3200);
+        let mut quiet = vec![0.0f32; 8000];
+        for s in &mut quiet[4000..4400] {
+            *s = 0.4;
+        }
+        // A second of audio either side of the words: 0.18 s of air is kept at each end, no more.
+        let t = trim_take(&quiet, 1000);
+        assert!(t.len() > 400 && t.len() < 800, "only the words and a little air ({})", t.len());
+        assert!(trim_take(&vec![0.0f32; 1000], RATE).is_empty(), "silence is nothing to hand over");
+    }
+
+    #[test]
+    fn a_take_is_handed_over_only_when_asked() {
+        let (mut v, jobs, wav) = voice();
+        v.set_take_audio(true);
+        v.toggle();
+        v.on_level(0.5);
+        // Half a second of speech in the take (the test-audio file feeds a thread of its own).
+        v.buf.lock().unwrap().extend(std::iter::repeat(0.3f32).take(RATE as usize / 2));
+        v.on_text(v.take, "hello".into(), false);
+        v.toggle();
+        v.tail_until = Some(0.0);
+        v.tick();
+        let _job = jobs.try_recv().expect("a closing read");
+        assert!(v.take_wav.clone().is_some_and(|s| s.starts_with("UklGR")), "the take's audio, as a RIFF WAV in base64");
+        let _ = std::fs::remove_file(wav);
+        // Not asked for: on-device hearing only, so no audio is kept at all.
+        let (mut v2, _jobs2, wav2) = voice();
+        v2.toggle();
+        v2.on_level(0.5);
+        v2.on_text(v2.take, "hello".into(), false);
+        v2.toggle();
+        v2.tail_until = Some(0.0);
+        v2.tick();
+        assert!(v2.take_wav.is_none(), "nothing is handed over unless the app asked");
+        let _ = std::fs::remove_file(wav2);
+    }
+
+    // With the take handed over, the recorder alone is enough: no 650 MB model is needed to hear Arabic.
+    #[test]
+    fn a_handed_over_take_runs_without_the_speech_model() {
+        let wav = std::env::temp_dir().join(format!("roamies-voice-nomodel-{}.wav", std::process::id()));
+        let spec = hound::WavSpec { channels: 1, sample_rate: RATE, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::create(&wav, spec).expect("test wav");
+        for i in 0..RATE / 2 {
+            w.write_sample(((i as f32 * 0.2).sin() * 8000.0) as i16).expect("sample");
+        }
+        w.finalize().expect("wav written");
+        let (tx, _events) = mpsc::channel();
+        let mut v = Voice::new(None, Some(wav.clone()), tx, None);
+        v.set_take_audio(true);
+        v.toggle();
+        assert_eq!(v.phase, Phase::HandsFree, "a take starts with no model when its audio is handed over");
+        v.buf.lock().unwrap().extend(std::iter::repeat(0.3f32).take(RATE as usize / 2));
+        v.toggle();
+        v.tail_until = Some(0.0);
+        v.tick();
+        assert_eq!(v.phase, Phase::Idle, "and it ends with the take's audio, no words of its own");
+        assert!(v.best.is_empty());
+        let _ = std::fs::remove_file(wav);
     }
 
     #[test]

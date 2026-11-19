@@ -271,14 +271,14 @@ const resetRun = () => { ran = 0; };
   assert.equal(ran, 0);
 }
 
-// 17. Legacy behavior remains unchanged with the feature flag disabled.
+// 17. The flag is on by default and can be turned off explicitly (Batch 1, V2.1).
 {
-  assert.equal(isAgentCoreEnabled({}), false);
+  assert.equal(isAgentCoreEnabled({}), true, 'on when unset');
+  assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: undefined }), true);
   assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: '0' }), false);
   assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: 'false' }), false);
-  assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: undefined }), false);
-  // Agent core observe/monitoring remains no-op when disabled (as in Batch 1 integration).
-  // No agentcore execution path is invoked by default; existing sidekick behavior is unchanged when flag off.
+  assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: 'off' }), false);
+  // Off is an explicit escape hatch: the host asked for the unguarded list, so that is what it gets.
 }
 
 // 18. Concurrent duplicate execution of one step is denied (no double-run race).

@@ -60,16 +60,87 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
 
 // ---------------------------------------------------------------- the flag and what is offered
 {
-  assert.equal(isAgentCoreEnabled({}), false, 'off by default');
+  // On by default since Batch 1 (V2.1); only an explicit falsy value turns it off.
+  assert.equal(isAgentCoreEnabled({}), true, 'on by default');
+  assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: '0' }), false, 'an explicit off is honoured');
   assert.equal(isAgentCoreEnabled({ ROAMIES_AGENT_CORE: '1' }), true);
   const tools = buildTools();
-  const { rt } = live({ tools });
+  const { rt } = live({ tools, granted: 'trusted' });
   // Nothing without permission metadata is ever offered, and the caller's list is not touched (sidekick splices it).
   for (const t of rt.tools) assert.ok(defaultToolPermission(t), `${t.name} declares what it may do`);
-  assert.equal(tools.length > rt.tools.length, true, 'most tools carry no metadata yet, so they are not offered');
-  assert.ok(rt.tools.some((t) => t.name === 'list_commitments'), 'the read-only memory tool is offered');
-  assert.equal(rt.skipped, tools.length - rt.tools.length);
+  // Batch 1: every tool declares what it may do, so the operator is never silently disarmed by turning the core on.
+  assert.equal(rt.skipped, 0, 'no tool is dropped for missing metadata');
+  assert.equal(rt.tools.length, tools.length, 'so every tool is offered');
+  const names = rt.tools.map((t) => t.name);
+  for (const n of ['take_screenshot', 'run_command', 'open', 'draw', 'see_photo', 'plan_steps', 'show_list', 'list_commitments']) {
+    assert.ok(names.includes(n), `${n} is offered`);
+  }
+  const perm = (n) => defaultToolPermission(rt.tools.find((t) => t.name === n));
+  // What the person agreed to: a screenshot (the picture leaves this computer) asks every time.
+  assert.deepEqual([perm('take_screenshot').level, perm('take_screenshot').requiresApproval], ['observe', true], 'a screen look asks every time');
+  assert.deepEqual([perm('run_command').level, perm('run_command').requiresApproval], ['trusted', true], 'a shell command asks');
+  assert.equal(perm('open').requiresApproval, false, 'opening a page does not');
+  assert.equal(perm('write_file').requiresApproval, true, 'writing a file does');
   console.log('offering: passed');
+}
+
+// ---------------------------------------------------------------- Batch 1: the tool is told when it was approved
+// Tools that ask their own yes/no question (write_file, run_command, launch_app) must not ask twice: the executor's
+// approval is bound to the exact arguments, so the tool is told, and only then skips its own question.
+{
+  const seen = [];
+  const fake = (name, requiresApproval) => ({
+    name, description: 'test tool', parameters: { type: 'object', properties: { path: { type: 'string' } } },
+    permission: { level: 'trusted', requiresApproval, description: 'test' },
+    execute: async (args, ctx) => { seen.push({ name, approved: !!ctx?.approved, signal: ctx?.signal }); return 'ok'; },
+  });
+  const { stdout, channel, rt } = live({ granted: 'trusted', ask: [], extra: [fake('fake_asked', true), fake('fake_plain', false)] });
+  const call = rt.tools.find((t) => t.name === 'fake_asked').execute({ path: '/tmp/x' }, {});
+  const request = await waitDialog(stdout);
+  channel.answer(press(request, 'approve'));
+  assert.equal(await call, 'ok');
+  assert.equal(seen[0].approved, true, 'an approved action says so');
+  assert.ok(seen[0].signal, 'and hands the tool the abort signal');
+  assert.equal(await rt.tools.find((t) => t.name === 'fake_plain').execute({ path: '/tmp/x' }, {}), 'ok');
+  assert.equal(seen[1].approved, false, 'an action nobody was asked about is not "approved"');
+  console.log('approval reaches the tool: passed');
+}
+
+// ---------------------------------------------------------------- Batch 1: Stop reaches the execution layer
+// The panel's Stop used to abort the model's stream only; a tool already running kept going and the next call would
+// still be authorised. Now stop cancels the executor, and the next request reopens it - a stale stop never blocks it.
+{
+  const { rt } = live({ granted: 'trusted' });
+  const list = rt.tools.find((t) => t.name === 'list_commitments');
+  rt.stop('the person pressed Stop');
+  await assert.rejects(() => list.execute({}, {}), /Blocked: cancelled/, 'no call runs after Stop');
+  assert.equal(rt.core.executor.isCancelled(), true);
+  rt.reset('new request');
+  assert.equal(rt.core.executor.isCancelled(), false, 'the next request may act again');
+  console.log('stop and reset: passed');
+}
+
+// ---------------------------------------------------------------- Batch 1: the default grant
+// Trusted: reading, clicking, typing, files and app launches work; sensitive and administrative tools stay denied -
+// an approval cannot lift a level, so deleting or killing is impossible until the host raises the grant.
+{
+  const rt = createAgentCoreRuntime({ tools: buildTools(), env: {}, approvalChannel: null });
+  assert.equal(rt.grantedLevel, 'trusted', 'the default grant is trusted');
+  assert.equal(rt.skipped, 0, 'and nothing is dropped');
+  const risky = {
+    name: 'fake_delete', description: 'test tool', parameters: { type: 'object', properties: {} },
+    permission: { level: 'sensitive', requiresApproval: true, description: 'Delete something' },
+    execute: async () => 'gone',
+  };
+  const rt2 = createAgentCoreRuntime({ tools: [risky], env: {}, approvalChannel: null });
+  assert.equal(rt2.tools.length, 1, 'the tool is offered');
+  await assert.rejects(() => rt2.tools[0].execute({}, {}), /insufficient permission level/, 'but denied at trusted');
+  // An unknown level grants nothing rather than more, and says so in the startup line.
+  const rt3 = createAgentCoreRuntime({ tools: [risky], env: { ROAMIES_AGENT_CORE_LEVEL: 'banana' } });
+  assert.equal(rt3.grantedLevel, null);
+  assert.match(rt3.levelError, /unknown ROAMIES_AGENT_CORE_LEVEL: banana/);
+  await assert.rejects(() => rt3.tools[0].execute({}, {}), /host permission level for fake_delete/);
+  console.log('default grant: passed');
 }
 
 // ---------------------------------------------------------------- a real approval, approved
@@ -308,16 +379,30 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const readOnlyMemory = ['memory_list', 'memory_search'];
   const mutatingApps = apps ? ['launch_app'] : [];
   const mutatingMemory = ['memory_delete', 'memory_save', 'memory_update'];
-  const observeAsk = [...(apps ? ['screen_capture', 'screen_ocr'] : []), 'browser_read_respan_authenticated'];
+  // Exa research spends money per run, so it is observe-level but asks before every run.
+  const observeAsk = [...(apps ? ['screen_capture', 'screen_ocr'] : []), 'browser_read_respan_authenticated', 'exa_research'];
   const readOnly = [...readOnlyFile, ...readOnlyApps, ...readOnlyBrowser, ...readOnlyMemory], mutating = [...mutatingFile, ...mutatingApps, ...mutatingMemory];
-  const base = ['list_commitments', 'run_diagnostic', ...(process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['list_windows'] : [])];
-  const expected = [...base, ...readOnly, ...observeAsk, ...mutating].sort();
-  // On Linux, additional native control tools may be offered when capabilities exist; assert core set and that no unexpected tools appear.
-  for (const n of expected) assert.ok(names.includes(n), `${n} offered`);
-  const allowedLinuxNative = new Set(['linux_capture_screen','linux_click_element','linux_find_element','linux_focus_window','linux_list_apps','linux_list_windows','linux_move_mouse','linux_ocr','linux_press_key','linux_type_text']);
-  for (const n of names) {
-    if (!expected.includes(n)) assert.ok(allowedLinuxNative.has(n), `unexpected tool offered: ${n}`);
+  // Batch 1: the reviewed set is the whole tool list. Every tool here declares its level, so nothing is dropped -
+  // a tool the chat can see must be one the executor can authorise, and a missing line here is a regression.
+  const desktop = ['draw', 'morse_practice', 'open', 'plan_steps', 'pomodoro', 'see_photo', 'show_list', 'take_screenshot', 'web_fetch', 'web_search'];
+  const memoryWrites = ['remember_commitment', 'update_commitment', 'forget_fact'];
+  const shell = ['run_command', 'run_diagnostic', 'list_commitments'];
+  const nativeHands = process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['act_in_app', 'list_windows', 'read_window'] : [];
+  const linuxNative = process.platform === 'linux' ? ['linux_capture_screen', 'linux_click_element', 'linux_find_element', 'linux_focus_window', 'linux_list_apps', 'linux_list_windows', 'linux_move_mouse', 'linux_ocr', 'linux_press_key', 'linux_type_text'] : [];
+  const expected = [...desktop, ...memoryWrites, ...shell, ...nativeHands, ...linuxNative, ...readOnly, ...observeAsk, ...mutating].sort();
+  assert.deepEqual(names, expected, 'every tool is offered, and only the reviewed ones');
+  // The desktop operator's own verbs are reachable at the default grant (trusted).
+  for (const n of ['open', 'take_screenshot', 'draw', 'read_file']) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.ok(['observe', 'assist', 'trusted'].includes(defaultToolPermission(t).level), `${n} is within the default grant`);
   }
+  for (const n of memoryWrites) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} requires explicit approval`);
+  }
+  assert.equal(defaultToolPermission(rt.tools.find((x) => x.name === 'take_screenshot')).requiresApproval, true, 'a screen look asks every time');
   for (const n of readOnly) {
     const t = rt.tools.find((x) => x.name === n);
     assert.ok(t, `${n} offered`);
@@ -336,8 +421,8 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
     assert.equal(defaultToolPermission(t).level, 'trusted', `${n} is trusted-level`);
     assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} requires explicit approval`);
   }
-  // Even at the top level, tools without metadata are not offered/routable.
-  for (const n of ['run_command', 'act_in_app', 'open', 'take_screenshot', 'forget_fact']) {
+  // A tool that does not exist is not routable, whatever the level.
+  for (const n of ['delete_file', 'nope']) {
     const r = rt.core.router.route(n, {}, { phase: 'initial' });
     assert.equal(r.allowed, false, `${n} is not reachable`);
     assert.match(r.reason, /unknown tool/, `${n} was never offered`);
@@ -357,7 +442,7 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   }
   // Screen tools are observe-level but still require explicit approval per use (portal consent); at observe grant they route only with approval.
   for (const n of observeAsk) {
-    const rs = low.rt.core.router.route(n, n === 'browser_read_respan_authenticated' ? { url: 'https://platform.respan.ai/' } : {}, { phase: 'initial' });
+    const rs = low.rt.core.router.route(n, n === 'browser_read_respan_authenticated' ? { url: 'https://platform.respan.ai/' } : n === 'exa_research' ? { query: 'latest robotics' } : {}, { phase: 'initial' });
     assert.equal(rs.allowed, true, `${n} allowed at observe grant`);
     assert.equal(rs.requiresApproval, true, `${n} requires approval at observe`);
   }

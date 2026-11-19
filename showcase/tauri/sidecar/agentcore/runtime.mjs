@@ -46,7 +46,8 @@ export function guardTools({ tools = [], core } = {}) {
  * tools wrapped so nothing bypasses authorization.
  *
  * ROAMIES_AGENT_CORE_LEVEL sets the host grant (observe | assist | trusted | sensitive | administrative).
- * It defaults to `observe`: read-only tools only. An unknown value grants nothing rather than more.
+ * It defaults to `trusted`: reading, clicking, typing, files and app launches work; sensitive and administrative
+ * tools (deleting, killing, system changes) stay denied. An unknown value grants nothing rather than more.
  * ROAMIES_AGENT_CORE_APPROVE="tool,tool" asks the person first, every time, for those tools. Off by default:
  * it is how the approval path is exercised before any tool that needs it exists.
  */
@@ -60,7 +61,7 @@ export function createAgentCoreRuntime({
   requireApproval = null,
   grantedLevel = null,
 } = {}) {
-  const rawLevel = grantedLevel ?? env?.ROAMIES_AGENT_CORE_LEVEL ?? 'observe';
+  const rawLevel = grantedLevel ?? env?.ROAMIES_AGENT_CORE_LEVEL ?? 'trusted';
   const level = normalizePermissionLevel(rawLevel);
   // Only tools that declare what they may do are offered at all: the router denies anything without metadata, and
   // a tool the model can see but can never call is only noise. What is offered is the tools' own least privilege.
@@ -88,11 +89,13 @@ export function createAgentCoreRuntime({
     safety: safety ?? {},
     logger,
     requestApproval: approvalChannel ? (input) => approvalChannel.request(input) : undefined,
-    // Authorize the wrapper, execute the real tool behind it.
-    runTool: async ({ tool, args }) => {
+    // Authorize the wrapper, execute the real tool behind it. The tool gets the executor's abort signal, and
+    // `approved` only when this exact action was approved (fingerprint-bound) just now - tools that ask their own
+    // yes/no question use it to skip asking twice, never to skip the question when nobody was asked.
+    runTool: async ({ tool, args, signal, approvalRequest }) => {
       const real = tool?.[RAW] ?? null;
       if (!real || typeof real.execute !== 'function') throw new Error('tool is not executable');
-      return real.execute(args ?? {});
+      return real.execute(args ?? {}, { signal, approved: !!approvalRequest });
     },
   });
 
@@ -100,6 +103,10 @@ export function createAgentCoreRuntime({
     core,
     tools: curried,
     grantedLevel: level,
+    /** Stop now: the running tool is aborted and any further call this run is denied (fails closed). */
+    stop(reason = 'stopped') { core.executor.cancel(reason); },
+    /** A new request: clear the previous run's cancel/revoke so the operator can act again. */
+    reset(reason = 'new run') { core.executor.reset(reason); },
     /** Tools left out because they carry no permission metadata (never reachable while the flag is on). */
     skipped: tools.length - offered.length,
     asked: [...askNames],
