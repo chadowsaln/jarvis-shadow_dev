@@ -400,8 +400,28 @@
           state.snap ?? mac ? btn('Ask about an area', () => act('snap', true), { k: 'snap' }) : null,
           state.busy ? btn('Stop', () => act('stop'), { k: 'stop' }) : btn('New chat', () => act('new'), { k: 'new', disabled: !state.canNew, aria: 'Start a new conversation' }),
           mac ? null : btn(`Show ${state.name}`, () => act('show', true), { k: 'show' }))),
+      ...comingUp(),
       recentList(),
     ].flat();
+  }
+  // A glance at what's next: a few open commitments, overdue ones first. Nothing to press here (ticking and
+  // dropping live on Memory → Commitments, where the whole list is); it's gone entirely when nothing is open.
+  const SOON = 3;
+  function comingUp() {
+    const all = state.commitments ?? [];
+    if (!all.length) return [];
+    const rows = [...all].sort((a, b) => (b.overdue ? 1 : 0) - (a.overdue ? 1 : 0)).slice(0, SOON);
+    const late = all.filter((x) => x.overdue).length;
+    // The link is gone once the page changes, so the keyboard lands on the tab it opened.
+    const openAll = () => { ui.mtab = 'commits'; ui.pg.commits = 0; show('memory'); $('tab-commits')?.focus(); };
+    return [el('div', { className: 'group soon' },
+      el('div', { className: 'ghead row' },
+        el('h2', {}, 'Coming up', el('span', { className: 'n', textContent: `${all.length} open${late ? ` · ${late} overdue` : ''}` })),
+        link(all.length > rows.length ? `All ${all.length}` : 'Manage', openAll, { k: 'commits-open', aria: `Show all ${all.length} commitment${all.length === 1 ? '' : 's'} in Memory` })),
+      el('ul', { className: 'list', 'aria-label': 'Coming up' }, rows.map((x) => el('li', { className: `item soon${x.overdue ? ' late' : ''}` },
+        el('span', { className: 'mark', 'aria-hidden': 'true' }),
+        el('span', { className: 'text', textContent: x.text, title: x.text }),
+        el('span', { className: 'meta', textContent: x.overdue ? `Overdue · ${x.when}` : x.when })))))].flat();
   }
   function recentList() {
     const { box, nav } = paged('recent', state.recent, (r) => el('li', { className: `item ${r.kind}` },
@@ -443,16 +463,25 @@
   const foot = (left, nav, id) => (left || nav ? el('div', { className: 'pfoot', id }, el('div', { className: 'pfoot-l' }, left), nav) : null);
   // How many rows fit in each list's box now; true when that changed (so it's drawn again). An open row (a key
   // field) takes its extra room off the page instead of setting the size of every row.
+  // A list whose rows don't fill the box is marked .short: the page then ends under its own rows instead of
+  // stretching to the window's edge, which would leave a hole between the list and its footer. Its page size is
+  // the one measured at full height, so shrinking the box never changes it (a smaller box would measure fewer
+  // rows, and the two sizes would fight each other).
   function fit() {
     let changed = false;
     for (const box of document.querySelectorAll(`#pane-${tab} .pagebox`)) {
+      const group = box.closest('.group');
+      if (group?.classList.contains('short')) continue;
       const rows = [...box.querySelectorAll('.list > li')];
-      if (!rows.length || !box.clientHeight) continue;
+      if (!rows.length || !box.clientHeight) { group?.classList.add('short'); continue; }
+      // An open key field wants the room it asked for, not a page that hugs its own rows.
+      if (rows.some((r) => r.classList.contains('open'))) { group?.classList.remove('short'); continue; }
       const shut = rows.filter((r) => !r.classList.contains('open'));
       const unit = Math.max(...(shut.length ? shut : rows).map((r) => r.offsetHeight));
       const extra = rows.filter((r) => r.classList.contains('open')).reduce((n, r) => n + Math.max(0, r.offsetHeight - unit), 0);
       const per = Math.max(3, Math.floor((box.clientHeight - extra) / unit));
       if (per !== ui.per[box.dataset.pager]) { ui.per[box.dataset.pager] = per; changed = true; }
+      group?.classList.toggle('short', rows.length < per);
     }
     return changed;
   }
@@ -1047,9 +1076,10 @@
     if (keep && refocus) (document.querySelector(`.pane [data-k="${CSS.escape(keep)}"]`) ?? document.getElementById(keep))?.focus();
   }
   document.addEventListener('focusout', (e) => { if (deferred && e.target.tagName === 'INPUT') setTimeout(() => deferred && render(), 0); });
-  // The window changes size with the screen it opens on: as many rows as fit there.
+  // The window changes size with the screen it opens on: as many rows as fit there. The measured page sizes go
+  // with it, since a shrunk (short) page was measured at the old height.
   let resizeTimer = 0;
-  addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => state && render(), 120); });
+  addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!state) return; for (const k of Object.keys(ui.per)) delete ui.per[k]; render(); }, 120); });
   // The panel lost the keyboard (another app was clicked) or went away behind another window: a key capture left
   // waiting would eat that app's keys, and the F1-F24 it swallows are the app's own.
   addEventListener('blur', () => stopTalkCapture(false));
