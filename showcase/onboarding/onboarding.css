@@ -1,3 +1,5 @@
+/* Setup guide (modernized). */
+@import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap");
 /* Setup guide. Same LED-panel world as the Sidekick and the installer: Doto (dot matrix) for headings
    and the Sidekick's voice, Martian Mono for everything else, and every tile, button, key and field
    drawn as a pixel frame with stepped corners. Fonts are SIL OFL 1.1; licences sit in fonts/. */
@@ -30,8 +32,8 @@
   --line-hot: #4fbfa9;
   --danger: #ffb4a8;
   --ease: cubic-bezier(.2, .8, .2, 1);
-  --display: "Doto", ui-monospace, monospace;
-  --mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --display: "Tajawal", system-ui, sans-serif;
+  --mono: "Tajawal", system-ui, sans-serif;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -50,32 +52,20 @@ body {
 }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* ---------- pixel frame ----------
-   The element paints its frame colour and is clipped to stepped corners; ::before paints the fill
-   inside it. Set --bc (frame), --fill (inside) and --bw (frame width) per component. */
+/* ---------- smooth frame (modern) ---------- */
 .px {
-  --s: 2px;
   --bc: var(--line);
   --fill: var(--panel);
-  --bw: 2px;
-  --notch: polygon(
-    calc(var(--s) * 2) 0, calc(100% - var(--s) * 2) 0, calc(100% - var(--s) * 2) var(--s), calc(100% - var(--s)) var(--s),
-    calc(100% - var(--s)) calc(var(--s) * 2), 100% calc(var(--s) * 2), 100% calc(100% - var(--s) * 2),
-    calc(100% - var(--s)) calc(100% - var(--s) * 2), calc(100% - var(--s)) calc(100% - var(--s)),
-    calc(100% - var(--s) * 2) calc(100% - var(--s)), calc(100% - var(--s) * 2) 100%, calc(var(--s) * 2) 100%,
-    calc(var(--s) * 2) calc(100% - var(--s)), var(--s) calc(100% - var(--s)), var(--s) calc(100% - var(--s) * 2),
-    0 calc(100% - var(--s) * 2), 0 calc(var(--s) * 2), var(--s) calc(var(--s) * 2), var(--s) var(--s), calc(var(--s) * 2) var(--s));
+  --bw: 1px;
   position: relative; isolation: isolate;
-  background: var(--bc);
-  clip-path: var(--notch);
-  transition: background-color .15s var(--ease);
-}
-.px::before {
-  content: ""; position: absolute; inset: var(--bw); z-index: -1;
   background: var(--fill);
-  clip-path: var(--notch);
-  transition: background-color .15s var(--ease);
+  border: var(--bw) solid var(--bc);
+  border-radius: 12px;
+  transition: background-color .15s var(--ease), border-color .15s var(--ease), transform .15s var(--ease);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
+.px:focus-visible, .px:has(:focus-visible) { --bc: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* clip-path hides outlines, so keyboard focus shows as a thick white frame with a dark inner ring. */
 .px:focus-visible, .px:has(:focus-visible) { --bc: var(--ink); --bw: 3px; }
 .px:focus-visible::before, .px:has(:focus-visible)::before { box-shadow: inset 0 0 0 2px var(--bg); }
@@ -439,3 +429,5 @@ input:focus-visible { outline: none; }
   .step, .mb-me, .summon.recording .caps, .led.busy { animation: none; }
   .px, .px::before, .link, .switch::after, .quip, .quip-tail, .progress li, .dl i, .pen-keys .cap { transition: none; }
 }
+
+html[dir='rtl'], body[dir='rtl'] { direction: rtl; }

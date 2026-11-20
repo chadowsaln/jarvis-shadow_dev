@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap");
 /* The panel that opens from the menu bar or tray icon. Built on the setup guide's stylesheet (fonts, colours,
    pixel frames, buttons, switches, fields), so it's the same LED-panel world; this file only lays it out.
    One accent fill per view: the header's update button when there is one, otherwise Ask. */
@@ -13,7 +14,7 @@
 }
 /* The window is transparent and so is the page; the frame is its own box (a body background would be
    painted across the whole window), so the panel can switch on and off as its own shape. */
-html, body { height: 100%; background: transparent; }
+html, body { height: 100%; background: transparent; font-family: "Tajawal", system-ui, sans-serif; }
 .frame {
   position: relative; /* the approval sheet sits over it */
   height: 100%; display: flex; flex-direction: column; overflow: hidden;
@@ -384,3 +385,5 @@ html, body { height: 100%; background: transparent; }
 .theme-col input[type="color"] { width: 44px; height: 26px; padding: 0; border: 0; background: none; cursor: pointer; }
 .setting input[type="range"] { width: 116px; accent-color: var(--ink); }
 .theme-cols { display: flex; flex-wrap: wrap; gap: 14px; }
+
+html[dir='rtl'], body[dir='rtl'] { direction: rtl; }
