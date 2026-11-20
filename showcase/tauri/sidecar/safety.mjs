@@ -455,6 +455,26 @@ export function checkAppTarget(target) {
   return verdict(SAFE);
 }
 
+// Linux hands-off apps (terminals, password managers, system settings): typing or clicking there is refused.
+const LINUX_HANDS_OFF = new Map([
+  ['gnome-terminal', 'GNOME Terminal'], ['kgx', 'Console'], ['konsole', 'Konsole'], ['alacritty', 'Alacritty'],
+  ['kitty', 'kitty'], ['wezterm', 'WezTerm'], ['xterm', 'xterm'], ['tilix', 'Tilix'], ['terminator', 'Terminator'],
+  ['ptyxis', 'Ptyxis'], ['foot', 'foot'],
+  ['gnome-control-center', 'Settings'], ['systemsettings', 'System Settings'],
+  ['1password', '1Password'], ['bitwarden', 'Bitwarden'], ['keepassxc', 'KeePassXC'], ['keepass', 'KeePass'],
+]);
+export function linuxHandsOff(name) {
+  const n = String(name ?? '').trim().toLowerCase();
+  for (const [k, v] of LINUX_HANDS_OFF) if (n === k || n.includes(k)) return v;
+  return null;
+}
+export function checkLinuxInputTarget(app) {
+  const off = linuxHandsOff(app);
+  if (off) return verdict(BLOCK, `"${off}" is off-limits for typing and clicking.`);
+  return verdict(SAFE);
+}
+
+
 // ---------- opening things and fetching pages ----------
 
 const RUNNABLE = /\.(app|command|sh|bash|zsh|tool|terminal|scpt|scptd|applescript|workflow|action|pkg|mpkg|dmg|jar|py|rb|pl|js|mjs|exe|bat|cmd|ps1|shortcut|mobileconfig|kext|plugin|prefPane|saver|desktop|appimage|deb|rpm|run|flatpakref|flatpak|snap)\/?$/i;

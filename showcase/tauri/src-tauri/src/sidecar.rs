@@ -79,7 +79,16 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     #[cfg(windows)]
     cmd.env("ROAMIES_EXE", std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
     #[cfg(target_os = "linux")]
-    cmd.env("ROAMIES_SESSION", crate::linux::session().name()).env("ROAMIES_LAUNCH", crate::linux::launch_command());
+    {
+        cmd.env("ROAMIES_SESSION", crate::linux::session().name()).env("ROAMIES_LAUNCH", crate::linux::launch_command());
+        for (k, v) in [("DBUS_SESSION_BUS_ADDRESS", std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()),
+                       ("XDG_RUNTIME_DIR", std::env::var("XDG_RUNTIME_DIR").ok()),
+                       ("YDOTOOL_SOCKET", std::env::var("YDOTOOL_SOCKET").ok()),
+                       ("DISPLAY", std::env::var("DISPLAY").ok()),
+                       ("WAYLAND_DISPLAY", std::env::var("WAYLAND_DISPLAY").ok())] {
+            if let Some(val) = v { cmd.env(k, val); }
+        }
+    }
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
     }
