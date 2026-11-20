@@ -367,7 +367,7 @@
     avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55, pal: color ? paletteFromColor(color) : LED });
     return avatar;
   }
-  const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', hybrid: 'Reactor core online.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
+  const QUIPS = { hybrid: 'Reactor core online.' };
   let quipTimer = 0, seen = { look: null, update: null, opened: 0 };
   function quip(text, secs = 2.6) {
     const q = $('saying'), n = $('by');
@@ -681,7 +681,6 @@
   function appearancePage() {
     const customPal = state.customColor ? paletteFromColor(state.customColor) : LED;
     return [
-      group('Look', 'Each look has its own name and voice.', null, lookTiles()),
       group('Color', 'Pick a custom color to tint your look. The palette is generated from this color.', null,
         el('div', { className: 'setting' },
           el('label', { className: 'px field' },
@@ -1399,7 +1398,7 @@
     document.title = 'Roamies panel (preview with sample data)';
     const at = Date.now();
     const s = {
-      version: '0.9.0', os: /Win/.test(navigator.platform) ? 'win' : 'mac',
+      version: '0.1.1', os: /Win/.test(navigator.platform) ? 'win' : 'mac',
       status: { state: 'ready', text: 'Ready' }, busy: false, canNew: true,
       model: { provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', providerLabel: 'Anthropic' },
       providers: [
