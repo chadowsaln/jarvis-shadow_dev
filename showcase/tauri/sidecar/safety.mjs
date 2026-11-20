@@ -465,15 +465,22 @@ const LINUX_HANDS_OFF = new Map([
 ]);
 export function linuxHandsOff(name) {
   const n = String(name ?? '').trim().toLowerCase();
-  for (const [k, v] of LINUX_HANDS_OFF) if (n === k || n.includes(k)) return v;
+  if (!n) return null;
+  for (const [k, v] of LINUX_HANDS_OFF) {
+    if (n === k) return v;
+    // word-boundary match on normalized tokens, not substring
+    const re = new RegExp('(^|[^a-z0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^a-z0-9]|$)');
+    if (re.test(n)) return v;
+  }
   return null;
 }
 export function checkLinuxInputTarget(app) {
-  const off = linuxHandsOff(app);
+  const n = (app == null ? '' : String(app)).trim();
+  if (!n) return verdict(BLOCK, "can't tell which app has focus");
+  const off = linuxHandsOff(n);
   if (off) return verdict(BLOCK, `"${off}" is off-limits for typing and clicking.`);
   return verdict(SAFE);
 }
-
 
 // ---------- opening things and fetching pages ----------
 

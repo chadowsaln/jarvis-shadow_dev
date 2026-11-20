@@ -1350,9 +1350,13 @@ A drawing stays until the user clears it or the window changes; your next drawin
           const input = await getInputSimulator();
           try {
             const focused = await driver.getFocusedApplication();
-            const verdict = checkLinuxInputTarget(focused?.name);
-            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+            const fverdict = checkLinuxInputTarget(focused?.name);
+            if (fverdict?.level === BLOCK) throw new Error(fverdict.reason);
             const element = await driver.findElement(criteria);
+            if (element?.applicationName) {
+              const everdict = checkLinuxInputTarget(element.applicationName);
+              if (everdict?.level === BLOCK) throw new Error(everdict.reason);
+            }
             if (!element) throw new Error('Element not found');
             if (!element.coordinates) throw new Error('Element has no coordinates');
             if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {

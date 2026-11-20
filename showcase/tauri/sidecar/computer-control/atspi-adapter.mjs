@@ -97,19 +97,16 @@ class ATSPIDriver {
   }
 
   async getFocusedApplication() {
-    // Best-effort: prefer an active window's app name; fall back to the first app.
     try {
       const windows = await this.getWindowList();
       for (const w of windows) {
-        if (Array.isArray(w.states) && w.states.some((st) => /active|focused/i.test(String(st)))) return { name: w.appName || w.title };
+        if (Array.isArray(w.states) && w.states.some((st) => /active|focused/i.test(String(st)))) {
+          const name = w.appName || w.title;
+          if (name) return { name };
+        }
       }
-      if (windows.length) return { name: windows[0].appName };
     } catch {}
-    try {
-      const apps = await this.getApplicationList();
-      if (apps.length) return { name: apps[0].name };
-    } catch {}
-    return { name: '' };
+    return null;
   }
 
   async getWindowList() {
@@ -145,7 +142,7 @@ class ATSPIDriver {
     return windows;
   }
 
-  async _collectElements(busName, path, out, depth = 0, maxDepth = 6) {
+  async _collectElements(busName, path, out, depth = 0, maxDepth = 6, appName = '') {
     if (depth > maxDepth || out.length > 200) return;
     try {
       const acc = await this._getAccessible(busName, path);
@@ -165,12 +162,12 @@ class ATSPIDriver {
         const n = Number(await act.GetNActions().catch(() => 0));
         for (let i = 0; i < n; i++) actions.push(String(await act.GetName(i).catch(() => '')));
       } catch {}
-      out.push({ path, busName, role, name, description: '', states: [], attributes: {}, coordinates: bounds, actions, applicationName: '' });
+      out.push({ path, busName, role, name, description: '', states: [], attributes: {}, coordinates: bounds, actions, applicationName: appName });
       let kids = [];
       try { kids = await this._children(acc); } catch {}
       for (const [cBus, cPath] of kids) {
         try {
-          await this._collectElements(String(cBus), String(cPath), out, depth + 1, maxDepth);
+          await this._collectElements(String(cBus), String(cPath), out, depth + 1, maxDepth, appName);
         } catch {}
       }
     } catch {}
@@ -183,7 +180,7 @@ class ATSPIDriver {
     const targets = criteria.applicationName ? apps.filter(a => (a.name || '').toLowerCase().includes(String(criteria.applicationName).toLowerCase())) : apps;
     for (const app of targets) {
       try {
-        await this._collectElements(app.busName || 'org.a11y.atspi.Registry', app.path, all, 0, 6);
+        await this._collectElements(app.busName || 'org.a11y.atspi.Registry', app.path, all, 0, 6, app.name);
       } catch {}
     }
     let filtered = all.filter(el => {

@@ -1047,7 +1047,7 @@
   function maker() {
     if (!ken) {
       const cv = el('canvas', { 'aria-hidden': 'true' });
-      const r = liveRoamie(cv, 100, 74, { look: 'ken', y: 0.55, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
+      const r = liveRoamie(cv, 100, 74, { look: 'hybrid', y: 0.55, pal: state.customColor ? paletteFromColor(state.customColor) : LED });
       const card = el('div', { className: 'maker' }, cv, el('span', {}, 'Ken Kai', el('small', { textContent: 'Creator of Roamies' })));
       let waved = 0;
       card.addEventListener('pointerenter', () => { if (r && Date.now() - waved > 3500) { waved = Date.now(); r.act('wave'); } });

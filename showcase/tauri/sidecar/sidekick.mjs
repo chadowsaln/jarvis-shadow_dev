@@ -2462,7 +2462,7 @@ async function onMenu(id, via) {
     talkKeyError = '';
     config.keys = { ...keys(), talkKey: key }; saveConfig(); sendKeys(); menu(); panel();
     if (!key) panelNote(WAYLAND && previous ? `Remove the ${previous} binding from Keyboard settings too.` : 'The talk key was cleared; the modifier shortcut still works.');
-    else if (WAYLAND) panelNote(`In your desktop's Keyboard Shortcuts settings, bind ${key} to the Talk to me command, roamies --talk.`);
+    else if (WAYLAND) panelNote(`In your desktop's Keyboard Shortcuts settings, bind ${key} to the Talk to me command, ${LAUNCH} --talk.`);
     else if (!config.voice) panelNote(`Saved ${key}. It listens once Voice control is on.`);
     else if (!canHear()) panelNote(`Saved ${key}. It listens once the voice model is downloaded.`);
     else panelNote(`Press ${key} to listen; press it again or pause to send.`);

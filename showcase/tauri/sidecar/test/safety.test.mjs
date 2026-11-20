@@ -413,6 +413,13 @@ console.log('safety loophole tests: passed');
 }
 
 // Linux hands-off input targets.
+assert.equal(checkLinuxInputTarget(null).level, BLOCK);
+assert.equal(checkLinuxInputTarget('').level, BLOCK);
+assert.equal(checkLinuxInputTarget(undefined).level, BLOCK);
 assert.equal(checkLinuxInputTarget('gnome-terminal').level, BLOCK);
+assert.equal(checkLinuxInputTarget('ptyxis').level, BLOCK);
+assert.equal(checkLinuxInputTarget('kgx').level, BLOCK);
+assert.equal(checkLinuxInputTarget('1password').level, BLOCK);
+assert.equal(checkLinuxInputTarget('footage').level, SAFE);
 assert.equal(checkLinuxInputTarget('gedit').level, SAFE);
 console.log('linux hands-off tests: passed');
