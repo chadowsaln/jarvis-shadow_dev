@@ -47,9 +47,9 @@
       // Size: 'default', 'small' (half the body) or 'cursor' (a pixel arrow pointer). Text keeps its size either way.
       let form = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('form')) || 'default', lastEnv = null;
       let userForm = form;
-      // Look: 'classic' (the goo blob, and the arrow at cursor size), 'jarvis' (roamies/jarvis.js: a globe of
-      // points with a lit heart, and a HUD reticle at cursor size) or a character from roamies/people.js
-      // ('anime', 'sarah', 'adrian', 'rita'). Moves, sizes and everything else are shared.
+      // Look: 'hybrid' (roamies/hybrid.js: a 3D reactor orb with a 2D LED fallback). The older goo blob and
+      // pixel characters were removed; an unknown or legacy id falls back to the hybrid. Moves, sizes and
+      // everything else are shared.
       const drawn = (l) => (l === 'jarvis' ? Roamie.jarvis : l === 'hybrid' ? Roamie.hybrid : Roamie.people?.[l]);
       const pickLook = (l) => (drawn(l) ? l : 'hybrid');
       // A look that keeps state (the hybrid's own renderer and orb position) is made once per creature: two of them

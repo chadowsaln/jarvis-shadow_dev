@@ -14,7 +14,8 @@ assert.match(mac, /Voice \(pick the voice provider and model/);
 assert.match(win, /bottom right of the taskbar/);
 assert.ok(!/Ask About an Area|Wake word|Voice Control|Cursor, a little arrow/.test(win), 'features this copy lacks are left out');
 assert.match(linux, /AppIndicator extension/);
-assert.match(linux, /bind keys in your desktop settings for littleboy/);
+assert.match(linux, /bind keys in your desktop settings for jarvis_v2/);
+assert.match(aboutLittleBoy({ ...base, linux: true, launch: '/opt/jarvis.AppImage' }), /for \/opt\/jarvis\.AppImage --summon/);
 assert.ok(!/Wake word/.test(linux), 'the wake word is Mac only');
 for (const t of [mac, win, linux]) {
   assert.match(t, /Save Diagnostics/);

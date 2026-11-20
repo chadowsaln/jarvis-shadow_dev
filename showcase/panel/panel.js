@@ -302,7 +302,7 @@
   // A Roamie on a canvas of w×h CSS px: the one on screen at half scale (the app's unit, every dot half size), so
   // each size shows its own art (the full face, the small one, the pointer) at its real size next to the others.
   const ZOOM = 0.5, UNIT = 340;
-  function liveRoamie(canvas, w, h, { look = 'classic', y = 0.56, form = 'default', pal = null } = {}) {
+  function liveRoamie(canvas, w, h, { look = 'hybrid', y = 0.56, form = 'default', pal = null } = {}) {
     if (!window.Roamie?.ditherKit) return null;
     const dpr = Math.min(2, devicePixelRatio || 1);
     canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
@@ -1398,7 +1398,7 @@
     document.title = 'Roamies panel (preview with sample data)';
     const at = Date.now();
     const s = {
-      version: '0.1.1', os: /Win/.test(navigator.platform) ? 'win' : 'mac',
+      version: '0.1.2', os: /Win/.test(navigator.platform) ? 'win' : /Linux/.test(navigator.platform) ? 'linux' : 'mac',
       status: { state: 'ready', text: 'Ready' }, busy: false, canNew: true,
       model: { provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', providerLabel: 'Anthropic' },
       providers: [
@@ -1424,7 +1424,7 @@
       facts: [{ id: 'f1', text: 'Prefers short answers in the morning' }, { id: 'f2', text: 'Working on the Roamies 1.0 launch, due end of month' }, { id: 'f3', text: 'Has a cat called Miso' }],
       memories: [{ id: 'm1', category: 'preferences', title: 'Style', content: 'Prefers short answers', updatedAt: at, createdAt: at }, { id: 'm2', category: 'projects', title: 'Roamies', content: 'Working on 1.0 launch', updatedAt: at, createdAt: at }],
       commitments: [{ id: 'c1', text: 'Send the launch email', when: 'Fri 7 Nov, 10:00', overdue: false }, { id: 'c2', text: 'Book the dentist', when: 'Mon 3 Nov, 09:00', overdue: true }],
-      name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['hybrid', 'Hybrid'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']],
+      name: 'Hybrid', look: 'hybrid', looks: [['hybrid', 'Hybrid']],
       size: 'default', sizes: [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']],
       replies: 'voice', fishKey: true, fishModel: 'drama-3', fishFree: false,
       // ?tts=gemini: Gemini as the voice, its key saved.
