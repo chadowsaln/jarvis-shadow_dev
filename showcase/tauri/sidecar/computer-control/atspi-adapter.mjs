@@ -58,43 +58,71 @@ class ATSPIDriver {
     return obj.getInterface(ACCESSIBLE_IFACE);
   }
 
+  async _getName(busName, path) {
+    try {
+      const msg = new dbus.Message({ destination: String(busName), path: String(path), interface: 'org.freedesktop.DBus.Properties', member: 'Get', signature: 'ss', body: ['org.a11y.atspi.Accessible', 'Name'] });
+      const reply = await this.bus.call(msg);
+      return String(reply?.body?.[0]?.value ?? '');
+    } catch { return ''; }
+  }
+
+  async _children(acc) {
+    try {
+      const res = await acc.GetChildren();
+      return Array.isArray(res) ? res : [];
+    } catch { return []; }
+  }
   async getApplicationList() {
     if (!this.bus) await this.connect();
     const registry = await this._getAccessible('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root');
-    let count = 0;
-    try { count = Number(await registry.GetChildCount()); } catch { count = 0; }
     const apps = [];
-    for (let i = 0; i < count; i++) {
-      try {
-        const [childBus, childPath] = await registry.GetChildAtIndex(i);
-        const acc = await this._getAccessible(String(childBus), String(childPath));
-        const name = String(await acc.GetName().catch(() => ''));
-        let pid = 0;
-        try { pid = Number(await acc.GetApplication().then(a => a?.[0]).catch(() => 0)); } catch {}
-        apps.push({ name, path: String(childPath), pid, toolkitName: '', version: '' });
-      } catch {}
+    // root -> desktop(s) -> applications
+    const desktops = await this._children(registry);
+    const targets = desktops.length ? desktops : [[registry, '/org/a11y/atspi/accessible/root']];
+    for (const [dbus, dpath] of targets) {
+      let desktopAcc = registry;
+      try { if (dbus !== 'org.a11y.atspi.Registry' || dpath !== '/org/a11y/atspi/accessible/root') desktopAcc = await this._getAccessible(String(dbus), String(dpath)); } catch { desktopAcc = registry; }
+      const appRefs = await this._children(desktopAcc);
+      for (const [childBus, childPath] of appRefs) {
+        try {
+          const acc = await this._getAccessible(String(childBus), String(childPath));
+          const name = await this._getName(String(childBus), String(childPath));
+          let pid = 0;
+          try { const app = await acc.GetApplication(); pid = Number((Array.isArray(app) ? app[0] : app) ?? 0); } catch {}
+          if (name) apps.push({ name, path: String(childPath), busName: String(childBus), pid, toolkitName: '', version: '' });
+        } catch {}
+      }
     }
     return apps;
+  }
+
+  async getFocusedApplication() {
+    try {
+      const windows = await this.getWindowList();
+      for (const w of windows) {
+        if (Array.isArray(w.states) && w.states.some((st) => /active|focused/i.test(String(st)))) {
+          const name = w.appName || w.title;
+          if (name) return { name };
+        }
+      }
+    } catch {}
+    return null;
   }
 
   async getWindowList() {
     if (!this.bus) await this.connect();
     const registry = await this._getAccessible('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root');
-    let count = 0;
-    try { count = Number(await registry.GetChildCount()); } catch { count = 0; }
     const windows = [];
-    for (let i = 0; i < count; i++) {
+    const apps = await this._children(registry);
+    for (const [appBus, appPath] of apps) {
       try {
-        const [childBus, childPath] = await registry.GetChildAtIndex(i);
-        const acc = await this._getAccessible(String(childBus), String(childPath));
-        const appName = String(await acc.GetName().catch(() => ''));
-        let wcount = 0;
-        try { wcount = Number(await acc.GetChildCount()); } catch {}
-        for (let j = 0; j < wcount; j++) {
+        const appName = await this._getName(String(appBus), String(appPath));
+        const acc = await this._getAccessible(String(appBus), String(appPath));
+        const appChildren = await this._children(acc);
+        for (const [wBus, wPath] of appChildren) {
           try {
-            const [wBus, wPath] = await acc.GetChildAtIndex(j);
             const wacc = await this._getAccessible(String(wBus), String(wPath));
-            const title = String(await wacc.GetName().catch(() => ''));
+            const title = await this._getName(String(wBus), String(wPath));
             const role = String(await wacc.GetRoleName().catch(() => ''));
             if (role && !/window|frame|dialog/i.test(role) && !title) continue;
             let bounds = { x: 0, y: 0, width: 0, height: 0 };
@@ -104,7 +132,9 @@ class ATSPIDriver {
               const ext = await comp.GetExtents(0);
               bounds = { x: Number(ext.x ?? ext[0] ?? 0), y: Number(ext.y ?? ext[1] ?? 0), width: Number(ext.width ?? ext[2] ?? 0), height: Number(ext.height ?? ext[3] ?? 0) };
             } catch {}
-            windows.push({ title, path: String(wPath), busName: String(wBus), appName, bounds, states: [] });
+            let states = [];
+            try { states = Array.from(await wacc.GetState()); } catch {}
+            windows.push({ title, path: String(wPath), busName: String(wBus), appName, bounds, states });
           } catch {}
         }
       } catch {}
@@ -112,11 +142,11 @@ class ATSPIDriver {
     return windows;
   }
 
-  async _collectElements(busName, path, out, depth = 0, maxDepth = 6) {
+  async _collectElements(busName, path, out, depth = 0, maxDepth = 6, appName = '') {
     if (depth > maxDepth || out.length > 200) return;
     try {
       const acc = await this._getAccessible(busName, path);
-      const name = String(await acc.GetName().catch(() => ''));
+      const name = await this._getName(String(busName), String(path));
       const role = String(await acc.GetRoleName().catch(() => ''));
       let bounds = null;
       try {
@@ -132,13 +162,12 @@ class ATSPIDriver {
         const n = Number(await act.GetNActions().catch(() => 0));
         for (let i = 0; i < n; i++) actions.push(String(await act.GetName(i).catch(() => '')));
       } catch {}
-      out.push({ path, busName, role, name, description: '', states: [], attributes: {}, coordinates: bounds, actions, applicationName: '' });
-      let count = 0;
-      try { count = Number(await acc.GetChildCount()); } catch {}
-      for (let i = 0; i < count; i++) {
+      out.push({ path, busName, role, name, description: '', states: [], attributes: {}, coordinates: bounds, actions, applicationName: appName });
+      let kids = [];
+      try { kids = await this._children(acc); } catch {}
+      for (const [cBus, cPath] of kids) {
         try {
-          const [cBus, cPath] = await acc.GetChildAtIndex(i);
-          await this._collectElements(String(cBus), String(cPath), out, depth + 1, maxDepth);
+          await this._collectElements(String(cBus), String(cPath), out, depth + 1, maxDepth, appName);
         } catch {}
       }
     } catch {}
@@ -151,18 +180,7 @@ class ATSPIDriver {
     const targets = criteria.applicationName ? apps.filter(a => (a.name || '').toLowerCase().includes(String(criteria.applicationName).toLowerCase())) : apps;
     for (const app of targets) {
       try {
-        const registry = await this._getAccessible('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root');
-        // find app child by name/path best-effort: walk root children
-        let count = Number(await registry.GetChildCount().catch(() => 0));
-        for (let i = 0; i < count; i++) {
-          try {
-            const [cBus, cPath] = await registry.GetChildAtIndex(i);
-            const acc = await this._getAccessible(String(cBus), String(cPath));
-            const an = String(await acc.GetName().catch(() => ''));
-            if (criteria.applicationName && !an.toLowerCase().includes(String(criteria.applicationName).toLowerCase())) continue;
-            await this._collectElements(String(cBus), String(cPath), all, 0, 6);
-          } catch {}
-        }
+        await this._collectElements(app.busName || 'org.a11y.atspi.Registry', app.path, all, 0, 6, app.name);
       } catch {}
     }
     let filtered = all.filter(el => {

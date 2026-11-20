@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { aboutLittleBoy } from '../about.mjs';
 
 // The app's manual for about_littleboy: each platform's own wording, and only the features this copy has.
-const base = { name: 'JARVIS', looks: ['Roamie', 'JARVIS', 'Anime Girl'], mac: false, linux: false, snap: false, pointer: false, voice: false, hotkeys: false };
+const base = { name: 'Hybrid', looks: ['Hybrid'], mac: false, linux: false, snap: false, pointer: false, voice: false, hotkeys: false };
 const mac = aboutLittleBoy({ ...base, mac: true, snap: true, pointer: true, voice: true, hotkeys: true });
 const win = aboutLittleBoy(base);
 const linux = aboutLittleBoy({ ...base, linux: true, voice: true });
 assert.match(mac, /lives in the menu bar at the top of the screen/);
-assert.match(mac, /Show JARVIS, Ask JARVIS…, Ask About an Area…, Stop, Quit JARVIS V2/);
-assert.match(mac, /Appearance \(pick your look and its size: Roamie, JARVIS, Anime Girl, Sarah, Adrian or Rita X/);
+assert.match(mac, /Show Hybrid, Ask Hybrid…, Ask About an Area…, Stop, Quit JARVIS V2/);
+assert.match(mac, /Appearance \(pick your look and its size: Hybrid/);
 assert.match(mac, /wake word: say "Hey JARVIS"/);
 assert.match(mac, /Voice \(pick the voice provider and model/);
 assert.match(win, /bottom right of the taskbar/);

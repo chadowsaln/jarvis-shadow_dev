@@ -22,3 +22,6 @@ showcase/tauri/sidecar/gateway/gateway.toml
 *.tmp
 .vscode/
 .idea/
+
+# Freebuff caches
+.freebuff/

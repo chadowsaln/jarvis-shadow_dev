@@ -70,3 +70,60 @@ export async function detectCapabilities() {
   try { caps.ocr = true; } catch {}
   return caps;
 }
+
+// CLI diagnostic mode: `node computer-control/index.mjs --doctor`
+if (process.argv.includes('--doctor')) {
+  (async () => {
+    const checks = [];
+    const ok = (name, pass, hint) => checks.push({ name, pass: !!pass, hint: hint || '' });
+    // AT-SPI accessibility
+    try {
+      const { execSync } = await import('node:child_process');
+      let acc = false;
+      try { acc = execSync('gsettings get org.gnome.desktop.interface toolkit-accessibility', { encoding: 'utf8' }).trim() === 'true'; } catch {}
+      ok('AT-SPI accessibility enabled (gsettings org.gnome.desktop.interface toolkit-accessibility)', acc, 'Run: gsettings set org.gnome.desktop.interface toolkit-accessibility true');
+    } catch (e) { ok('AT-SPI accessibility', false, e?.message); }
+    // AT-SPI bus reachable
+    try {
+      const { createATSPIDriver } = await import('./atspi-adapter.mjs');
+      const d = createATSPIDriver(); await d.connect(); await d.disconnect();
+      ok('AT-SPI bus reachable', true, '');
+    } catch (e) { ok('AT-SPI bus reachable', false, 'Install at-spi2-core and ensure DBUS_SESSION_BUS_ADDRESS is set; ' + (e?.message || e)); }
+    // ydotool
+    try {
+      const { execSync } = await import('node:child_process');
+      let ydotool = false, daemon = false, uinput = false;
+      try { execSync('command -v ydotool', { stdio: 'ignore' }); ydotool = true; } catch {}
+      try { execSync('pgrep -x ydotoold', { stdio: 'ignore' }); daemon = true; } catch {}
+      try { const fs = await import('node:fs'); fs.accessSync('/dev/uinput', fs.constants.W_OK); uinput = true; } catch {}
+      ok('ydotool installed', ydotool, 'Install ydotool (dnf install ydotool)');
+      ok('ydotoold running', daemon, 'Start: systemctl --user enable --now ydotool (or ydotoold)');
+      ok('/dev/uinput writable', uinput, 'Add udev rule: echo \'KERNEL=="uinput", GROUP="input", MODE="0660"\' | sudo tee /etc/udev/rules.d/80-uinput.rules; sudo udevadm control --reload-rules');
+    } catch (e) { ok('ydotool checks', false, e?.message); }
+    // portals
+    try {
+      const { execSync } = await import('node:child_process');
+      ok('XDG portal (ScreenCast/Screenshot) available', !!process.env.XDG_RUNTIME_DIR, 'Ensure xdg-desktop-portal and xdg-desktop-portal-gnome are installed');
+    } catch {}
+    // tesseract
+    try {
+      const { execSync } = await import('node:child_process');
+      let t = false, eng = false, ara = false;
+      try { execSync('command -v tesseract', { stdio: 'ignore' }); t = true; } catch {}
+      try { const out = execSync('tesseract --list-langs 2>/dev/null', { encoding: 'utf8' }); eng = /eng/.test(out); ara = /ara/.test(out); } catch {}
+      ok('tesseract installed', t, 'Install: dnf install tesseract');
+      ok('tesseract eng language data', eng, 'Install: dnf install tesseract-langpack-eng');
+      ok('tesseract ara language data', ara, 'Install: dnf install tesseract-langpack-ara');
+    } catch (e) { ok('tesseract checks', false, e?.message); }
+    // env
+    ok('DBUS_SESSION_BUS_ADDRESS set', !!process.env.DBUS_SESSION_BUS_ADDRESS, 'Export DBUS_SESSION_BUS_ADDRESS in the sidecar environment');
+    ok('XDG_RUNTIME_DIR set', !!process.env.XDG_RUNTIME_DIR, 'Export XDG_RUNTIME_DIR in the sidecar environment');
+    ok('YDOTOOL_SOCKET set (optional)', true, process.env.YDOTOOL_SOCKET ? process.env.YDOTOOL_SOCKET : 'Not set; ydotool uses its default socket');
+    // Wayland note
+    console.log('Wayland:', !!process.env.WAYLAND_DISPLAY);
+    console.log('Global input requires ydotool/libei/portal; GNOME may show a permission prompt.');
+    for (const c of checks) console.log(`${c.pass ? 'PASS' : 'FAIL'}: ${c.name}${c.pass ? '' : ' -- ' + c.hint}`);
+    const failed = checks.filter(c => !c.pass).length;
+    process.exit(failed ? 1 : 0);
+  })();
+}

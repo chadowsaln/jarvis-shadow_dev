@@ -455,6 +455,33 @@ export function checkAppTarget(target) {
   return verdict(SAFE);
 }
 
+// Linux hands-off apps (terminals, password managers, system settings): typing or clicking there is refused.
+const LINUX_HANDS_OFF = new Map([
+  ['gnome-terminal', 'GNOME Terminal'], ['kgx', 'Console'], ['konsole', 'Konsole'], ['alacritty', 'Alacritty'],
+  ['kitty', 'kitty'], ['wezterm', 'WezTerm'], ['xterm', 'xterm'], ['tilix', 'Tilix'], ['terminator', 'Terminator'],
+  ['ptyxis', 'Ptyxis'], ['foot', 'foot'],
+  ['gnome-control-center', 'Settings'], ['systemsettings', 'System Settings'],
+  ['1password', '1Password'], ['bitwarden', 'Bitwarden'], ['keepassxc', 'KeePassXC'], ['keepass', 'KeePass'],
+]);
+export function linuxHandsOff(name) {
+  const n = String(name ?? '').trim().toLowerCase();
+  if (!n) return null;
+  for (const [k, v] of LINUX_HANDS_OFF) {
+    if (n === k) return v;
+    // word-boundary match on normalized tokens, not substring
+    const re = new RegExp('(^|[^a-z0-9])' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^a-z0-9]|$)');
+    if (re.test(n)) return v;
+  }
+  return null;
+}
+export function checkLinuxInputTarget(app) {
+  const n = (app == null ? '' : String(app)).trim();
+  if (!n) return verdict(BLOCK, "can't tell which app has focus");
+  const off = linuxHandsOff(n);
+  if (off) return verdict(BLOCK, `"${off}" is off-limits for typing and clicking.`);
+  return verdict(SAFE);
+}
+
 // ---------- opening things and fetching pages ----------
 
 const RUNNABLE = /\.(app|command|sh|bash|zsh|tool|terminal|scpt|scptd|applescript|workflow|action|pkg|mpkg|dmg|jar|py|rb|pl|js|mjs|exe|bat|cmd|ps1|shortcut|mobileconfig|kext|plugin|prefPane|saver|desktop|appimage|deb|rpm|run|flatpakref|flatpak|snap)\/?$/i;

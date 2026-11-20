@@ -21,7 +21,7 @@
       meter = ac.createAnalyser(); meter.fftSize = 512; buf = new Float32Array(meter.fftSize);
       out.connect(meter); meter.connect(ac.destination);
     }
-    if (ac.state !== 'running') ac.resume();
+    if (ac.state !== 'running') { try { ac.resume()?.catch?.(() => {}); } catch {} }
     return ac;
   };
 

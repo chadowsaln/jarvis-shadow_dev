@@ -17,7 +17,7 @@
 - **V2.1 — Linux Computer Control (مسودة/جزئي):** وحدة `showcase/tauri/sidecar/computer-control/` وأدوات Linux في `showcase/tauri/sidecar/tools.mjs` (`linux_list_apps`, `linux_list_windows`, `linux_find_element`, `linux_click_element`, `linux_type_text`, `linux_press_key`, `linux_move_mouse`, `linux_capture_screen`, `linux_ocr`, `linux_focus_window`). التكامل والتحقق الطرف-إلى-طرف (AT-SPI2، ydotool/libei/uinput، XDG Portal، Tesseract) ما زالا يتطلبان إعداداً واختباراً على النظام.
 - **V2.2–V2.6 (غير منفّذة):** Browser Intelligence (Playwright)، حلقة Execute→Observe→Verify→Recover المدمجة والتدقيق، نظام المهارات (تسجيل/إعادة تشغيل)، الذاكرة الدلالية (SQLite/FTS/ترحيل)، والمساعدة الاستباقية.
 
-**هوية الحزم/التطبيق (قيد التحديث):** `productName` JARVIS V2، `identifier` `ai.jarvis.v2`، الإصدار `0.1.0` (Tauri)، الحزمة Rust `jarvis_v2`، وsidecar `jarvis-v2-sidekick`. قد تبقى أسماء/مسارات/نصوص قديمة في أجزاء من الواجهة والوثائق الأصلية حتى يكتمل الانتقال.
+**هوية الحزم/التطبيق (قيد التحديث):** `productName` JARVIS V2، `identifier` `ai.jarvis.v2`، الإصدار `0.1.1` (Tauri)، الحزمة Rust `jarvis_v2`، وsidecar `jarvis-v2-sidekick`. قد تبقى أسماء/مسارات/نصوص قديمة في أجزاء من الواجهة والوثائق الأصلية حتى يكتمل الانتقال.
 
 ## البنية
 

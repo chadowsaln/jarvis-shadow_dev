@@ -1,6 +1,6 @@
 // The safety rules: what runs on its own, what needs a yes, what never runs. Run: npm test
 import assert from 'node:assert/strict';
-import { ASK, BLOCK, SAFE, checkDrawAction, checkLink, checkOpen, checkRead, checkUrl, checkWrite, classifyCommand, isPrivateAddress, isYes, splitCommand } from '../safety.mjs';
+import { ASK, BLOCK, SAFE, checkDrawAction, checkLink, checkLinuxInputTarget, checkOpen, checkRead, checkUrl, checkWrite, classifyCommand, isPrivateAddress, isYes, splitCommand } from '../safety.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
@@ -411,3 +411,15 @@ console.log('safety loophole tests: passed');
   assert.equal(looked, false, 'a blocked URL is refused before any lookup');
   console.log('checkFetch tests: passed');
 }
+
+// Linux hands-off input targets.
+assert.equal(checkLinuxInputTarget(null).level, BLOCK);
+assert.equal(checkLinuxInputTarget('').level, BLOCK);
+assert.equal(checkLinuxInputTarget(undefined).level, BLOCK);
+assert.equal(checkLinuxInputTarget('gnome-terminal').level, BLOCK);
+assert.equal(checkLinuxInputTarget('ptyxis').level, BLOCK);
+assert.equal(checkLinuxInputTarget('kgx').level, BLOCK);
+assert.equal(checkLinuxInputTarget('1password').level, BLOCK);
+assert.equal(checkLinuxInputTarget('footage').level, SAFE);
+assert.equal(checkLinuxInputTarget('gedit').level, SAFE);
+console.log('linux hands-off tests: passed');

@@ -131,7 +131,7 @@
     expand: (X, t) => { [0, 1, 2].forEach((i) => tone(X, t + i * 0.035, { wave: 'p12', f0: 700 + i * 260, dur: 0.04, vol: 0.14 })); },
   };
 
-  const start = () => { if (!live) { const ac = new AudioContext(); live = rig(ac, ac.destination); } live.ac.resume(); unlocked = true; };
+  const start = () => { if (!live) { const ac = new AudioContext(); live = rig(ac, ac.destination); } try { live.ac.resume()?.catch?.(() => {}); } catch {} unlocked = true; };
   if (window.ROAMIE_AUTOSOUND) start();
   addEventListener('pointerdown', start, { capture: true });
   addEventListener('keydown', start, { capture: true });

@@ -12,7 +12,7 @@ import { BROWSER_ACTIONS, browserDiscover, browserOpenUrl, browserStatusText, de
 import { EXA_SEARCH_TYPES, exaStatus, exaSearch, exaGetContents, exaFindSimilar, exaResearch } from './exa.mjs';
 import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
-import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
+import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkLinuxInputTarget, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
@@ -1349,7 +1349,14 @@ A drawing stays until the user clears it or the window changes; your next drawin
           const driver = await createATSPIDriver();
           const input = await getInputSimulator();
           try {
+            const focused = await driver.getFocusedApplication();
+            const fverdict = checkLinuxInputTarget(focused?.name);
+            if (fverdict?.level === BLOCK) throw new Error(fverdict.reason);
             const element = await driver.findElement(criteria);
+            if (element?.applicationName) {
+              const everdict = checkLinuxInputTarget(element.applicationName);
+              if (everdict?.level === BLOCK) throw new Error(everdict.reason);
+            }
             if (!element) throw new Error('Element not found');
             if (!element.coordinates) throw new Error('Element has no coordinates');
             if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {
@@ -1373,7 +1380,16 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'trusted', requiresApproval: false, description: 'Type text on Linux desktop' },
         execute: async ({ text, delayMs = 10 }) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const focused = await driver.getFocusedApplication();
+            const verdict = checkLinuxInputTarget(focused?.name);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          } finally {
+            await driver.disconnect();
+          }
           const input = await getInputSimulator();
           await input.type(text, delayMs);
           return `Typed ${text.length} characters`;
@@ -1388,7 +1404,16 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'trusted', requiresApproval: false, description: 'Press a key on Linux desktop' },
         execute: async ({ key, modifiers = [] }) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const focused = await driver.getFocusedApplication();
+            const verdict = checkLinuxInputTarget(focused?.name);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          } finally {
+            await driver.disconnect();
+          }
           const input = await getInputSimulator();
           if (modifiers.length) {
             await input.hotkey(modifiers, key);
@@ -1408,7 +1433,16 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'assist', requiresApproval: false, description: 'Move the mouse cursor on Linux desktop' },
         execute: async ({ x, y, durationMs }) => {
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
+          const driver = await createATSPIDriver();
+          try {
+            const focused = await driver.getFocusedApplication();
+            const verdict = checkLinuxInputTarget(focused?.name);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          } finally {
+            await driver.disconnect();
+          }
           const input = await getInputSimulator();
           await input.move(x, y, durationMs);
           return `Moved mouse to ${x},${y}`;
@@ -1440,12 +1474,26 @@ A drawing stays until the user clears it or the window changes; your next drawin
         permission: { level: 'observe', requiresApproval: true, description: 'Capture screen and extract text via OCR' },
         execute: async ({ interactive = true, language = 'eng+ara' }) => {
           const { getDBusIntegration } = await import('./computer-control/dbus-integration.mjs');
-          const { getOCREngine } = await import('./computer-control/ocr-adapter.mjs');
+          const { quickOCR } = await import('./computer-control/ocr-adapter.mjs');
           const dbus = await getDBusIntegration();
-          const ocr = await getOCREngine();
           const handleToken = `littleboy-${Date.now()}`;
           const result = await dbus.requestScreenshot(handleToken, interactive, false);
-          return `OCR requested via portal. Result URI: ${result.uri}. Language: ${language}`;
+          if (result.error) {
+            if (/cancel/i.test(result.error)) return 'Screenshot cancelled or permission pending in the portal. Grant the permission prompt, then retry.';
+            return `Screenshot failed: ${result.error}`;
+          }
+          if (!result.uri) return 'No screenshot URI returned by the portal (permission may be pending).';
+          const fs = await import('node:fs');
+          const path = await import('node:path');
+          let filePath = result.uri;
+          if (filePath.startsWith('file://')) filePath = decodeURIComponent(filePath.slice(7));
+          if (!fs.existsSync(filePath)) return `Screenshot URI returned (${result.uri}) but the file is not accessible; portal permission may be pending.`;
+          try {
+            const { text } = await quickOCR(filePath, language.split('+')[0]);
+            return `OCR (${language}):\n${text.trim() || '(no text detected)'}`;
+          } catch (e) {
+            return `OCR failed: ${e?.message || e}`;
+          }
         },
       },
       {
