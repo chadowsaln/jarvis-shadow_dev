@@ -1,6 +1,5 @@
-@import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap");
 /* The panel that opens from the menu bar or tray icon. Built on the setup guide's stylesheet (fonts, colours,
-   pixel frames, buttons, switches, fields), so it's the same LED-panel world; this file only lays it out.
+   frames, buttons, switches, fields), so it's the same LED-panel world; this file only lays it out.
    One accent fill per view: the header's update button when there is one, otherwise Ask. */
 :root {
   --gut: 16px;      /* the one inline gutter: header, pages and note */
