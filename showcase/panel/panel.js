@@ -216,7 +216,7 @@
     const [label, aria, kind, off] =
       u.done ? ['Done', `Roamies ${u.done} is installed. Restarting`, 'ghost', true]
       : u.installing ? ['Updating…', `Installing Roamies ${v}`, 'ghost', true]
-      : v ? (u.page ? [`Get ${v}`, `Open the download page for Roamies ${v}`, 'primary', false] : [`Update to ${v}`, `Install Roamies ${v} and restart`, 'primary', false])
+      : v ? [`Update to ${v}`, `Install Roamies ${v} and restart`, 'primary', false]
       : u.checking ? ['Checking…', 'Checking for updates', 'ghost', true]
       : fresh ? ['Up to date', `Roamies ${state.version} is up to date`, 'ghost', true]
       : u.result ? ['Check again', "Couldn't check for updates. Check again", 'ghost', false]

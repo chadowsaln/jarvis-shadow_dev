@@ -3,7 +3,7 @@
 # transcription and the session logic can be tested anywhere.
 [package]
 name = "roamies-voice"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "AGPL-3.0-only"
 publish = false

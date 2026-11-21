@@ -1942,8 +1942,9 @@ function onLoginStatus(m) {
 function setLogin(on) { login.asked = true; send({ type: 'login_item', on }); }
 
 // The app checks the signed feed and installs (Rust: update()); this side decides what to say and offers the menu item.
-// page: this copy can't replace itself (Linux, installed from a .deb or .rpm), so "install" opens the download page.
-const update = { available: null, told: null, manual: false, installing: false, checking: false, result: null, page: false, done: null };
+// Every copy installs in place: an AppImage swaps itself, and a .deb/.rpm copy installs and starts its own AppImage,
+// so installing always ends in a newer app that restarts rather than a download page.
+const update = { available: null, told: null, manual: false, installing: false, checking: false, result: null, done: null };
 function checkUpdates(manual = false) {
   update.manual = manual;
   if (manual) { update.checking = true; update.result = null; panel(); }
@@ -1967,16 +1968,12 @@ function onUpdateStatus(m) {
     update.available = null; update.manual = false;
     if (manual) say(`You're up to date (${VERSION}).`, 'happy');
   } else if (m.state === 'available') {
-    update.available = m.version; update.page = !!m.page; update.manual = false; menu();
+    update.available = m.version; update.manual = false; menu();
     // Say it once per version; the menu item stays until it's installed.
     if (manual || update.told !== m.version) {
       update.told = m.version;
-      if (update.page) say(`JARVIS V2 ${m.version} is out. Pick Get JARVIS V2 ${m.version} in my ${TRAY} icon's menu for the download page.`, 'happy');
-      else say(`JARVIS V2 ${m.version} is ready. ${LINUX ? `Open my ${TRAY} icon's menu` : `Click my ${TRAY} icon`} and pick Install and Restart. I'll be right back.`, 'happy');
+      say(`JARVIS V2 ${m.version} is ready. ${LINUX ? `Open my ${TRAY} icon's menu` : `Click my ${TRAY} icon`} and pick Install and Restart. I'll be right back.`, 'happy');
     }
-  } else if (m.state === 'page') {
-    update.installing = false; menu();
-    say(`I opened the download page for JARVIS V2 ${m.version}. Install it the way you installed me.`, 'happy');
   } else if (m.state === 'downloading') {
     say(`Downloading JARVIS V2 ${m.version}…`, 'determined');
   } else if (m.state === 'installed') {
@@ -2092,7 +2089,7 @@ function menu() {
     ...(SNAP_OK ? [{ id: 'snap', label: 'Ask About an Area…', accel: keys().snap }] : []),
     { id: 'stop', label: 'Stop', enabled: busy },
     { id: 'diagnostics', label: 'Save Diagnostics…', enabled: !diagnosing },
-    ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.page ? `Get JARVIS V2 ${update.available}…` : update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
+    ...(update.available ? [{ sep: true }, { id: 'install_update', label: update.installing ? `Installing ${update.available}…` : `Install Update ${update.available} and Restart`, enabled: !update.installing }] : []),
     { sep: true },
     { id: 'quit', label: 'Quit JARVIS V2' },
   ];
@@ -2190,7 +2187,7 @@ function panelState() {
     } : null,
     sound: !!config.sound, actions: !!config.allowActions,
     login: login.supported ? { on: login.on } : null,
-    update: { available: update.available, installing: update.installing, checking: update.checking, result: update.result, page: update.page, done: update.done },
+    update: { available: update.available, installing: update.installing, checking: update.checking, result: update.result, done: update.done },
     intro: !!intro,
     // The latest error anyone saw, for Copy last error.
     problem: lastProblem ? { code: lastProblem.code, at: lastProblem.at } : null,

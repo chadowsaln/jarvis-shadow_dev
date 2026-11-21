@@ -1764,12 +1764,6 @@ fn login_item(app: &AppHandle, set: Option<bool>) {
 fn update(app: &AppHandle, install: bool) {
     use tauri_plugin_updater::UpdaterExt;
     let app = app.clone();
-    // Linux: only an AppImage can swap itself in place. A copy from a .deb or .rpm is told about the new version
-    // (page: true) and "install" opens the releases page instead.
-    #[cfg(target_os = "linux")]
-    let by_page = linux::appimage().is_none();
-    #[cfg(not(target_os = "linux"))]
-    let by_page = false;
     tauri::async_runtime::spawn(async move {
         let status = |state: &str, extra: Value| {
             let mut m = json!({ "type": "update_status", "state": state });
@@ -1784,14 +1778,26 @@ fn update(app: &AppHandle, install: bool) {
         };
         match found {
             Ok(None) => status("none", json!({})),
-            Ok(Some(u)) if !install => status("available", json!({ "version": u.version, "page": by_page })),
-            #[cfg(target_os = "linux")]
-            Ok(Some(u)) if by_page => {
-                linux::open_releases_page();
-                status("page", json!({ "version": u.version }));
-            }
+            Ok(Some(u)) if !install => status("available", json!({ "version": u.version })),
             Ok(Some(u)) => {
                 status("downloading", json!({ "version": u.version }));
+                // A .deb/.rpm copy can't swap itself (the package manager owns those files): it installs an AppImage
+                // of its own, starts it and quits, so clicking update still ends in a newer app, not a download page.
+                #[cfg(target_os = "linux")]
+                if linux::appimage().is_none() {
+                    return match u.download(|_, _| {}, || {}).await {
+                        Ok(bytes) => match linux::install_managed_appimage(&bytes, &u.version) {
+                            Ok(file) => {
+                                status("installed", json!({ "version": u.version }));
+                                linux::relaunch_after_exit(&file);
+                                tokio_sleep(Duration::from_millis(700)).await;
+                                app.exit(0);
+                            }
+                            Err(e) => status("error", json!({ "error": e.to_string() })),
+                        },
+                        Err(e) => status("error", json!({ "error": e.to_string() })),
+                    };
+                }
                 match u.download_and_install(|_, _| {}, || {}).await {
                     Ok(()) => {
                         status("installed", json!({ "version": u.version }));
@@ -2013,6 +2019,14 @@ fn main() {
             id => to_sidecar(app, &json!({ "type": "menu", "id": id })),
         })
         .setup(|app| {
+            // A .deb/.rpm copy that has already updated itself into its own AppImage hands over to it here: the
+            // package's menu entry and a pinned icon would otherwise keep starting the old copy.
+            #[cfg(target_os = "linux")]
+            if let Some(file) = linux::managed_handoff(env!("CARGO_PKG_VERSION")) {
+                linux::relaunch_after_exit(&file);
+                app.handle().exit(0);
+                return Ok(());
+            }
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);

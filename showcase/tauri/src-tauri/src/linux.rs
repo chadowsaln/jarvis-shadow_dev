@@ -511,10 +511,108 @@ pub(crate) fn launch_command() -> String {
     launch_word(&program)
 }
 
-/// Where a copy installed from a .deb or .rpm gets its update: the package manager owns those files, so the app
-/// can't swap itself as an AppImage can.
-pub(crate) fn open_releases_page() {
-    let _ = std::process::Command::new("xdg-open").arg("https://github.com/chadowsaln/jarvis-shadow_dev/releases/latest").stdin(std::process::Stdio::null()).spawn();
+// ---------- self-managed AppImage ----------
+// A copy installed from a .deb or .rpm can't swap itself: the package manager owns those files. It keeps an AppImage
+// of its own instead, in the user's data folder, and starts that after an update; from then on it is an AppImage and
+// every later update is the same in-place swap (and restart) an AppImage always does.
+
+fn home_data_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+}
+
+/// The AppImage a .deb/.rpm copy keeps for itself, or None when there's no home folder to put it in.
+pub(crate) fn managed_appimage() -> Option<PathBuf> {
+    home_data_dir().map(|d| d.join("jarvis-v2").join("jarvis.AppImage"))
+}
+
+/// The version written beside that AppImage, so a startup can tell whether it is the newer one.
+fn managed_version_file(appimage: &Path) -> PathBuf {
+    appimage.with_extension("version")
+}
+
+/// Is `a` a later dotted version than `b`? (`0.1.10` is later than `0.1.9`.)
+pub(crate) fn newer(a: &str, b: &str) -> bool {
+    let pa: Vec<u64> = a.trim().split('.').map(|n| n.parse().unwrap_or(0)).collect();
+    let pb: Vec<u64> = b.trim().split('.').map(|n| n.parse().unwrap_or(0)).collect();
+    for i in 0..pa.len().max(pb.len()) {
+        let (x, y) = (*pa.get(i).unwrap_or(&0), *pb.get(i).unwrap_or(&0));
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// Where per-user desktop entries live: one there shadows the package's entry of the same name.
+fn applications_dir() -> Option<PathBuf> {
+    home_data_dir().map(|d| d.join("applications"))
+}
+
+fn app_menu_entry(program: &str) -> Option<String> {
+    let exec = exec_quoted(program)?;
+    Some(format!("[Desktop Entry]\nType=Application\nName=JARVIS V2\nComment=AI Agent + Computer Control + Perception + Memory + Skills + Security\nExec={exec}\nIcon=jarvis_v2\nTerminal=false\nStartupWMClass=jarvis_v2\n"))
+}
+
+/// Writes a downloaded, signature-checked AppImage as this copy's own: it lands in the user's data folder, the app
+/// menu points at it (a user-level entry shadows the package's own), and Open at Login follows it too. Returns the
+/// file, ready to start with [`relaunch_after_exit`].
+pub(crate) fn install_managed_appimage(bytes: &[u8], version: &str) -> std::io::Result<PathBuf> {
+    let dir = managed_appimage()
+        .and_then(|f| f.parent().map(Path::to_path_buf))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "there's no home folder to install into"))?;
+    let file = write_appimage(&dir, bytes, version)?;
+    if let (Some(dir), Some(entry)) = (applications_dir(), app_menu_entry(&file.to_string_lossy())) {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("JARVIS V2.desktop"), entry);
+    }
+    // The autostart entry aims at whatever this copy starts from; left alone it would keep starting the package's.
+    if let Some(entry_file) = autostart_file() {
+        if std::fs::read_to_string(&entry_file).is_ok_and(|e| autostart_on(&e)) {
+            if let Some(entry) = autostart_entry(&file.to_string_lossy()) {
+                let _ = std::fs::write(&entry_file, entry);
+            }
+        }
+    }
+    Ok(file)
+}
+
+/// Puts `bytes` at `<dir>/jarvis.AppImage`, executable, with the version beside it. Written next to it and renamed
+/// over it, so a half-written file is never started.
+fn write_appimage(dir: &Path, bytes: &[u8], version: &str) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir)?;
+    let file = dir.join("jarvis.AppImage");
+    let tmp = dir.join("jarvis.AppImage.new");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&tmp, &file)?;
+    std::fs::write(managed_version_file(&file), version)?;
+    Ok(file)
+}
+
+/// Starts `file` once this process has let go of the single-instance lock: a second launch inside that second would
+/// hand its arguments to the old copy and quit, so the new one waits for the old one to go. Detached from this one.
+pub(crate) fn relaunch_after_exit(file: &Path) {
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 1; exec \"$0\"")
+        .arg(file)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// When this is a .deb/.rpm copy and its own AppImage is newer, that file: a launch of the old copy (a pinned icon,
+/// Open at Login, the package's menu entry) hands over to the update instead of asking to download again.
+pub(crate) fn managed_handoff(running: &str) -> Option<PathBuf> {
+    if appimage().is_some() {
+        return None;
+    }
+    let file = managed_appimage()?;
+    let version = std::fs::read_to_string(managed_version_file(&file)).ok()?;
+    (file.is_file() && newer(&version, running)).then_some(file)
 }
 
 #[cfg(test)]
@@ -572,6 +670,41 @@ mod tests {
         assert!(!autostart_on("[Desktop Entry]\nExec=jarvis_v2\nX-GNOME-Autostart-enabled=false\n"));
         assert!(!autostart_on("[Desktop Entry]\nHidden = True\n"));
         assert!(autostart_on("[Desktop Entry]\nHidden=false\n"));
+    }
+
+    #[test]
+    fn updates_compare_version_numbers_not_text() {
+        assert!(newer("0.1.10", "0.1.9"), "a dotted number, not a string");
+        assert!(newer("0.2.0", "0.1.99"));
+        assert!(newer("1.0", "0.9.9"), "a short version still compares");
+        assert!(!newer("0.1.4", "0.1.4"));
+        assert!(!newer("0.1.3", "0.1.4"));
+        assert!(!newer("", "0.1.0"), "an unreadable version never looks newer");
+    }
+
+    #[test]
+    fn the_menu_entry_starts_the_appimage_this_copy_installed() {
+        let e = app_menu_entry("/home/kai/.local/share/jarvis-v2/jarvis.AppImage").expect("an entry");
+        assert!(e.contains("\nExec=\"/home/kai/.local/share/jarvis-v2/jarvis.AppImage\"\n"), "{e}");
+        assert!(e.contains("\nName=JARVIS V2\n"), "{e}");
+        assert!(e.contains("\nStartupWMClass=jarvis_v2\n"), "{e}");
+        assert!(app_menu_entry("a\nb").is_none(), "a line break can't go in Exec");
+    }
+
+    #[test]
+    fn an_installed_appimage_keeps_its_version_and_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jarvis-managed-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = write_appimage(&dir, b"\x7fELF pretend AppImage", "0.1.4").expect("written");
+        assert_eq!(std::fs::read(&file).unwrap(), b"\x7fELF pretend AppImage");
+        assert!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o111 != 0, "it has to run");
+        assert_eq!(std::fs::read_to_string(managed_version_file(&file)).unwrap(), "0.1.4");
+        // The one written over it is whole, not a mix of both.
+        let again = write_appimage(&dir, b"new", "0.1.5").expect("rewritten");
+        assert_eq!(std::fs::read(&again).unwrap(), b"new");
+        assert_eq!(std::fs::read_to_string(managed_version_file(&again)).unwrap(), "0.1.5");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
