@@ -787,7 +787,7 @@ tools.push({
   parameters: z.object({}),
   // Reads the app's own manual: no side effects, nothing to approve.
   permission: { level: 'observe', requiresApproval: false, description: "Read the app's manual" },
-  execute: async () => aboutLittleBoy({ name: lookName(), looks: LOOKS.map(([, label]) => label), mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK }),
+  execute: async () => aboutLittleBoy({ name: lookName(), looks: LOOKS.map(([, label]) => label), launch: LAUNCH, mac: MAC, linux: LINUX, snap: SNAP_OK, pointer: POINTER_OK, voice: VOICE_OK, hotkeys: HOTKEYS_OK }),
 });
 // Background agents (agents.mjs): each runs in its own process on the model picked when it starts.
 let turnImage = null; // the picture sent with the request being answered, for send_agent's "snap"

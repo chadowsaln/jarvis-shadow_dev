@@ -309,7 +309,7 @@ fn win_of(h: HWND, min: bool) -> Option<Win> {
         pid = real_pid(h, pid);
     }
     let (mut app, exe) = proc_names(pid);
-    if is_roamies(pid, &exe) {
+    if is_littleboy(pid, &exe) {
         return None;
     }
     if exe.eq_ignore_ascii_case("ApplicationFrameHost") && !title.is_empty() {

@@ -86,11 +86,28 @@ fn windows_main(cmd: &str, args: &[String]) -> ! {
     use win::{no_window, resolve, win_info, windows};
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
     use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER};
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
     let arg = |i: usize| args.get(i).map(String::as_str);
+    fn point_arg(s: &str) -> Option<(f64, f64)> {
+        let p: Vec<f64> = s.split(',').filter_map(|v| v.trim().parse::<f64>().ok()).collect();
+        (p.len() == 2).then(|| (p[0], p[1]))
+    }
+    fn click_point(args: &[String]) -> Option<(f64, f64)> {
+        if let Some(i) = args.iter().position(|a| a == "--at") {
+            return args.get(i + 1).and_then(|s| point_arg(s));
+        }
+        match (args.get(1).and_then(|s| s.parse::<f64>().ok()), args.get(2).and_then(|s| s.parse::<f64>().ok())) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        }
+    }
+    fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    }
     match cmd {
         "--smoke" => smoke::run(),
         "trusted" | "guide" | "screencheck" => out(json!({ "ok": false, "unsupported": true, "error": "Not needed on Windows." })),
@@ -235,6 +252,111 @@ fn windows_main(cmd: &str, args: &[String]) -> ! {
         "act" => {
             let Some(plan) = arg(1) else { fail("bad plan") };
             act::act(plan)
+        }
+        // ---------- Batch 2: raw input verbs (the sidecar's desktop adapter) ----------
+        "move" => {
+            let (Some(x), Some(y)) = (arg(1).and_then(|s| s.parse::<f64>().ok()), arg(2).and_then(|s| s.parse::<f64>().ok())) else { fail("usage: move <x> <y> [--relative]") };
+            if args.iter().any(|a| a == "--relative") {
+                let mut p = windows::Win32::Foundation::POINT::default();
+                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) };
+                let s = win::scale_at_px(p.x, p.y);
+                act::move_to(p.x as f64 / s + x, p.y as f64 / s + y);
+            } else {
+                act::move_to(x, y);
+            }
+            out(json!({ "ok": true }))
+        }
+        "click" => {
+            let p = click_point(args);
+            let button = flag(args, "--button").unwrap_or("left");
+            let Some((x, y)) = p else { fail("usage: click --at x,y [--button left|right|middle]") };
+            act::click_button(x, y, button);
+            out(json!({ "ok": true, "at": [x, y] }))
+        }
+        "double" => {
+            let Some((x, y)) = click_point(args) else { fail("usage: double --at x,y") };
+            act::double_click(x, y);
+            out(json!({ "ok": true, "at": [x, y] }))
+        }
+        "drag" => {
+            let (Some(from), Some(to)) = (arg(1).and_then(point_arg), arg(2).and_then(point_arg)) else { fail("usage: drag x,y x,y") };
+            act::drag(from.0, from.1, to.0, to.1);
+            out(json!({ "ok": true, "from": [from.0, from.1], "to": [to.0, to.1] }))
+        }
+        "scroll" => {
+            let Some((x, y)) = click_point(args) else { fail("usage: scroll --at x,y [--dx n] [--dy n]") };
+            let dx = flag(args, "--dx").and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let dy = flag(args, "--dy").and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            act::wheel(x, y, dy, dx);
+            out(json!({ "ok": true, "at": [x, y], "dx": dx, "dy": dy }))
+        }
+        "type" => {
+            let Some(text) = arg(1) else { fail("usage: type <text>") };
+            act::type_text(text);
+            out(json!({ "ok": true, "chars": text.chars().count() }))
+        }
+        "key" => {
+            let Some(combo) = arg(1) else { fail("usage: key <combo>") };
+            if !act::press_key(combo) { fail(&format!("unknown key: {combo}")) }
+            out(json!({ "ok": true, "key": combo }))
+        }
+        "focus" => {
+            let Some(w) = arg(1).and_then(resolve) else { fail("No matching window is open.") };
+            let ok = win::bring_to_front(&w);
+            out(json!({ "ok": ok, "window": win_info(&w) }))
+        }
+        // ---------- Batch 2: window management, apps, clipboard, displays ----------
+        "window" => {
+            let (Some(sub), Some(w)) = (arg(1), arg(2).and_then(resolve)) else { fail("usage: window <minimize|maximize|restore|move|resize> <target> [x y|w h]") };
+            let h = win::hwnd(w.id);
+            match sub {
+                "minimize" => { let _ = unsafe { ShowWindow(h, SW_MINIMIZE) }; }
+                "maximize" => { let _ = unsafe { ShowWindow(h, SW_MAXIMIZE) }; }
+                "restore" => { let _ = unsafe { ShowWindow(h, SW_RESTORE) }; }
+                "move" => {
+                    let (Some(x), Some(y)) = (arg(3).and_then(|s| s.parse::<i32>().ok()), arg(4).and_then(|s| s.parse::<i32>().ok())) else { fail("usage: window move <target> <x> <y>") };
+                    let _ = unsafe { SetWindowPos(h, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+                }
+                "resize" => {
+                    let (Some(wd), Some(ht)) = (arg(3).and_then(|s| s.parse::<i32>().ok()), arg(4).and_then(|s| s.parse::<i32>().ok())) else { fail("usage: window resize <target> <w> <h>") };
+                    let _ = unsafe { SetWindowPos(h, None, 0, 0, wd, ht, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+                }
+                other => fail(&format!("unknown window action: {other}")),
+            }
+            out(json!({ "ok": true, "window": win_info(&w) }))
+        }
+        "quit" => {
+            let Some(name) = arg(1) else { fail("usage: quit <app>") };
+            match std::process::Command::new("taskkill").args(["/IM", name]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status() {
+                Ok(s) if s.success() => out(json!({ "ok": true, "quit": name })),
+                _ => fail(&format!("No running app matches {name}.")),
+            }
+        }
+        "apps" => {
+            let list: Vec<Value> = win::windows().iter().map(|w| json!({ "name": &w.app, "title": &w.title, "id": w.id, "pid": w.pid })).collect();
+            out(json!({ "ok": true, "apps": list }))
+        }
+        "clipboard" => {
+            let Some(sub) = arg(1) else { fail("usage: clipboard get|set [text]") };
+            match sub {
+                "get" => {
+                    let o = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]).output();
+                    match o { Ok(r) => out(json!({ "ok": true, "text": String::from_utf8_lossy(&r.stdout) })), Err(e) => fail(&format!("clipboard read failed: {e}")) }
+                }
+                "set" => {
+                    let Some(text) = arg(2) else { fail("usage: clipboard set <text>") };
+                    let o = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $env:JARVIS_CLIP"]).env("JARVIS_CLIP", text).output();
+                    match o { Ok(r) if r.status.success() => out(json!({ "ok": true })), _ => fail("clipboard write failed") }
+                }
+                other => fail(&format!("usage: clipboard get|set [text] (not {other})")),
+            }
+        }
+        "monitors" => {
+            let list: Vec<Value> = win::monitors().iter().map(|m| {
+                let r = m.pt();
+                json!({ "x": r.x, "y": r.y, "width": r.w, "height": r.h, "scale": m.scale, "primary": m.primary })
+            }).collect();
+            out(json!({ "ok": true, "monitors": list }))
         }
         // secret-* is handled by the sidecar on Windows (secrets.mjs).
         other => fail(&format!("unknown command {other}")),

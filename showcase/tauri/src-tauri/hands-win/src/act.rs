@@ -75,10 +75,38 @@ pub fn move_to(x: f64, y: f64) {
 }
 
 pub fn click(x: f64, y: f64) {
+    click_button(x, y, "left");
+}
+
+/// A click with the left, right or middle button at a spot.
+pub fn click_button(x: f64, y: f64, button: &str) {
+    let (down, up) = match button {
+        "right" => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+        "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+        _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+    };
     move_to(x, y);
+    ms(40);
+    send(&[mouse_input(down, 0)]);
+    ms(40);
+    send(&[mouse_input(up, 0)]);
+    ms(40);
+}
+
+pub fn double_click(x: f64, y: f64) {
+    click(x, y);
+    ms(60);
+    click(x, y);
+}
+
+/// Press the left button at one spot, move to another and release (drag and drop).
+pub fn drag(from_x: f64, from_y: f64, to_x: f64, to_y: f64) {
+    move_to(from_x, from_y);
     ms(40);
     send(&[mouse_input(MOUSEEVENTF_LEFTDOWN, 0)]);
     ms(40);
+    move_to(to_x, to_y);
+    ms(80);
     send(&[mouse_input(MOUSEEVENTF_LEFTUP, 0)]);
     ms(40);
 }
@@ -157,7 +185,7 @@ pub fn give_back() {
     let fg = HWND(fg as *mut std::ffi::c_void);
     let _ = unsafe { SetCursorPos(p.x, p.y) };
     let pid = pid_of(fg);
-    if !fg.0.is_null() && pid != w.pid && !is_roamies(pid, &proc_names(pid).1) {
+    if !fg.0.is_null() && pid != w.pid && !is_littleboy(pid, &proc_names(pid).1) {
         force_front(fg);
     }
     progress(json!({ "ev": "return" }));

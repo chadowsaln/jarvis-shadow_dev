@@ -47,9 +47,9 @@
       // Size: 'default', 'small' (half the body) or 'cursor' (a pixel arrow pointer). Text keeps its size either way.
       let form = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('form')) || 'default', lastEnv = null;
       let userForm = form;
-      // Look: 'classic' (the goo blob, and the arrow at cursor size), 'jarvis' (roamies/jarvis.js: a globe of
-      // points with a lit heart, and a HUD reticle at cursor size) or a character from roamies/people.js
-      // ('anime', 'sarah', 'adrian', 'rita'). Moves, sizes and everything else are shared.
+      // Look: 'hybrid' (roamies/hybrid.js: a 3D reactor orb with a 2D LED fallback). The older goo blob and
+      // pixel characters were removed; an unknown or legacy id falls back to the hybrid. Moves, sizes and
+      // everything else are shared.
       const drawn = (l) => (l === 'jarvis' ? Roamie.jarvis : l === 'hybrid' ? Roamie.hybrid : Roamie.people?.[l]);
       const pickLook = (l) => (drawn(l) ? l : 'hybrid');
       // A look that keeps state (the hybrid's own renderer and orb position) is made once per creature: two of them
@@ -779,7 +779,7 @@
               : (gx, gy) => { const v = 0.5 * th(gx, gy) + 0.5 * clamp(((gy + 0.5) * P - top) / H2, 0, 1); return v < e ? 0 : v < e + 0.12 ? 2 : 1; };
           }
           if ((form === 'cursor' || look !== 'classic') && !clear) for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) setPx(gx, gy, PAL[0]);
-          drawLook(bx, by, env);
+          if (look !== 'classic') drawLook(bx, by, env);
           else if (form === 'cursor') drawCursor(bx, by, shX, shY, shK);
           else for (let gy = gy0; gy < gy1; gy++) {
             const y = (gy + 0.5) * P;
@@ -829,7 +829,7 @@
           const eye = o.eye === 'cyclops' ? eyeCyclops : o.eye === 'visor' ? eyeVisor : eyesPixel;
           const A = act?.name;
           browAt = [];
-          if (false && form !== 'cursor' && look === 'classic') {
+          if (form !== 'cursor' && look === 'classic') {
             const my = eye(cx, cy);
             mouth(cx, my, pose?.mouth ?? (act && { wave: null, hype: 'shout', remind: 'o', upset: 'frown', motivate: 'grin' }[A]));
             const brow = pose ? pose.brow : A === 'upset' ? 'angry' : A === 'motivate' ? 'determined' : A === 'remind' ? 'raised' : null;
@@ -852,7 +852,6 @@
             const gy = Math.max(top, Math.round((by - R * 1.3) / P) - Math.round(Math.abs(Math.sin(act.a * 6))));
             if (look === 'jarvis') Roamie.jarvis?.readout({ put, L }, gx, gy, icon, act.a, act.dur, !(P < 6 && form === 'default'));
             else if (look !== 'hybrid') bubble(gx, gy, icon);
-            // The hybrid has no pixel heart bubble or diamond tail; its speech is the smooth CSS bubble, shown only while talking.
           }
           plug?.gridOver?.(env);
           pd = dx1 >= dx0 ? [dx0, dy0, dx1 + 1, dy1 + 1] : null;

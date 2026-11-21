@@ -389,7 +389,13 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const shell = ['run_command', 'run_diagnostic', 'list_commitments'];
   const nativeHands = process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['act_in_app', 'list_windows', 'read_window'] : [];
   const linuxNative = process.platform === 'linux' ? ['linux_capture_screen', 'linux_click_element', 'linux_find_element', 'linux_focus_window', 'linux_list_apps', 'linux_list_windows', 'linux_move_mouse', 'linux_ocr', 'linux_press_key', 'linux_type_text'] : [];
-  const expected = [...desktop, ...memoryWrites, ...shell, ...nativeHands, ...linuxNative, ...readOnly, ...observeAsk, ...mutating].sort();
+  // Batch 2: the desktop adapter tools. Reading windows/monitors/clipboard observes; clicking, typing, dragging,
+  // scrolling and window control are actions within the default grant; quitting an app is sensitive and asks.
+  const readOnlyDesktop = ['clipboard_read', 'monitors', 'window_list'];
+  const trustedDesktop = ['clipboard_write', 'desktop_click', 'desktop_drag', 'desktop_key', 'desktop_type', 'window_control'];
+  const assistDesktop = ['desktop_scroll'];
+  const sensitiveDesktop = ['app_quit'];
+  const expected = [...desktop, ...memoryWrites, ...shell, ...nativeHands, ...linuxNative, ...readOnly, ...observeAsk, ...mutating, ...readOnlyDesktop, ...trustedDesktop, ...assistDesktop, ...sensitiveDesktop].sort();
   assert.deepEqual(names, expected, 'every tool is offered, and only the reviewed ones');
   // The desktop operator's own verbs are reachable at the default grant (trusted).
   for (const n of ['open', 'take_screenshot', 'draw', 'read_file']) {
@@ -414,6 +420,29 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
     assert.ok(t, `${n} offered`);
     assert.equal(defaultToolPermission(t).level, 'observe', `${n} is observe-level`);
     assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} requires explicit approval`);
+  }
+  for (const n of readOnlyDesktop) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).level, 'observe', `${n} is observe-level`);
+    assert.equal(defaultToolPermission(t).requiresApproval, false, `${n} needs no approval`);
+  }
+  for (const n of trustedDesktop) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).level, 'trusted', `${n} is trusted-level`);
+    assert.equal(defaultToolPermission(t).requiresApproval, false, `${n} needs no approval at trusted`);
+  }
+  for (const n of assistDesktop) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).level, 'assist', `${n} is assist-level`);
+  }
+  for (const n of sensitiveDesktop) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).level, 'sensitive', `${n} is sensitive-level`);
+    assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} asks first`);
   }
   for (const n of mutating) {
     const t = rt.tools.find((x) => x.name === n);
