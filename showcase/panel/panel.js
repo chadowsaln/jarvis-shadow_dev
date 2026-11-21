@@ -989,14 +989,14 @@
         h.provider === 'gemini' ? el('div', { className: 'reveal', 'data-anim': 'hearing-gemini' },
           h.models?.length > 1 ? picks('Hearing model', h.models.map((m2) => [m2.id, m2.name]), h.model, (x) => act(`sttmodel:${x}`), 'sttmodel') : null,
           el('div', { className: 'setting' },
-            el('span', {}, 'Gemini key', el('small', { textContent: h.shared ? 'Shared with the Model page' : h.key ? `Saved in ${where()}` : 'Needed for Gemini hearing' })),
+            el('span', {}, 'Gemini key', el('small', { textContent: h.own ? `Saved in ${where()}` : h.voice ? 'Shared with my Gemini voice' : h.shared ? 'Shared with the Model page' : 'Needed for Gemini hearing' })),
             el('span', { className: 'row-btns' },
-              link(ui.key === 'stt' ? 'Cancel' : h.shared ? 'Use another' : h.key ? 'Change' : 'Add', () => { ui.key = ui.key === 'stt' ? null : 'stt'; render('key-stt'); }, { k: 'addkey:stt', aria: h.key ? 'Change the Gemini hearing key' : 'Add a Gemini hearing key' }),
-              h.key && !h.shared && ui.key !== 'stt' ? armed('Remove', 'Confirm', 'sttkey-remove', 'sttkey_remove', 'Remove the Gemini hearing key') : null)),
+              link(ui.key === 'stt' ? 'Cancel' : h.own ? 'Change' : h.key ? 'Use another' : 'Add', () => { ui.key = ui.key === 'stt' ? null : 'stt'; render('key-stt'); }, { k: 'addkey:stt', aria: h.own ? 'Change the Gemini hearing key' : 'Add a Gemini hearing key' }),
+              h.own && ui.key !== 'stt' ? armed('Remove', 'Confirm', 'sttkey-remove', 'sttkey_remove', 'Remove the Gemini hearing key') : null)),
           keyForm('stt', 'Gemini', (key) => send({ type: 'panel_sttkey', key })),
           el('p', { className: 'why wrap', textContent: "Each take's audio goes to Google to be written down, and nowhere else. If Gemini can't be reached, what this computer heard is used instead." }),
         ) : null,
-        h.provider === 'gemini' && !h.key ? el('p', { className: 'why wrap late', textContent: 'Add a Gemini key, or the key from the Model page is used.' }) : null,
+        h.provider === 'gemini' && !h.key ? el('p', { className: 'why wrap late', textContent: 'Add a Gemini key, or the Gemini voice key is used. The Model page key works too.' }) : null,
       ) : null,
     ];
   }
@@ -1503,7 +1503,8 @@
       speechRate: 1,
       hearing: {
         provider: new URLSearchParams(location.search).get('hearing') === 'gemini' ? 'gemini' : 'local',
-        cloud: true, key: new URLSearchParams(location.search).has('sttkey'), shared: new URLSearchParams(location.search).has('shared'),
+        cloud: true, key: new URLSearchParams(location.search).has('sttkey'), own: new URLSearchParams(location.search).has('sttkey'),
+        voice: new URLSearchParams(location.search).has('voicekey'), shared: new URLSearchParams(location.search).has('shared'),
         model: 'gemini-3.5-transcribe', models: [{ id: 'gemini-3.5-transcribe', name: 'Gemini Transcribe' }], where: "this computer's speech model",
       },
       sound: true, actions: false, login: { on: true },
@@ -1588,7 +1589,7 @@
         setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
       }
       if (args.msg?.type === 'panel_sttkey') {
-        Object.assign(s.hearing, { key: true, kind: 'own', shared: false, provider: 'gemini' });
+        Object.assign(s.hearing, { key: true, kind: 'own', own: true, voice: false, shared: false, provider: 'gemini' });
         setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
       }
       return null;

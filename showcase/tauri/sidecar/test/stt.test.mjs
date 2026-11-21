@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { STT_MAX_SECONDS, STT_MODEL, languageTag, sttAccount, transcribe, transcribeRequest, transcriptOf, trimPcm, wav, wavSeconds } from '../stt.mjs';
 import { languageOf } from '../lang.mjs';
 
@@ -148,6 +149,19 @@ const log = (k, v) => noLogs.push([k, v]);
   assert.equal((await sttAccount('k', { fetchImpl: fake(200, {}) })).ok, true);
   assert.equal((await sttAccount('k', { fetchImpl: fake(400, {}) })).reason, 'key');
   assert.equal((await sttAccount('k', { fetchImpl: async () => { throw new Error('x'); } })).reason, 'network');
+}
+
+// ---- one Google key: hearing falls back to the Gemini voice's key ----
+// A key saved for hearing wins, then the one saved for the Gemini voice, then the AI's Gemini key from the Model page.
+{
+  const src = readFileSync(new URL('../sidekick.mjs', import.meta.url), 'utf8');
+  const at = src.indexOf('async function sttKey()');
+  assert.ok(at > 0, 'sidekick has the hearing key lookup');
+  const fn = src.slice(at, src.indexOf('const hearing =', at));
+  assert.match(fn, /secrets\.get\(STT_KEY\)/, 'a key saved for hearing is read first');
+  assert.match(fn, /voiceKey\('gemini'\)/, 'the Gemini voice key hears too');
+  assert.ok(fn.indexOf('STT_KEY') < fn.indexOf("voiceKey('gemini')"), 'a hearing key of its own wins');
+  assert.match(fn, /voiceKind === 'own' \? 'voice' : 'shared'/, 'the voice key is reported as such, not as the Model key');
 }
 
 console.log('gemini stt tests: all passed');

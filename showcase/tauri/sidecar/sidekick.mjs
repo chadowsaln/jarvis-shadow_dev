@@ -428,13 +428,17 @@ const STT_KEY = 'gemini-stt';
 // The helpers that can hand their take over: the Rust one (Windows, Linux) records it and says so. The Mac's
 // recognizer does Arabic through the Mac's own languages and never hands its audio back, so it stays local.
 const CLOUD_AUDIO = NEEDS_MODEL;
-const stt = { key: null, kind: false }; // kind: 'own' (saved for hearing), 'shared' (the AI's Gemini key) or false
+// kind: 'own' (saved for hearing), 'voice' (the Gemini voice's own key), 'shared' (the AI's Gemini key) or false
+const stt = { key: null, kind: false };
 let hearingNow = null, sttToldAt = 0;   // the take being transcribed, and when hearing last complained
 async function sttKey() {
   const own = LINUX && !config.sttKeySaved ? null : await secrets.get(STT_KEY).catch(() => null);
   if (own) return [own, 'own'];
-  const shared = await brainGeminiKey();
-  return shared ? [shared, 'shared'] : [null, false];
+  // The Gemini voice's key hears too: one Google key for speaking and listening, unless hearing has one of its own.
+  // voiceKey already falls back to the AI's Gemini key, so 'shared' still means the key from the Model page.
+  const [voice, voiceKind] = await voiceKey('gemini').catch(() => [null, false]);
+  if (voice) return [voice, voiceKind === 'own' ? 'voice' : 'shared'];
+  return [null, false];
 }
 /** Which model hears: 'local' or 'gemini' (and Gemini only where the helper can hand its audio over). */
 const hearing = () => (CLOUD_AUDIO && config.stt === 'gemini' ? 'gemini' : 'local');
@@ -446,9 +450,9 @@ async function useHearing(id) {
   [stt.key, stt.kind] = await sttKey().catch(() => [null, false]);
   config.stt = stt.key ? 'gemini' : 'local';
   saveConfig(); voiceConfig(); menu(); panel();
-  if (!stt.key) panelNote('Gemini hearing needs a Gemini key: paste one under Hearing on the Voice page. This computer keeps listening until then.');
+  if (!stt.key) panelNote('Gemini hearing needs a Gemini key: add one under Hearing, or for the Gemini voice, on the Voice page. This computer keeps listening until then.');
 }
-// A key for hearing on its own (else the AI's Gemini key is used, as the Gemini voice does).
+// A key for hearing on its own (else the Gemini voice's key, or the AI's Gemini key, is used).
 async function sttKeyLogin({ given = null, note = null } = {}) {
   const say = note ? (text, mood, p) => { sayOut(text, mood); note(text, mood === 'concerned', p); } : sayOut;
   const key = (given ?? (await ask({ prompt: 'Paste your Gemini API key', placeholder: 'Gemini API key', mask: true })))?.trim();
@@ -470,7 +474,9 @@ async function removeSttKey() {
   [stt.key, stt.kind] = await sttKey().catch(() => [null, false]);
   if (!stt.key) config.stt = 'local';
   saveConfig(); voiceConfig(); menu(); panel();
-  say(stt.key ? "Hearing key removed. I'll use the Gemini key from the Model page." : 'Hearing key removed. I hear you with this computer again.', 'happy');
+  say(stt.kind === 'voice' ? "Hearing key removed. I'll use my Gemini voice key."
+    : stt.key ? "Hearing key removed. I'll use the Gemini key from the Model page."
+      : 'Hearing key removed. I hear you with this computer again.', 'happy');
 }
 
 // The voices picked for each language with a service ({} when none were).
@@ -1889,6 +1895,7 @@ async function removeVoiceKey(id = tts().id) {
   if (used) { speech.stop(); await useTts(id); } // Gemini falls back to the AI's Gemini key, if there is one
   else ttsKeys[id] = (await voiceKey(id).catch(() => [null, false]))[1];
   if (used && !speech.on && config.replies === 'voice') { config.replies = 'text'; saveConfig(); agentStale = true; }
+  if (id === 'gemini') { await syncGeminiVoiceKey(); voiceConfig(); }
   menu();
   say(`${t.name} key removed.${ttsKeys[id] === 'shared' ? " I'll use the Gemini key from the Model page." : used ? ' Replies are text only.' : ''}`, 'happy');
 }
@@ -1917,6 +1924,8 @@ async function voiceKeyLogin({ provider = tts().id, thenVoice = false, given = n
     return say(p.text, 'concerned', p);
   }
   ttsKeys[t.id] = 'own';
+  // The Gemini voice's key hears too, so hearing (and the helper's audio flag) follows it at once.
+  if (t.id === 'gemini') { await syncGeminiVoiceKey(); voiceConfig(); }
   config.tts = t.id;
   if (thenVoice || config.replies !== 'voice') config.replies = 'voice';
   saveConfig(); agentStale = true;
@@ -2175,7 +2184,8 @@ function panelState() {
     // Hearing: the on-device recognizer or Gemini, the key it uses (its own, or the AI's Gemini key), and whether
     // the helper on this machine can hand its take over at all.
     hearing: {
-      provider: hearing(), cloud: CLOUD_AUDIO, on: cloudHearing(), key: !!stt.key, shared: stt.kind === 'shared', kind: stt.kind,
+      provider: hearing(), cloud: CLOUD_AUDIO, on: cloudHearing(), key: !!stt.key, kind: stt.kind,
+      own: stt.kind === 'own', voice: stt.kind === 'voice', shared: stt.kind === 'shared',
       model: config.sttModel, models: STT_MODELS, where: MAC ? 'this Mac' : 'this computer',
     },
     voice: VOICE_OK ? {
