@@ -56,6 +56,12 @@ jobs:
           cache: npm
           cache-dependency-path: showcase/tauri/sidecar/package-lock.json
 
+      - name: Install Visual Studio Build Tools (Windows)
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: 'latest'
+
       - name: Install sidecar dependencies
         working-directory: showcase/tauri/sidecar
         run: npm ci
