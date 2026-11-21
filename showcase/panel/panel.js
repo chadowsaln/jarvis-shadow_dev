@@ -1503,8 +1503,10 @@
       speechRate: 1,
       hearing: {
         provider: new URLSearchParams(location.search).get('hearing') === 'gemini' ? 'gemini' : 'local',
-        cloud: true, key: new URLSearchParams(location.search).has('sttkey'), own: new URLSearchParams(location.search).has('sttkey'),
+        cloud: true, own: new URLSearchParams(location.search).has('sttkey'),
         voice: new URLSearchParams(location.search).has('voicekey'), shared: new URLSearchParams(location.search).has('shared'),
+        // Any of the three gives hearing a key: its own, the voice's, or the Model page's.
+        key: ['sttkey', 'voicekey', 'shared'].some((k) => new URLSearchParams(location.search).has(k)),
         model: 'gemini-3.5-transcribe', models: [{ id: 'gemini-3.5-transcribe', name: 'Gemini Transcribe' }], where: "this computer's speech model",
       },
       sound: true, actions: false, login: { on: true },
