@@ -9,9 +9,10 @@ export * from './verification.mjs';
 
 import { ATSPIDriver, createATSPIDriver } from './atspi-adapter.mjs';
 import { DBusIntegration, createDBusIntegration, getDBusIntegration } from './dbus-integration.mjs';
-import { createInputSimulator, getInputSimulator } from './input-simulation.mjs';
+import { createInputSimulator, getInputSimulator, selectInputBackend } from './input-simulation.mjs';
 import { createOCREngine, getOCREngine } from './ocr-adapter.mjs';
 import { createDesktopVerification } from './verification.mjs';
+import { detectTesseract } from '../screen.mjs';
 
 class ComputerControlServiceImpl {
   constructor() {
@@ -27,6 +28,8 @@ class ComputerControlServiceImpl {
     if (this.initialized) return;
     try { await this.atspi.connect(); } catch (e) { console.error('[ComputerControl] AT-SPI unavailable:', e?.message || e); }
     try { await this.dbus.connect(); } catch (e) { console.error('[ComputerControl] D-Bus unavailable:', e?.message || e); }
+    // Use whichever input backend actually works here (xdotool on X11, ydotool when its socket answers).
+    try { this.input = (await selectInputBackend()) || createInputSimulator(); } catch { /* keep the ydotool object; its calls explain why */ }
     try { await this.ocr.initialize('eng'); } catch {}
     this.initialized = true;
   }
@@ -63,11 +66,36 @@ export async function getComputerControl() {
 }
 
 export async function detectCapabilities() {
-  const caps = { atspi: false, dbus: false, input: 'none', ocr: false, portal: 'none', wayland: !!process.env.WAYLAND_DISPLAY };
-  try { const a = createATSPIDriver(); await a.connect(); await a.disconnect(); caps.atspi = true; } catch {}
+  const caps = {
+    atspi: false, atspiReason: '',
+    dbus: false,
+    input: 'none', inputReady: false, inputReason: '', inputRemediation: '',
+    ocr: false, ocrEngine: 'none', ocrReason: '',
+    portal: 'none', portalReason: '',
+    wayland: !!process.env.WAYLAND_DISPLAY || /wayland/i.test(process.env.XDG_SESSION_TYPE || ''),
+  };
+  try { const a = createATSPIDriver(); await a.connect(); await a.disconnect(); caps.atspi = true; } catch (e) { caps.atspiReason = String(e?.message || e); }
   try { const d = createDBusIntegration(); await d.connect(); await d.disconnect(); caps.dbus = true; } catch {}
-  try { const i = createInputSimulator(); if (await i.isAvailable()) caps.input = i.getBackend(); } catch {}
-  try { caps.ocr = true; } catch {}
+  try {
+    const i = await selectInputBackend();
+    const p = i ? await i.probe() : { ok: false, reason: 'no input backend applies to this platform' };
+    caps.input = p.ok ? i.getBackend() : 'none';
+    caps.inputReady = !!p.ok;
+    caps.inputReason = p.reason || '';
+    caps.inputRemediation = p.remediation || '';
+  } catch (e) { caps.inputReason = String(e?.message || e); }
+  try {
+    const det = await detectTesseract();
+    if (det.ok) { caps.ocr = true; caps.ocrEngine = 'tesseract'; }
+    else { caps.ocr = false; caps.ocrEngine = 'tesseract.js'; caps.ocrReason = det.reason; }
+  } catch (e) { caps.ocr = false; caps.ocrReason = String(e?.message || e); }
+  try {
+    const d = createDBusIntegration();
+    const info = await d.portalInfo();
+    await d.disconnect().catch(() => {});
+    if (info.ok) caps.portal = `screenshot-v${info.version}`;
+    else caps.portalReason = info.error;
+  } catch (e) { caps.portalReason = String(e?.message || e); }
   return caps;
 }
 
@@ -102,9 +130,12 @@ if (process.argv.includes('--doctor')) {
     } catch (e) { ok('ydotool checks', false, e?.message); }
     // portals
     try {
-      const { execSync } = await import('node:child_process');
-      ok('XDG portal (ScreenCast/Screenshot) available', !!process.env.XDG_RUNTIME_DIR, 'Ensure xdg-desktop-portal and xdg-desktop-portal-gnome are installed');
-    } catch {}
+      const { createDBusIntegration } = await import('./dbus-integration.mjs');
+      const d = createDBusIntegration();
+      const info = await d.portalInfo();
+      await d.disconnect().catch(() => {});
+      ok('Screenshot portal answers (org.freedesktop.portal.Screenshot)', info.ok, info.error || `version ${info.version}`);
+    } catch (e) { ok('Screenshot portal', false, e?.message); }
     // tesseract
     try {
       const { execSync } = await import('node:child_process');

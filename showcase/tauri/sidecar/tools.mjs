@@ -320,6 +320,29 @@ const actionsOff = `File edits and commands are switched off. Tell the user to t
 // macOS, hands-win on Windows; same commands and JSON). A .mjs one (a test's fake) runs on this Node.
 const HANDS = process.env.ROAMIES_HANDS || '';
 const runHands = (args, opts) => (HANDS.endsWith('.mjs') ? run(process.execPath, [HANDS, ...args], opts) : run(HANDS, args, opts));
+// Desktop adapter layer (Batch 2): one typed interface over the hands helper (macOS/Windows) and
+// computer-control (Linux). Adapters only; every tool below still goes through safety and the agent core.
+let desktopLayer = null;
+const getDesktopLayer = async () => {
+  if (!desktopLayer) {
+    const { createDesktopFromEnvironment } = await import('./desktop/index.mjs');
+    desktopLayer = await createDesktopFromEnvironment();
+  }
+  return desktopLayer;
+};
+// On Linux, typing and clicking go to whichever app is in front; refuse the off-limits ones first.
+const guardDesktopInput = async () => {
+  if (!LINUX) return;
+  const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+  const driver = await createATSPIDriver();
+  try {
+    const focused = await driver.getFocusedApplication();
+    const verdict = checkLinuxInputTarget(focused?.name);
+    if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+  } finally {
+    await driver.disconnect();
+  }
+};
 const STALE_ID = 'The page changed since read_window, so that id is out of date. Call read_window again and use the new ids.';
 // An app named in read_window or act_in_app that isn't open: open it (with the open tool's safety check) and wait
 // up to 6 s for its window. True when it's there. Only plain app names, never paths or links.
@@ -1373,7 +1396,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'linux_type_text',
-        description: 'Type text at the current cursor position or into a focused element on Linux. Uses input simulation (ydotool/libei).',
+        description: 'Type text at the current cursor position or into a focused element on Linux. Uses the available input backend (xdotool on X11, ydotool when its daemon socket answers).',
         parameters: z.object({
           text: z.string().min(1),
           delayMs: z.number().int().min(0).max(1000).optional().default(10),
@@ -1425,7 +1448,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'linux_move_mouse',
-        description: 'Move mouse cursor to absolute screen coordinates on Linux.',
+        description: 'Move mouse cursor to absolute screen coordinates on Linux. durationMs, when given, glides the pointer there instead of jumping.',
         parameters: z.object({
           x: z.number().int(),
           y: z.number().int(),
@@ -1450,49 +1473,39 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'linux_capture_screen',
-        description: 'Capture screen via XDG Desktop Portal (user consent required). Returns screenshot URI.',
+        description: `Capture the screen or a window/area on ${THIS_COMPUTER} (Linux) and attach the picture so you can read it. Uses the desktop's own screenshot path (X11: the root window; Wayland: the XDG portal, which asks the user for permission — on some desktops every time). Nothing is saved by JARVIS V2.`,
         parameters: z.object({
-          interactive: z.boolean().optional().default(true).describe('Let user choose screen/window/area'),
-          cursor: z.boolean().optional().default(false).describe('Include cursor in capture'),
+          interactive: z.boolean().optional().default(true).describe('Let the user choose screen/window/area'),
         }),
-        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen via desktop portal' },
-        execute: async ({ interactive = true, cursor = false }) => {
-          const { getDBusIntegration } = await import('./computer-control/dbus-integration.mjs');
-          const dbus = await getDBusIntegration();
-          const handleToken = `littleboy-${Date.now()}`;
-          const result = await dbus.requestScreenshot(handleToken, interactive, cursor);
-          return `Screenshot captured: ${result.uri}`;
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture the screen and send the image to the model' },
+        execute: async ({ interactive = true }) => {
+          const cap = await captureViaPortal({ askShell, interactive: interactive !== false });
+          if (!cap.ok) throw new Error(cap.error || 'Screen capture failed.');
+          let dataUrl = null;
+          try { dataUrl = await readImageDataUrl(cap.file, 'image/jpeg'); } finally { await removeTemp(cap.file); }
+          const text = ['Captured the screen; the image is attached below. Do not save it.', cap.pixels ? `Pixels: ${cap.pixels[0]}x${cap.pixels[1]}.` : null].filter(Boolean).join('\n');
+          const content = [{ type: 'text', text }];
+          if (dataUrl) content.push({ type: 'image', url: dataUrl });
+          return { content };
         },
       },
       {
         name: 'linux_ocr',
-        description: 'Capture screen via XDG Desktop Portal and extract text using local Tesseract OCR. Supports Arabic and English.',
+        description: `Capture the screen or a window/area on ${THIS_COMPUTER} (Linux) and extract visible text locally with OCR (Arabic and English when available). Nothing is saved by JARVIS V2. If neither the local tesseract binary nor its downloaded language data is available, the error explains that.`,
         parameters: z.object({
           interactive: z.boolean().optional().default(true),
-          language: z.string().optional().default('eng+ara').describe('Tesseract language(s), e.g., "eng", "ara", "eng+ara"'),
+          language: z.string().optional().default('eng+ara').describe('Language(s), e.g., "eng", "ara", "eng+ara"'),
         }),
-        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen and extract text via OCR' },
+        permission: { level: 'observe', requiresApproval: true, description: 'Capture screen and extract text locally via OCR' },
         execute: async ({ interactive = true, language = 'eng+ara' }) => {
-          const { getDBusIntegration } = await import('./computer-control/dbus-integration.mjs');
-          const { quickOCR } = await import('./computer-control/ocr-adapter.mjs');
-          const dbus = await getDBusIntegration();
-          const handleToken = `littleboy-${Date.now()}`;
-          const result = await dbus.requestScreenshot(handleToken, interactive, false);
-          if (result.error) {
-            if (/cancel/i.test(result.error)) return 'Screenshot cancelled or permission pending in the portal. Grant the permission prompt, then retry.';
-            return `Screenshot failed: ${result.error}`;
-          }
-          if (!result.uri) return 'No screenshot URI returned by the portal (permission may be pending).';
-          const fs = await import('node:fs');
-          const path = await import('node:path');
-          let filePath = result.uri;
-          if (filePath.startsWith('file://')) filePath = decodeURIComponent(filePath.slice(7));
-          if (!fs.existsSync(filePath)) return `Screenshot URI returned (${result.uri}) but the file is not accessible; portal permission may be pending.`;
+          const cap = await captureViaPortal({ askShell, interactive: interactive !== false });
+          if (!cap.ok) throw new Error(cap.error || 'Screen capture failed.');
           try {
-            const { text } = await quickOCR(filePath, language.split('+')[0]);
-            return `OCR (${language}):\n${text.trim() || '(no text detected)'}`;
-          } catch (e) {
-            return `OCR failed: ${e?.message || e}`;
+            const res = await ocrImage(cap.file, { preferred: String(language).split('+').filter(Boolean) });
+            if (!res.ok) throw new Error(res.error || 'OCR failed.');
+            return `OCR (${res.engine || 'local'} ${res.lang || language}):\n${String(res.text || '').trim() || '(no text detected)'}`;
+          } finally {
+            await removeTemp(cap.file);
           }
         },
       },
@@ -1512,6 +1525,180 @@ A drawing stays until the user clears it or the window changes; your next drawin
           } finally {
             await driver.disconnect();
           }
+        },
+      },
+    ] : []),
+    // Desktop adapter tools (Batch 2): the missing input, window, app, monitor and clipboard verbs.
+    // Input is trusted (it can click/type anywhere the user may already), clipboard read is observe,
+    // quitting an app is sensitive and always asks. Every one goes through the desktop adapter.
+    ...(process.platform === 'darwin' || process.platform === 'win32' || LINUX ? [
+      {
+        name: 'desktop_click',
+        description: 'Click the mouse at absolute screen coordinates. button is left, right or middle; double clicks twice. Use a screenshot to find the spot.',
+        parameters: z.object({
+          x: z.number().int(),
+          y: z.number().int(),
+          button: z.enum(['left', 'right', 'middle']).optional().default('left'),
+          double: z.boolean().optional().default(false),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Click the mouse at screen coordinates' },
+        execute: async ({ x, y, button = 'left', double = false }) => {
+          await guardDesktopInput();
+          const desk = await getDesktopLayer();
+          if (double) await desk.input.doubleClick(x, y, { button });
+          else await desk.input.click(x, y, { button });
+          return `${double ? 'Double-clicked' : 'Clicked'} ${button} at ${x},${y}`;
+        },
+      },
+      {
+        name: 'desktop_drag',
+        description: 'Press the left mouse button at one screen point, move to another and release (drag and drop).',
+        parameters: z.object({
+          fromX: z.number().int(), fromY: z.number().int(),
+          toX: z.number().int(), toY: z.number().int(),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Drag the mouse from one point to another' },
+        execute: async ({ fromX, fromY, toX, toY }) => {
+          await guardDesktopInput();
+          const desk = await getDesktopLayer();
+          await desk.input.drag(fromX, fromY, toX, toY);
+          return `Dragged from ${fromX},${fromY} to ${toX},${toY}`;
+        },
+      },
+      {
+        name: 'desktop_scroll',
+        description: 'Scroll the mouse wheel at a screen point. Positive dy scrolls down, positive dx scrolls right.',
+        parameters: z.object({
+          x: z.number().int(), y: z.number().int(),
+          dx: z.number().int().optional().default(0),
+          dy: z.number().int().optional().default(0),
+        }),
+        permission: { level: 'assist', requiresApproval: false, description: 'Scroll the mouse wheel at a screen point' },
+        execute: async ({ x, y, dx = 0, dy = 0 }) => {
+          await guardDesktopInput();
+          const desk = await getDesktopLayer();
+          await desk.input.scroll(x, y, dx, dy);
+          return `Scrolled (${dx}, ${dy}) at ${x},${y}`;
+        },
+      },
+      {
+        name: 'desktop_type',
+        description: 'Type text at the current cursor position (the focused field). Uses real keystrokes.',
+        parameters: z.object({ text: z.string().min(1), delayMs: z.number().int().min(0).max(1000).optional().default(10) }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Type text on the desktop' },
+        execute: async ({ text, delayMs = 10 }) => {
+          await guardDesktopInput();
+          const desk = await getDesktopLayer();
+          await desk.input.type(text, { delayMs });
+          return `Typed ${text.length} characters`;
+        },
+      },
+      {
+        name: 'desktop_key',
+        description: 'Press a key or key combination on the desktop. Examples: "Enter", "Tab", "Escape", "Control+c", "Alt+Tab". Pass modifiers as a list and the key separately, or a single chord like "Control+c".',
+        parameters: z.object({
+          key: z.string().min(1),
+          modifiers: z.array(z.string()).optional().default([]),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Press a key or shortcut on the desktop' },
+        execute: async ({ key, modifiers = [] }) => {
+          await guardDesktopInput();
+          const desk = await getDesktopLayer();
+          if (modifiers.length) await desk.input.hotkey(modifiers, key);
+          else if (String(key).includes('+')) { const parts = String(key).split('+'); await desk.input.hotkey(parts.slice(0, -1), parts.at(-1)); }
+          else await desk.input.key(key);
+          return `Pressed ${modifiers.length ? modifiers.join('+') + '+' : ''}${key}`;
+        },
+      },
+      {
+        name: 'window_list',
+        description: 'List open windows with their title, app, bounds and states, so you can pick a window to focus, move, resize or close.',
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'List open windows' },
+        execute: async () => {
+          const desk = await getDesktopLayer();
+          const wins = await desk.windows.list();
+          if (!wins || !wins.length) return 'No windows found.';
+          return wins.map(w => `${w.appName || w.app || '?'}: ${w.title || '(untitled)'} @ ${w.bounds ? `${w.bounds.x},${w.bounds.y} ${w.bounds.width}x${w.bounds.height}` : 'no bounds'} [${(w.states || []).join(', ')}]`).join('\n');
+        },
+      },
+      {
+        name: 'window_control',
+        description: 'Control a window: focus it, minimize, maximize or restore it, or move/resize it. target is a window title or app name (partial match).',
+        parameters: z.object({
+          action: z.enum(['focus', 'minimize', 'maximize', 'restore', 'move', 'resize']),
+          target: z.string().min(1),
+          x: z.number().int().optional(),
+          y: z.number().int().optional(),
+          width: z.number().int().positive().optional(),
+          height: z.number().int().positive().optional(),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Focus, minimize, maximize, restore, move or resize a window' },
+        execute: async ({ action, target, x, y, width, height }) => {
+          const desk = await getDesktopLayer();
+          switch (action) {
+            case 'focus': await desk.windows.focus(target); break;
+            case 'minimize': await desk.windows.minimize(target); break;
+            case 'maximize': await desk.windows.maximize(target); break;
+            case 'restore': await desk.windows.restore(target); break;
+            case 'move':
+              if (x == null || y == null) throw new Error('move needs x and y');
+              await desk.windows.move(target, x, y); break;
+            case 'resize':
+              if (width == null || height == null) throw new Error('resize needs width and height');
+              await desk.windows.resize(target, width, height); break;
+            default: throw new Error(`unknown action: ${action}`);
+          }
+          return `${action} ${target}: done`;
+        },
+      },
+      {
+        name: 'app_quit',
+        description: 'Quit an application by name. This closes its windows; anything unsaved may be lost, so it always asks first.',
+        parameters: z.object({ name: z.string().min(1).max(120) }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Quit an application (may lose unsaved work)' },
+        execute: async ({ name }, ctx) => {
+          if (LINUX) {
+            const verdict = checkLinuxInputTarget(name);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          }
+          if (!ctx?.approved && !(await confirm(`Quit ${name}? Anything unsaved in it may be lost.`, ctx))) throw new Error(`${userName} said no, so ${name} was not quit.`);
+          const desk = await getDesktopLayer();
+          await desk.apps.quit(name);
+          return `Quit ${name}`;
+        },
+      },
+      {
+        name: 'monitors',
+        description: 'List the displays connected to this computer with their resolution and position, so you can pick coordinates or move a window to another screen.',
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'List connected displays' },
+        execute: async () => {
+          const desk = await getDesktopLayer();
+          const out = await desk.windows.monitors();
+          return typeof out === 'string' ? out : JSON.stringify(out, null, 2);
+        },
+      },
+      {
+        name: 'clipboard_read',
+        description: 'Read the current text on the clipboard. Read-only; it does not change anything.',
+        parameters: z.object({}),
+        permission: { level: 'observe', requiresApproval: false, description: 'Read the clipboard text' },
+        execute: async () => {
+          const desk = await getDesktopLayer();
+          const text = await desk.clipboard.read();
+          return text ? String(text) : '(the clipboard is empty or holds no text)';
+        },
+      },
+      {
+        name: 'clipboard_write',
+        description: 'Put text on the clipboard so it can be pasted somewhere. Replaces what was there.',
+        parameters: z.object({ text: z.string().min(1).max(100000) }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Write text to the clipboard' },
+        execute: async ({ text }) => {
+          const desk = await getDesktopLayer();
+          await desk.clipboard.write(text);
+          return `Copied ${text.length} characters to the clipboard`;
         },
       },
     ] : []),

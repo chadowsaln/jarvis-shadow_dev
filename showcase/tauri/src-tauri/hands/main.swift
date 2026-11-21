@@ -1440,6 +1440,31 @@ func secretQuery(_ name: String) -> [String: Any] {
 let args = Array(CommandLine.arguments.dropFirst())
 guard let cmd = args.first else { fail("no command") }
 
+// ---------- Batch 2 primitives: raw input, windows, apps, clipboard, displays ----------
+func pointArg(_ s: String) -> CGPoint? {
+    let parts = s.split(separator: ",").compactMap { Double($0) }
+    return parts.count == 2 ? CGPoint(x: parts[0], y: parts[1]) : nil
+}
+func postMouse(_ type: CGEventType, _ p: CGPoint, _ button: CGMouseButton) {
+    let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: button)!
+    e.flags = []
+    e.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.03)
+}
+func buttonArg() -> (CGMouseButton, CGEventType, CGEventType) {
+    let name = args.firstIndex(of: "--button").flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil } ?? "left"
+    switch name {
+    case "right": return (.right, .rightMouseDown, .rightMouseUp)
+    case "middle": return (.center, .otherMouseDown, .otherMouseUp)
+    default: return (.left, .leftMouseDown, .leftMouseUp)
+    }
+}
+func clickPoint() -> CGPoint? {
+    if let i = args.firstIndex(of: "--at"), args.count > i + 1 { return pointArg(args[i + 1]) }
+    if args.count >= 3, let x = Double(args[1]), let y = Double(args[2]) { return CGPoint(x: x, y: y) }
+    return nil
+}
+
 switch cmd {
 // --self-test checks which of an app's windows is used and when typing may go ahead, with made-up cases; exits 1 on a failure.
 case "--self-test":
@@ -1511,6 +1536,139 @@ case "--self-test":
     check("the plan's window gone and none left: nothing", currentWindow([], pinned: pw(2, 1)) == nil)
     check("another app's windows are never taken", currentWindow([pw(9, 7), pw(8, 7)], pinned: pw(2, 1)) == nil)
     exit(bad == 0 ? 0 : 1)
+
+// ---------- Batch 2: raw input verbs (the sidecar's desktop adapter) ----------
+case "move":
+    guard args.count >= 3, let x = Double(args[1]), let y = Double(args[2]) else { fail("usage: move <x> <y> [--relative]") }
+    var p = CGPoint(x: x, y: y)
+    if args.contains("--relative"), let cur = CGEvent(source: nil)?.location { p = CGPoint(x: cur.x + x, y: cur.y + y) }
+    moveTo(p)
+    out(["ok": true, "at": [Int(p.x), Int(p.y)]])
+
+case "click":
+    guard let p = clickPoint() else { fail("usage: click --at x,y [--button left|right|middle]") }
+    let (b, down, up) = buttonArg()
+    moveTo(p)
+    postMouse(down, p, b)
+    postMouse(up, p, b)
+    out(["ok": true, "at": [Int(p.x), Int(p.y)]])
+
+case "double":
+    guard let p = clickPoint() else { fail("usage: double --at x,y") }
+    moveTo(p)
+    for _ in 0..<2 {
+        postMouse(.leftMouseDown, p, .left)
+        postMouse(.leftMouseUp, p, .left)
+        Thread.sleep(forTimeInterval: 0.06)
+    }
+    out(["ok": true, "at": [Int(p.x), Int(p.y)]])
+
+case "mousedown":
+    let (b, down, _) = buttonArg()
+    guard let p = clickPoint() else { fail("usage: mousedown --at x,y [--button left|right|middle]") }
+    moveTo(p); postMouse(down, p, b)
+    out(["ok": true])
+
+case "mouseup":
+    let (b, _, up) = buttonArg()
+    guard let p = clickPoint() else { fail("usage: mouseup --at x,y [--button left|right|middle]") }
+    postMouse(up, p, b)
+    out(["ok": true])
+
+case "drag":
+    guard args.count >= 3, let from = pointArg(args[1]), let to = pointArg(args[2]) else { fail("usage: drag x,y x,y") }
+    moveTo(from)
+    postMouse(.leftMouseDown, from, .left)
+    let steps = 12
+    for i in 1...steps {
+        let t = Double(i) / Double(steps)
+        let q = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+        postMouse(.leftMouseDragged, q, .left)
+    }
+    postMouse(.leftMouseUp, to, .left)
+    out(["ok": true, "from": [Int(from.x), Int(from.y)], "to": [Int(to.x), Int(to.y)]])
+
+case "scroll":
+    guard let p = clickPoint() else { fail("usage: scroll --at x,y [--dx n] [--dy n]") }
+    let dx = args.firstIndex(of: "--dx").flatMap { args.count > $0 + 1 ? Int32(args[$0 + 1]) : nil } ?? 0
+    let dy = args.firstIndex(of: "--dy").flatMap { args.count > $0 + 1 ? Int32(args[$0 + 1]) : nil } ?? 0
+    moveTo(p)
+    scrollAt(p, dy: dy, dx: dx)
+    out(["ok": true, "at": [Int(p.x), Int(p.y)], "dx": Int(dx), "dy": Int(dy)])
+
+case "type":
+    guard args.count >= 2 else { fail("usage: type <text>") }
+    typeText(args[1])
+    out(["ok": true, "chars": args[1].count])
+
+case "key":
+    guard args.count >= 2 else { fail("usage: key <combo>") }
+    guard pressKey(args[1]) else { fail("unknown key: \(args[1])") }
+    out(["ok": true, "key": args[1]])
+
+case "focus":
+    guard args.count >= 2, let w = resolve(args[1]) else { fail("No matching window is open.") }
+    let ok = bringToFront(w, axApp(w))
+    out(["ok": ok, "window": winInfo(w)])
+
+// ---------- Batch 2: window management, apps, clipboard, displays ----------
+case "window":
+    guard args.count >= 3, let w = resolve(args[2]) else { fail("usage: window <minimize|maximize|restore|move|resize> <target> [x y|w h]") }
+    let app = axApp(w)
+    guard let axw = axWindow(app, w) else { fail("No accessible window for \(w.app).") }
+    switch args[1] {
+    case "minimize":
+        AXUIElementSetAttributeValue(axw, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    case "restore":
+        AXUIElementSetAttributeValue(axw, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        _ = bringToFront(w, app)
+    case "maximize":
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(CGRect(x: w.x, y: w.y, width: w.w, height: w.h)) }) ?? NSScreen.screens.first
+        if let f = screen?.visibleFrame {
+            var pos = f.origin, size = f.size
+            if let pv = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(axw, kAXPositionAttribute as CFString, pv) }
+            if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(axw, kAXSizeAttribute as CFString, sv) }
+        }
+    case "move":
+        guard args.count >= 5, let x = Double(args[3]), let y = Double(args[4]) else { fail("usage: window move <target> <x> <y>") }
+        var pos = CGPoint(x: x, y: y)
+        if let pv = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(axw, kAXPositionAttribute as CFString, pv) }
+    case "resize":
+        guard args.count >= 5, let cw = Double(args[3]), let ch = Double(args[4]) else { fail("usage: window resize <target> <w> <h>") }
+        var size = CGSize(width: cw, height: ch)
+        if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(axw, kAXSizeAttribute as CFString, sv) }
+    default: fail("unknown window action: \(args[1])")
+    }
+    out(["ok": true, "window": winInfo(w)])
+
+case "quit":
+    guard args.count >= 2 else { fail("usage: quit <app>") }
+    let want = args[1].lowercased()
+    let running = NSWorkspace.shared.runningApplications.filter { (($0.localizedName ?? "").lowercased().contains(want)) || (($0.bundleIdentifier ?? "").lowercased().contains(want)) }
+    if running.isEmpty { fail("No running app matches \(args[1]).") }
+    for a in running { a.terminate() }
+    out(["ok": true, "quit": running.compactMap { $0.localizedName }])
+
+case "apps":
+    let listing = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.map { a -> [String: Any] in ["name": a.localizedName ?? "?", "bundle": a.bundleIdentifier ?? "", "pid": Int(a.processIdentifier)] }
+    out(["ok": true, "apps": listing])
+
+case "clipboard":
+    guard args.count >= 2 else { fail("usage: clipboard get|set [text]") }
+    let pb = NSPasteboard.general
+    switch args[1] {
+    case "get": out(["ok": true, "text": pb.string(forType: .string) ?? ""])
+    case "set":
+        guard args.count >= 3 else { fail("usage: clipboard set <text>") }
+        pb.clearContents()
+        pb.setString(args[2], forType: .string)
+        out(["ok": true])
+    default: fail("usage: clipboard get|set [text]")
+    }
+
+case "monitors":
+    let listing = NSScreen.screens.enumerated().map { (i, s) -> [String: Any] in ["id": i, "x": Int(s.frame.minX), "y": Int(s.frame.minY), "width": Int(s.frame.width), "height": Int(s.frame.height), "visibleWidth": Int(s.visibleFrame.width), "visibleHeight": Int(s.visibleFrame.height)] }
+    out(["ok": true, "monitors": listing])
 
 case "trusted":
     let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: args.contains("--prompt")] as CFDictionary

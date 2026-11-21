@@ -85,7 +85,18 @@ function pickOcrLangs(available) {
 
 export async function ocrImage(file, { preferred = ['ara', 'eng'] } = {}) {
   const det = await detectTesseract();
-  if (!det.ok) return { ok: false, error: det.reason };
+  if (!det.ok) {
+    // No native tesseract: use tesseract.js (downloads language data on first use). Report its real result.
+    try {
+      const { quickOCR } = await import('./computer-control/ocr-adapter.mjs');
+      const res = await quickOCR(file, preferred.join('+') || 'eng');
+      return res.ok
+        ? { ok: true, text: res.text, lang: res.lang, engine: 'tesseract.js', available: [] }
+        : { ok: false, error: res.error || det.reason, engine: 'tesseract.js' };
+    } catch (e) {
+      return { ok: false, error: `${det.reason} (tesseract.js also failed: ${String(e?.message || e)})` };
+    }
+  }
   const ls = await tesseractLanguages();
   const available = ls.langs || [];
   // prefer Arabic and English when installed

@@ -287,6 +287,9 @@ real plan objects in the live loop; cross-app task context; retry/timeout/cancel
 
 ### 5.3 Defects found (not scaffolding — broken code)
 
+> **All of these are fixed** — see [desktop-operator-batch3.md](desktop-operator-batch3.md) for
+the rewrite and the live evidence.
+
 1. **`computer-control/atspi-adapter.mjs` is written against an imagined AT-SPI API.**
    Live probe on this machine:
    ```
@@ -362,6 +365,9 @@ regression (`toolschema` green).
 
 ### Batch 2 — Desktop control foundation (typed action layer)
 
+> **Done (2026-11-20)** — see [desktop-operator-batch2.md](desktop-operator-batch2.md). The adapter
+> layer and tools exist; Linux control still depends on Batch 3.
+
 New module `sidecar/desktop/` — **adapters only**, no policy, no approvals:
 
 ```
@@ -387,6 +393,9 @@ Tests: unit tests with a **fake backend** that records calls (no real input); `H
 tests; coordinate/monitor math tests; helper `--self-test` additions for the new verbs.
 
 ### Batch 3 — Linux control actually works
+
+> **Done (2026-11-20)** — see [desktop-operator-batch3.md](desktop-operator-batch3.md). The AT-SPI
+> adapter, input probes, capture, OCR and verification are real; capabilities report the truth.
 
 Fix §5.3 properly, on X11 and Wayland:
 
