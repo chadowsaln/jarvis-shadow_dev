@@ -38,7 +38,7 @@ jobs:
           # base it links on, and the oldest distros it runs on (Ubuntu 24.04, Fedora 39, Debian 13).
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb,rpm
+            bundles: appimage
             beta: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.beta == true }}
@@ -210,7 +210,7 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Roamies $TAG" --generate-notes || true
           shopt -s nullglob
           B=src-tauri/target/${{ matrix.target }}/release/bundle
-          files=($B/dmg/*.dmg $B/nsis/*-setup.exe $B/appimage/*.AppImage $B/deb/*.deb $B/rpm/*.rpm)
+          files=($B/dmg/*.dmg $B/nsis/*-setup.exe $B/appimage/*.AppImage)
           [ ${#files[@]} -gt 0 ] || { echo "No installers were built"; exit 1; }
           # Update bundles: both Macs produce Roamies.app.tar.gz, so name them per architecture.
           VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
