@@ -41,7 +41,7 @@
       const ears = o.ears ? [-1, 1].map((s) => ({ s, x: m.x, y: m.y, vx: 0, vy: 0 })) : [];
       const ant = o.antenna ? Array.from({ length: 6 }, () => ({ x: m.x, y: m.y, vx: 0, vy: 0 })) : null;
       const drips = [];
-      // Sidekick acts: little performances with pop-out hands, a pixel speech icon and particles.
+      // Sidekick acts: little performances with a pixel readout and particles.
       const ACTS = ['wave', 'hype', 'remind', 'upset', 'motivate'];
       const forced = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('act') : null;
       // Size: 'default', 'small' (half the body) or 'cursor' (a pixel arrow pointer). Text keeps its size either way.
@@ -58,8 +58,8 @@
       let look = pickLook(typeof location !== 'undefined' ? new URLSearchParams(location.search).get('look') : null);
       let part = lookPart(look);
       const jst = { spin: 0, dt: 0.016 };
-      // Each hand springs to its pose in the body's own space (o: its offset from the body), so it moves with the body
-      // however fast that goes, and only eases between poses. x, y: where that puts it now.
+      // Gesture anchors are kept for motion and particle timing. They are intentionally not drawn: the former
+      // pixel mitts read as detached bubbles beside the reactor orb rather than as part of JARVIS.
       const hands = [-1, 1].map((s) => ({ s, x: m.x, y: m.y, o: { x: 0, y: 0, vx: 0, vy: 0 } }));
       const parts = [];
       let act = null, pending = null, arms = 0, ox = 0, oy = 0, prevHop = 0;
@@ -224,20 +224,8 @@
         const ink = icon === 'heart' || icon === 'flame' ? 1 : 0;
         rows.forEach((r, j) => { for (let i = 0; i < r.length; i++) if (r[i] === '#') for (let a = 0; a < sc; a++) for (let b = 0; b < sc; b++) put(x0 + 2 + i * sc + b, y0 + 2 + j * sc + a, ink); });
       };
-      const drawHands = (bx, by) => {
-        if (arms < 0.12 || form === 'cursor' || look === 'jarvis') return;
-        // Floating mitts, no arms: they pop out of the body edge and stay readable over it.
-        const hr = Math.max(2, Math.round(((R * 0.25) / P) * Math.min(1, arms * 1.25)));
-        for (const h of hands) {
-          const sx = bx + h.s * R * 0.62, sy = by + R * 0.18;
-          const gx = Math.round(Roamie.lerp(sx, bx + h.o.x, arms) / P), gy = Math.round(Roamie.lerp(sy, by + h.o.y, arms) / P);
-          disc(gx, gy, hr + 1, hr + 1, 0);
-          disc(gx, gy, hr, hr, Math.max(1, L - 1));
-          for (let i = -hr + 1; i < hr; i++) put(gx + i, gy + hr - 1, Math.max(1, L - 2));
-          put(gx - Math.ceil(hr / 2), gy - Math.ceil(hr / 2), L); put(gx - Math.ceil(hr / 2) + 1, gy - Math.ceil(hr / 2), L);
-          put(gx + h.s * -1 * (hr - 1), gy - 1, 0);
-        }
-      };
+      // The old `drawHands` treatment was deliberately removed. Two detached pixel mitts compete with the
+      // reactor's silhouette, especially in the hybrid renderer, and make it read as two extra speech bubbles.
 
       // Cursor form: a classic arrow pointer of LED dots (o = dark outline, # = lit) with a small face.
       const ARROW = [
@@ -836,7 +824,6 @@
             if (brow) for (const b of browAt) drawBrow(b, brow);
           }
           plug?.gridUnder?.(env);
-          drawHands(bx, by);
           mask = null;
           for (const q of parts) {
             const gx = Math.round(q.x / P), gy = Math.round(q.y / P);

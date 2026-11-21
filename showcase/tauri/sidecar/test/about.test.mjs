@@ -19,7 +19,7 @@ assert.match(aboutLittleBoy({ ...base, linux: true, launch: '/opt/jarvis.AppImag
 assert.ok(!/Wake word/.test(linux), 'the wake word is Mac only');
 for (const t of [mac, win, linux]) {
   assert.match(t, /Save Diagnostics/);
-  assert.match(t, /github\.com\/KenKaiii\/LittleBoy/);
+  assert.match(t, /github\.com\/chadowsaln\/jarvis-shadow_dev/);
   assert.ok(!/\$\{|undefined/.test(t), 'every part is filled in');
 }
 console.log('about tests: passed');

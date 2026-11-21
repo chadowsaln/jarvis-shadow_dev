@@ -103,7 +103,7 @@ const sayOut = say;
 // The shell sets ROAMIES_VERSION (the legacy LITTLEBOY_VERSION name is still read for older packaged copies).
 // Reading only the old name left VERSION at 0.0.0 in every release build: wrong update checks and reports.
 const VERSION = process.env.ROAMIES_VERSION || process.env.LITTLEBOY_VERSION || '0.0.0';
-const UPDATE_REPO = 'KenKaiii/LittleBoy';
+const UPDATE_REPO = 'chadowsaln/jarvis-shadow_dev';
 const HOME = os.homedir();
 // ROAMIES_DATA_DIR (tests and benchmarks): config, sessions and memory go there instead; sign-in stays in ~/.gg.
 const DATA_DIR = process.env.ROAMIES_DATA_DIR || process.env.LITTLEBOY_DATA_DIR;
@@ -439,12 +439,14 @@ async function sttKey() {
 /** Which model hears: 'local' or 'gemini' (and Gemini only where the helper can hand its audio over). */
 const hearing = () => (CLOUD_AUDIO && config.stt === 'gemini' ? 'gemini' : 'local');
 const cloudHearing = () => hearing() === 'gemini' && !!stt.key;
-// Point hearing at a provider. A service with no key stays on the on-device one, so talking never stops working.
+// Point hearing at a provider. A service with no key stays on the on-device one, so talking never stops working —
+// and it says why, so picking Gemini is never a press that quietly undoes itself.
 async function useHearing(id) {
   if (id !== 'gemini' || !CLOUD_AUDIO) { config.stt = 'local'; saveConfig(); voiceConfig(); menu(); panel(); return; }
   [stt.key, stt.kind] = await sttKey().catch(() => [null, false]);
   config.stt = stt.key ? 'gemini' : 'local';
   saveConfig(); voiceConfig(); menu(); panel();
+  if (!stt.key) panelNote('Gemini hearing needs a Gemini key: paste one under Hearing on the Voice page. This computer keeps listening until then.');
 }
 // A key for hearing on its own (else the AI's Gemini key is used, as the Gemini voice does).
 async function sttKeyLogin({ given = null, note = null } = {}) {
@@ -2065,7 +2067,7 @@ async function saveDiagnostics() {
     logLine('diagnostics', { bytes: (await fs.stat(file)).size });
     reveal(file);
     const where = path.basename(path.dirname(file)) || 'your home folder';
-    say(`Saved ${path.basename(file)} in ${where}. Attach it to an issue at github.com/KenKaiii/LittleBoy/issues, or send it to whoever is helping you.`, 'happy');
+    say(`Saved ${path.basename(file)} in ${where}. Attach it to an issue at github.com/chadowsaln/jarvis-shadow_dev/issues, or send it to whoever is helping you.`, 'happy');
     panelNote(`Saved ${path.basename(file)} in ${where}.`);
   } catch (e) {
     console.error('diagnostics', e);

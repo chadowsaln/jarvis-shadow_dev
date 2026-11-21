@@ -51,7 +51,7 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
   --d2: conic-gradient(#000 0 25%, transparent 0 50%, #000 0 75%, transparent 0);
   --d3: conic-gradient(transparent 0 25%, #000 0);
 }
-.pane.enter > *, .pane.enter .list > li { animation: dissolve-in 200ms step-end both; animation-delay: calc(var(--i, 0) * 26ms); }
+.pane.enter > *, .pane.enter .list > li { animation: dissolve-in 200ms step-end both; animation-delay: calc(var(--i, 0) * 18ms); }
 @keyframes dissolve-in {
   0% { opacity: 0; }
   25% { opacity: 1; -webkit-mask: var(--d1) 0 0 / 2px 2px; mask: var(--d1) 0 0 / 2px 2px; }
@@ -73,8 +73,18 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 .head-text { min-width: 0; flex: 1; display: grid; }
 /* The Roamie stands on a small LED pad, like the setup guide's. */
 .avatar { flex: none; width: 100px; height: 74px; margin-inline-end: -10px; background: radial-gradient(closest-side, rgba(120, 255, 226, 0.10), transparent) 50% 92% / 70% 22% no-repeat; }
-/* Something it says (a new look, an update; not the setup guide's .quip bubble): in the status line's place for a moment, typed in its own font. */
+/* Something it says (a new look, an update; not the setup guide's .quip bubble): over the tagline for a moment,
+   typed in its own font. It never covers the status line under it. */
 .head-text .by, .head-text .saying { grid-area: 2 / 1; }
+/* What it's doing, in words, under its name: the sentence beside the LED. The model follows it, quieter, so the
+   answer to "what is it doing" is read first. */
+.state {
+  grid-area: 3 / 1; margin: 5px 0 0; min-width: 0; display: flex; align-items: baseline; gap: 8px;
+  font-size: var(--t-body); line-height: 1.35; color: var(--ink-2);
+}
+.state > b { min-width: 0; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.state > .state-m { flex: none; font-size: var(--t-small); line-height: 1.25; color: var(--ink-3); white-space: nowrap; }
+.state > .state-m::before { content: "·"; margin-inline-end: 6px; color: var(--line-hi); }
 .saying {
   margin: 4px 0 0; font: 700 var(--t-body)/1.4 var(--display); letter-spacing: 0.03em; color: var(--accent);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; visibility: hidden;
@@ -90,6 +100,10 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
    fill while it's there), then Done. */
 .ver { flex: none; font: 500 var(--t-small)/1.25 var(--mono); color: var(--ink-3); }
 #head-update { flex: none; margin-inline-start: 2px; }
+/* Checking, up to date, nothing to do: a quiet utility beside the name, not a second primary button. It lights up
+   as the filled one only when there is an update to take. */
+#head-update.ghost.quiet { --bc: var(--line); color: var(--ink-2); }
+#head-update.ghost.quiet:hover { --bc: var(--line-hi); color: var(--ink); }
 #head-update[hidden] { display: none; }
 .by { margin: 2px 0 0; font-size: var(--t-small); line-height: 1.35; color: var(--ink-3); }
 /* Quit, top right: asks first (the .arm Confirm, like Forget). */
@@ -137,9 +151,18 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 /* ---------- panes ---------- */
 /* Pages fit the window; long lists scroll with the page. */
 .body { min-height: 0; overflow-y: auto; padding: 4px var(--gut) 0; display: flex; flex-direction: column; }
+/* The page's own scrollbar: a quiet rail, bright enough to find and dim enough not to read as a divider. */
+.body { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.body::-webkit-scrollbar { width: 10px; }
+.body::-webkit-scrollbar-thumb { background: var(--line); background-clip: content-box; border: 2px solid transparent; }
+.body::-webkit-scrollbar-thumb:hover { background-color: var(--line-hi); }
 .pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: var(--group); padding: 12px 0 var(--gut); }
 .pane.paged { padding-bottom: 0; }
 .pane[hidden] { display: none; }
+/* A page whose last block can grow past the pane's box (an opened key field, a long description) still keeps its
+   gap from the window's edge: the pane's padding stays with its box, and margins below an overflowing child don't
+   count as scrollable space, so the gap goes inside the last block instead. */
+.pane:not(.paged) > :last-child { padding-bottom: var(--gut); }
 /* A paged list takes the room left and shows as many rows as fit there (panel.js measures). When it doesn't
    fill that room — a handful of recent actions, three memories — it stops stretching instead: the rows and
    their footer stay together at the top and the quiet space falls below them, at the window's edge, rather than
@@ -181,16 +204,32 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 .ghead h2 { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-head); }
 .ghead h2 .n { font-weight: 500; color: var(--ink-3); }
 /* A description reads at the same size as the rows under it; it's quieter by colour, not by size. It wraps to
-   two lines rather than fading out: an explanation cut mid-sentence explains nothing. */
-.ghead p { margin: 0; font-size: var(--t-body); line-height: 1.4; color: var(--ink-3); white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.sub { margin: 0; font: 700 var(--t-small)/1.3 var(--mono); font-stretch: 87.5%; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+   three lines rather than fading out: an explanation cut mid-sentence explains nothing. */
+.ghead p { margin: 0; font-size: var(--t-body); line-height: 1.4; color: var(--ink-3); white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* A label inside a group ("Input device", "Voice model"): a size down from the group's own title, so the two
+   levels never read as the same heading. */
+.sub { margin: 4px 0 0; font: 700 10.5px/1.3 var(--mono); font-stretch: 87.5%; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); }
+.group > .sub:first-child { margin-top: 0; }
+.ghead h2 { font-weight: 700; color: var(--ink); }
 
 /* Buttons here are a size down from the guide's; mini ones (header, footer, row ends) a size down again. */
 .body .btn, .head .btn { padding: 8px 12px; font-size: var(--t-small); line-height: 1.25; white-space: nowrap; }
 .body .btn.mini, .head .btn.mini { padding: 5px 9px; }
+/* One lead action on a row of its own, then the quieter ones as equals under it (panel.js). */
 .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .actions .btn { width: 100%; }
 .actions .btn.wide { grid-column: 1 / -1; }
+.actions.lead .btn { min-height: 40px; font-size: var(--t-body); }
+.actions + .actions { margin-top: 2px; }
+/* A word for a state, never a colour alone (Overdue, and the like): outlined rather than filled, so it names the
+   state without shouting over the row it belongs to. */
+.tag { display: inline-block; padding: 0 5px; margin-inline-end: 7px; font: 700 10.5px/1.6 var(--mono);
+  font-stretch: 87.5%; letter-spacing: 0.05em; text-transform: uppercase; color: var(--line-hot); box-shadow: inset 0 0 0 1.5px var(--line-hi); }
+.tag.hot { color: var(--danger); box-shadow: inset 0 0 0 1.5px var(--danger); }
+/* A disabled control has to look disabled: quiet fill, quiet frame, no lift on hover. */
+.body .btn:disabled, .head .btn:disabled { --bc: #16302e; --fill: #061a1b; color: #6f8d88; cursor: default; }
+.body .btn:disabled:hover, .head .btn:disabled:hover { --bc: #16302e; --fill: #061a1b; }
+.body .link:disabled { color: var(--ink-3); cursor: default; }
 
 
 /* ---------- lists: recent, memory, commitments ---------- */
@@ -201,6 +240,8 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 }
 .item:last-child { border-bottom: 0; }
 .item .text { min-width: 0; font-size: var(--t-body); line-height: 1.35; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* What went wrong is read, not glanced at: two lines, then it fades. */
+.item.bad .text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .item .meta { font-size: var(--t-small); line-height: 1.3; color: var(--ink-3); white-space: nowrap; }
 .item .text small { display: block; font-size: var(--t-small); line-height: 1.3; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
 .item.ask .text { color: var(--ink-2); }
@@ -235,7 +276,8 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 /* A question: two stacked bars, like a quote, instead of a dot. */
 .item.ask .mark { background: none; border-left: 3px solid var(--ink-3); border-right: 3px solid var(--ink-3); height: 8px; width: 9px; }
 .row-btns { display: inline-flex; gap: 10px; }
-.empty { margin: 0; font-size: var(--t-body); line-height: 1.4; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* An empty list says what to do next, so it reads as two lines rather than one cut-off sentence. */
+.empty { margin: 0; font-size: var(--t-body); line-height: 1.4; color: var(--ink-2); white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .usage { margin: 0; font-size: var(--t-small); line-height: 1.4; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* A long list: a search field once there are more than a page, and "Show more" at the end. */
@@ -386,3 +428,7 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 .theme-cols { display: flex; flex-wrap: wrap; gap: 14px; }
 
 html[dir='rtl'], body[dir='rtl'] { direction: rtl; }
+/* Counts, dates and times keep their own direction inside a right-to-left panel, so "2 open · 1 overdue" is not
+   reordered into "open · 1 overdue 2". */
+[dir='rtl'] .n, [dir='rtl'] .meta, [dir='rtl'] .usage, [dir='rtl'] .pnum, [dir='rtl'] .wn-date, [dir='rtl'] .tag,
+[dir='rtl'] .state-m, [dir='rtl'] .ver { unicode-bidi: plaintext; }

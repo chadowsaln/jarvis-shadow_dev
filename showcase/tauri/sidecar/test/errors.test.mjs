@@ -101,7 +101,7 @@ const CASES = [
   ['key', new Error("secret-tool isn't installed (it comes in libsecret-tools on Debian and Ubuntu, libsecret on Fedora and Arch)"), 'x', 'Install secret-tool (libsecret), then try again.', 'keyring'],
   ['key', new Error('401 Incorrect API key provided'), 'x', "That key didn't work. Copy it again and retry."],
   ['key', Object.assign(new Error("EACCES: permission denied, open '/Users/jane/.gg/auth.json'"), { code: 'EACCES' }), 'x', "The key didn't save to disk. Try again."],
-  ['update', 'error sending request for url (https://github.com/KenKaiii/LittleBoy/releases/latest/download/latest.json)', 'x', "The update didn't download. Check your internet."],
+  ['update', 'error sending request for url (https://github.com/chadowsaln/jarvis-shadow_dev/releases/latest/download/latest.json)', 'x', "The update didn't download. Check your internet."],
   ['update', 'Could not fetch a valid release JSON from the remote', 'x', "Couldn't check for updates. Check your internet."],
   ['update', 'The signature verification failed', 'x', "The update didn't pass its safety check. Try again later."],
   ['update', 'Permission denied (os error 13)', 'x', "I couldn't replace the app. Reinstall it from GitHub."],

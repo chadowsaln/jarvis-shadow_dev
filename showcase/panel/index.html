@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>JARVIS V2</title>
 <link rel="stylesheet" href="../onboarding/onboarding.css">
-<link rel="stylesheet" href="panel.css?v=5">
+<link rel="stylesheet" href="panel.css?v=8">
 </head>
 <body>
 <div class="frame shut" id="frame">
@@ -22,8 +22,8 @@
       <button class="link danger arm head-quit" type="button" id="head-quit" aria-pressed="false" aria-label="Quit JARVIS V2"><span class="no" aria-hidden="true">Quit</span><span class="yes" aria-hidden="true">Confirm</span></button>
     </div>
     <p class="by" id="by">AI Agent + Computer Control</p>
-    <!-- What it's doing and the model, for screen readers; on screen the LED shows it. -->
-    <p class="sr-only" id="now" role="status" aria-live="polite"></p>
+    <!-- What it's doing and the model, on screen and for screen readers: the LED is its light, this is its word. -->
+    <p class="state" id="now" role="status" aria-live="polite"></p>
     <p class="saying" id="saying" aria-hidden="true"></p>
   </div>
 </header>
@@ -73,6 +73,6 @@
 <script src="../roamies/hybrid3d.js?v=7"></script>
 <script src="../roamies/hybrid.js?v=7"></script>
 <script src="../roamies/10-dither.js?v=6"></script>
-<script src="panel.js?v=14"></script>
+<script src="panel.js?v=16"></script>
 </body>
 </html>

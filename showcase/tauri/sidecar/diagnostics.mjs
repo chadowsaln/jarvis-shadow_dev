@@ -68,7 +68,7 @@ const show = (v) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
 /** The report as text: a header, then each section ([title, text or object]) in order, all of it redacted. */
 export function buildReport({ now = new Date(), version = '0.0.0', sections = [] }, scrub = {}) {
   let out = `JARVIS V2 diagnostics\nMade ${now.toISOString()} by JARVIS V2 ${version}.\n`
-    + 'Send this file to the JARVIS V2 developer: attach it to a GitHub issue (github.com/KenKaiii/LittleBoy/issues) or send it directly.\n'
+    + 'Send this file to the JARVIS V2 developer: attach it to a GitHub issue (github.com/chadowsaln/jarvis-shadow_dev/issues) or send it directly.\n'
     + 'Keys, tokens, emails, your home folder and user name have been removed. Look it over before sending if you like.\n';
   for (const [title, body] of sections) {
     const text = body == null || body === '' ? '(none)' : show(body);

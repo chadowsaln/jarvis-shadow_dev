@@ -47,11 +47,12 @@ assert.match(src('../../../desktop.html'), /canvas \{[^}]*-webkit-user-select: n
   assert.ok(at('glass.js') > 0 && at('glass.js') < at('agent.js') && at('glass.js') < at('agent-cards.js'), 'desktop.html loads glass.js before agent.js and agent-cards.js');
 }
 
-// Regression: the hands trailed behind the body when it moved fast (they sprang after screen points, not body ones).
+// JARVIS is a reactor orb, not a character. Gesture anchors may drive motion internally, but detached
+// pixel mitts must never be painted beside the orb where they read as two extra speech bubbles.
 {
   const kit = src('../../../roamies/10-dither.js');
-  assert.match(kit, /spring\(h\.o, tg\[0\] \* R, tg\[1\] \* R/, 'hands spring in the body\'s own space');
+  assert.match(kit, /spring\(h\.o, tg\[0\] \* R, tg\[1\] \* R/, 'gesture anchors remain in the body\'s own space');
   assert.match(kit, /h\.y = m\.y \+ oy \+ h\.o\.y/, 'and ride its hop once');
-  assert.match(kit, /lerp\(sx, bx \+ h\.o\.x, arms\)/, 'hands are drawn from where the body is drawn');
+  assert.doesNotMatch(kit, /const drawHands\s*=/, 'no detached pixel hands are rendered');
 }
 

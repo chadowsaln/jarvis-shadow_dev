@@ -1,11 +1,11 @@
 [package]
 name = "jarvis_v2"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "JARVIS V2: AI Agent + Computer Control + Perception + Memory + Skills + Security"
-repository = "https://github.com/KenKaiii/LittleBoy"
-homepage = "https://github.com/KenKaiii/LittleBoy"
+repository = "https://github.com/chadowsaln/jarvis-shadow_dev"
+homepage = "https://github.com/chadowsaln/jarvis-shadow_dev"
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }

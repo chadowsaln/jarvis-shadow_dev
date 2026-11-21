@@ -188,9 +188,18 @@
   function head() {
     const s = state.status;
     $('led').className = `led${s.state === 'ready' ? ' on' : s.state === 'busy' ? ' busy' : ''}`;
+    // What it's doing, in words, under its name: the LED is the light, this is the sentence. The model is the quiet
+    // second half, so "what is it doing" always reads before "which model".
     const now = $('now');
-    now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : s.state === 'off' ? ' · Sign in on the Model page' : '');
-    now.title = now.textContent;
+    const word = s.state === 'off' ? 'Not signed in' : s.text || (s.state === 'busy' ? 'Working…' : 'Ready');
+    const model = s.state === 'off' ? 'Sign in on Model' : state.model?.name ?? null;
+    // Written only when it changes: the line is a live region, and a redraw every 30 s must not keep announcing it.
+    const line = model ? `${word} · ${model}` : word;
+    if (now.dataset.line !== line) {
+      now.dataset.line = line;
+      now.replaceChildren(el('b', { className: 'state-t', textContent: word }), model ? el('span', { className: 'state-m', textContent: model }) : null);
+      now.title = line;
+    }
     $('ver').textContent = `v${state.version}`;
     updateButton();
     react();
@@ -213,7 +222,8 @@
       : u.result ? ['Check again', "Couldn't check for updates. Check again", 'ghost', false]
       : ['Check for updates', 'Check for updates', 'ghost', false];
     b.hidden = false; b.textContent = label; b.disabled = off;
-    b.className = `px btn mini ${kind}`;
+    // Ghost, then quiet: only an update that is actually there earns the header's light.
+    b.className = `px btn mini ${kind}${kind === 'ghost' ? ' quiet' : ''}`;
     b.setAttribute('aria-label', aria);
     b.title = u.result && !u.result.ok && !v && !u.checking ? u.result.error ?? "Couldn't check for updates." : '';
     clearTimeout(freshTimer);
@@ -232,6 +242,8 @@
   function mark(page, why) {
     const b = $(`nav-${page}`);
     b.classList.toggle('flag', !!why);
+    // The dot is the sign; the tooltip says what it is for anyone who hovers the page.
+    if (why) b.title = `Needs you: ${why}`; else b.removeAttribute('title');
     let sr = b.querySelector('.sr-only');
     if (why && !sr) b.append(sr = el('span', { className: 'sr-only' }));
     if (sr) { if (why) sr.textContent = ` (${why})`; else sr.remove(); }
@@ -389,17 +401,29 @@
   function home() {
     const u = state.update;
     const mac = state.os === 'mac';
+    // One lead action over the rest: Ask is the thing you came here to press, so it gets a row of its own, full
+    // width, and everything else lines up under it as quieter equals. While it's working, Stop takes the lead (Ask
+    // can't be pressed anyway) and the header's status line says what it is doing.
+    // askKeys: the type-to-ask shortcut (a tap of two modifier keys), so it can be learnt from the button.
+    const ask = btn('Ask', () => act('ask', true), { kind: u.available ? 'ghost' : 'primary', k: 'ask', disabled: state.busy,
+      aria: state.askKeys ? `Ask ${state.name}, or tap ${state.askKeys} anywhere` : `Ask ${state.name}`,
+      title: state.busy ? `${state.name} is busy` : state.askKeys ? `Or tap ${state.askKeys} anywhere` : null });
+    const second = state.busy
+      ? btn('Stop', () => act('stop'), { k: 'stop', kind: 'primary', aria: `Stop ${state.name}` })
+      : btn('New chat', () => act('new'), { k: 'new', disabled: !state.canNew, aria: 'Start a new conversation' });
+    const desk = [
+      btn('Show list', () => act('list', true), { k: 'list' }),
+      mac ? null : btn(`Show ${state.name}`, () => act('show', true), { k: 'show' }),
+      state.snap ?? mac ? btn('Ask about an area', () => act('snap', true), { k: 'snap' }) : null,
+    ].filter(Boolean);
+    const more = [second, ...desk];
+    // An odd number of equals across two columns: the last one takes the whole row rather than leaving a hole.
+    if (more.length % 2) more[more.length - 1].classList.add('wide');
     return [
       el('div', { className: 'group' },
         el('h2', { className: 'sr-only', textContent: 'Actions' }),
-        el('div', { className: 'actions' },
-          // askKeys: the type-to-ask shortcut (a tap of two modifier keys), so it can be learnt from the button.
-          btn('Ask', () => act('ask', true), { kind: u.available ? 'ghost' : 'primary', k: 'ask', disabled: state.busy,
-            aria: state.askKeys ? `Ask ${state.name}, or tap ${state.askKeys} anywhere` : `Ask ${state.name}`, title: state.askKeys ? `Or tap ${state.askKeys} anywhere` : null }),
-          btn('Show list', () => act('list', true), { k: 'list' }),
-          state.snap ?? mac ? btn('Ask about an area', () => act('snap', true), { k: 'snap' }) : null,
-          state.busy ? btn('Stop', () => act('stop'), { k: 'stop' }) : btn('New chat', () => act('new'), { k: 'new', disabled: !state.canNew, aria: 'Start a new conversation' }),
-          mac ? null : btn(`Show ${state.name}`, () => act('show', true), { k: 'show' }))),
+        el('div', { className: 'actions lead' }, ask),
+        el('div', { className: 'actions' }, more)),
       ...comingUp(),
       recentList(),
     ].flat();
@@ -421,13 +445,16 @@
       el('ul', { className: 'list', 'aria-label': 'Coming up' }, rows.map((x) => el('li', { className: `item soon${x.overdue ? ' late' : ''}` },
         el('span', { className: 'mark', 'aria-hidden': 'true' }),
         el('span', { className: 'text', textContent: x.text, title: x.text }),
-        el('span', { className: 'meta', textContent: x.overdue ? `Overdue · ${x.when}` : x.when })))))].flat();
+        // "Overdue" is a word, not just a colour: a date alone in red says nothing to a colour-blind eye.
+        el('span', { className: 'meta' }, x.overdue ? el('span', { className: 'tag hot', textContent: 'Overdue' }) : null, x.when ?? null)))))]
+      .flat();
   }
   function recentList() {
     const { box, nav } = paged('recent', state.recent, (r) => el('li', { className: `item ${r.kind}` },
       el('span', { className: 'mark', 'aria-hidden': 'true' }),
+      // A failure is read whole: two lines, then it fades, rather than a sentence cut where it matters.
       el('span', { className: 'text', textContent: r.kind === 'ask' ? `“${r.text}”` : r.text, title: r.text }),
-      el('span', { className: 'meta', textContent: ago(r.at) })), { label: 'Recent' });
+      el('span', { className: 'meta', textContent: ago(r.at) })), { label: 'Recent', empty: 'Nothing yet — press Ask to start.' });
     return [
       el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Recent' })), box),
       foot(state.usage ? el('p', { className: 'usage', textContent: `Today: ${state.usage.requests} request${state.usage.requests === 1 ? '' : 's'} · ${tokens(state.usage.tokens)} tokens` }) : null, nav),
@@ -445,6 +472,8 @@
     const shown = items.slice(pg * per, pg * per + per);
     const box = el('div', { className: 'pagebox', 'data-pager': key, id },
       shown.length ? el('ul', { className: 'list', 'aria-label': label }, shown.map(row)) : el('p', { className: 'empty', textContent: empty }));
+    // The whole list, not just this page: fit() tells a list that ends here from one that has more pages.
+    box.dataset.total = String(items.length);
     return { box, nav: pages > 1 ? pager(key, pg, pages, label) : null };
   }
   function pager(key, pg, pages, label) {
@@ -481,7 +510,12 @@
       const extra = rows.filter((r) => r.classList.contains('open')).reduce((n, r) => n + Math.max(0, r.offsetHeight - unit), 0);
       const per = Math.max(3, Math.floor((box.clientHeight - extra) / unit));
       if (per !== ui.per[box.dataset.pager]) { ui.per[box.dataset.pager] = per; changed = true; }
-      group?.classList.toggle('short', rows.length < per);
+      // The whole list is no longer than one page, or the page of rows it shows leaves better than half a row
+      // spare: either way it stops stretching, so its footer comes up under the rows instead of leaving a hole
+      // between the last row and the window's edge. A list that fills its room keeps it.
+      const total = Number(box.dataset.total ?? rows.length);
+      const content = shut.reduce((n, r) => n + r.offsetHeight, 0) + extra;
+      group?.classList.toggle('short', total <= per || box.clientHeight - content >= unit * 0.5);
     }
     return changed;
   }
@@ -506,7 +540,7 @@
     const hits = q ? f.filter((x) => x.text.toLowerCase().includes(q)) : f;
     const { box, nav } = paged('facts', hits, (x) => el('li', { className: 'item mem' },
       el('span', { className: 'text', textContent: x.text, title: x.text }),
-      el('span', { className: 'row-btns icons' }, iconArmed('x', 'Forget', `forget:${x.id}`, `forget:${x.id}`, `Forget: ${x.text}`))), { label: 'What I remember', empty: q ? `No match for "${ui.q.trim()}".` : EMPTY, id: 'facts-box' });
+      el('span', { className: 'row-btns icons' }, iconArmed('x', 'Forget', `forget:${x.id}`, `forget:${x.id}`, `Forget: ${x.text}`))), { label: 'What I remember', empty: q ? `No match for "${ui.q.trim()}".` : 'Nothing remembered yet — press Get to know me and I start.', id: 'facts-box' });
     // Search once there's more than a page: it looks through all of them, and the pages follow the matches.
     const search = f.length > (ui.per.facts ?? 8) || q ? el('div', { className: 'find' }, el('span', { className: 'px field' },
       el('input', { type: 'search', id: 'find-facts', value: ui.q, placeholder: `Search ${f.length} memories`, 'aria-label': 'Search what I remember', autocomplete: 'off', spellcheck: false,
@@ -530,7 +564,7 @@
       el('span', { className: 'text', title: x.text }, x.text, x.when ? el('small', { className: x.overdue ? 'late' : '', textContent: x.overdue ? `Overdue · ${x.when}` : x.when }) : null),
       el('span', { className: 'row-btns icons' },
         iconArmed('tick', 'Done', `done:${x.id}`, `done:${x.id}`, `Done: ${x.text}`),
-        iconArmed('x', 'Drop', `drop:${x.id}`, `drop:${x.id}`, `Drop: ${x.text}`))), { label: 'Commitments' });
+        iconArmed('x', 'Drop', `drop:${x.id}`, `drop:${x.id}`, `Drop: ${x.text}`))), { label: 'Commitments', empty: 'Nothing to keep track of — ask me to remind you of something.' });
     const n = state.commitments.length;
     return [el('div', { className: 'group paged', role: 'tabpanel', id: 'mem-panel', 'aria-labelledby': 'tab-commits' }, box), foot(n ? el('p', { className: 'usage', textContent: `${n} open` }) : null, nav)];
   }
@@ -664,9 +698,12 @@
       p.note ? el('p', { className: 'empty note', textContent: p.note }) : null,
       p.method === 'key' || p.key ? keyForm(p.id, p.label, (key, kind) => send({ type: 'panel_key', provider: p.id, kind, key }), p.kinds) : null),
     { label: 'Accounts', pin: accounts.findIndex((p) => p.id === ui.key) });
+    // The line under the picker is only there when there is something to do there: no account to sign in to, or
+    // no model picked yet. With a model answering, the page says nothing more.
+    const pickHint = !on.length ? 'Sign in to an account below first.' : model ? null : 'Pick a model to answer you.';
     return [
       group('Model', 'Which AI answers you.', null,
-        select, orBox ?? el('p', { className: 'empty', textContent: 'Sign in to an account below first.' })),
+        select, orBox ?? (pickHint ? el('p', { className: 'empty', textContent: pickHint }) : null)),
       el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: 'Sign in to use their models.' })), box),
       foot(null, nav),
     ];
@@ -852,6 +889,19 @@
     const h = state.hearing ?? { provider: 'local', cloud: false, models: [] };
     const inputs = m.inputs ?? [];
     const def = inputs.find((x) => x.default);
+    // Hearing: picking Gemini before a key is saved opens the field where the choice was made, with what it will do.
+    // Sending the switch first would be refused by the sidecar (it keeps the on-device model without a key), and the
+    // page would redraw unchanged, as if the press had done nothing.
+    const pickHearing = (x) => {
+      if (x === 'gemini' && !h.key) {
+        disarm();
+        if (ui.key !== 'stt') toggleKey('stt');
+        note('Add a Gemini key to hear with Gemini.');
+        return;
+      }
+      if (ui.key === 'stt') ui.key = null;
+      act(`hearing:${x}`);
+    };
     const micLabel = (name) => inputs.find((x) => x.name === name)?.description || name;
     const micStatus = m.state === 'fallback'
       ? `${micLabel(m.wanted ?? m.pick) || 'That microphone'} isn't connected: recording from ${m.using ?? 'the default'}.`
@@ -927,10 +977,15 @@
       // Hearing: what turns a take into words. On-device is the default; Gemini identifies Arabic, English and the
       // two mixed in one sentence by itself, which the on-device model on Windows and Linux can't read at all.
       v && v.ready && h.cloud ? group('Hearing', 'What turns your voice into words.', null,
-        picks('Speech to text', [['local', 'On this computer'], ['gemini', 'Gemini']], h.provider, (x) => act(`hearing:${x}`), 'hearing', {
+        picks('Speech to text', [['local', 'On this computer'], ['gemini', 'Gemini']], h.provider, pickHearing, 'hearing', {
           local: h.where ? `The speech model on ${h.where}. Nothing leaves your computer.` : 'Nothing leaves your computer.',
-          gemini: 'Google writes down each take, in whatever language you speak. The audio goes to Gemini.',
+          gemini: 'Google writes down each take, in whatever language you speak. The audio goes to Gemini. A Gemini key is needed first.',
         }),
+        // Chosen Gemini, no key yet: what is missing and what happens next, then the one field that fixes it.
+        !h.key && h.provider !== 'gemini' && ui.key === 'stt' ? el('div', { className: 'reveal', 'data-anim': 'hearing-key' },
+          el('p', { className: 'why wrap', textContent: 'Gemini writes down each take — Arabic, English, or both in one sentence — and its audio goes to Google. Until a key is saved here, this computer keeps listening.' }),
+          keyForm('stt', 'Gemini', (key) => send({ type: 'panel_sttkey', key })),
+        ) : null,
         h.provider === 'gemini' ? el('div', { className: 'reveal', 'data-anim': 'hearing-gemini' },
           h.models?.length > 1 ? picks('Hearing model', h.models.map((m2) => [m2.id, m2.name]), h.model, (x) => act(`sttmodel:${x}`), 'sttmodel') : null,
           el('div', { className: 'setting' },
@@ -1073,7 +1128,8 @@
         ? el('ul', { className: 'list', 'aria-label': 'Startup steps' }, rows.map((r) => el('li', { className: `item${r.bad ? ' bad' : ' did'}` },
             el('span', { className: 'mark', 'aria-hidden': 'true' }),
             el('span', { className: 'text' }, r.label, r.detail ? el('small', { textContent: r.detail }) : null),
-            el('span', { className: 'meta', textContent: `+${span(r.sinceStart)}` }))))
+            // The step that went wrong says so in a word, not only in red.
+            el('span', { className: 'meta' }, r.bad ? el('span', { className: 'tag hot', textContent: 'Problem' }) : null, `+${span(r.sinceStart)}`))))
         : el('p', { className: 'empty', textContent: s.error ? `Couldn't read the startup log: ${s.error}` : 'No startup log yet: one is written every time JARVIS V2 starts.' }));
   }
   function aboutPage() {
@@ -1157,7 +1213,7 @@
     pane.classList.toggle('enter', animate);
     if (animate) {
       let i = 0;
-      for (const n of pane.children) { n.style.setProperty('--i', Math.min(i++, 10)); for (const li of n.querySelectorAll('.list > li')) li.style.setProperty('--i', Math.min(i++, 10)); }
+      for (const n of pane.children) { n.style.setProperty('--i', Math.min(i++, 6)); for (const li of n.querySelectorAll('.list > li')) li.style.setProperty('--i', Math.min(i++, 6)); }
       clearTimeout(render.t); render.t = setTimeout(() => pane.classList.remove('enter'), 600);
     }
     if (keep && refocus) (document.querySelector(`.pane [data-k="${CSS.escape(keep)}"]`) ?? document.getElementById(keep))?.focus();
@@ -1526,6 +1582,15 @@
       // A key picked or cleared replaces a refused one, so the row unlocks (the sidekick clears its error the same way).
       if (id.startsWith('talkkey:')) { s.voice.talkKey = id.slice(8); s.voice.talkError = ''; Object.assign(s.voice, talkNow()); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       if (id.startsWith('look:')) { s.look = id.slice(5); s.name = s.looks.find(([v]) => v === s.look)?.[1] ?? s.name; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
+      // Hearing: the sidecar keeps the on-device model when Gemini has no key, and saving a key turns Gemini on.
+      if (id === 'hearing:gemini' || id === 'hearing:local') {
+        if (id === 'hearing:local' || s.hearing.key) s.hearing.provider = id.slice(8);
+        setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
+      }
+      if (args.msg?.type === 'panel_sttkey') {
+        Object.assign(s.hearing, { key: true, kind: 'own', shared: false, provider: 'gemini' });
+        setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
+      }
       return null;
     };
   }
