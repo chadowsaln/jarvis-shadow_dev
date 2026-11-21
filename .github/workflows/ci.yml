@@ -52,9 +52,14 @@ jobs:
         if: runner.os == 'Linux'
         run: npm install -g node-gyp@6
 
-      - name: Install sidecar dependencies
+      - name: Install sidecar dependencies (ignore scripts)
         working-directory: showcase/tauri/sidecar
-        run: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules with node-gyp@6
+        if: runner.os == 'Linux'
+        working-directory: showcase/tauri/sidecar
+        run: node-gyp rebuild
 
       - name: Test sidecar
         working-directory: showcase/tauri/sidecar
