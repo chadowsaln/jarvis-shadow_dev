@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 18
           cache: npm
           cache-dependency-path: showcase/tauri/sidecar/package-lock.json
 
@@ -48,18 +48,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3
 
-      - name: Install compatible node-gyp (fix for better-sqlite3)
-        if: runner.os == 'Linux'
-        run: npm install -g node-gyp@6
-
-      - name: Install sidecar dependencies (ignore scripts)
+      - name: Install sidecar dependencies
         working-directory: showcase/tauri/sidecar
-        run: npm ci --ignore-scripts
-
-      - name: Rebuild native modules with node-gyp@6
-        if: runner.os == 'Linux'
-        working-directory: showcase/tauri/sidecar
-        run: node-gyp rebuild
+        run: npm ci
 
       - name: Test sidecar
         working-directory: showcase/tauri/sidecar
