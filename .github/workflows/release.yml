@@ -117,7 +117,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-steps:
+    steps:
       - uses: actions/checkout@v7
       - name: Write latest.json for the in-app updater
         env:
