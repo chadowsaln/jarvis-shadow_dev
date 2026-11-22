@@ -1,6 +1,6 @@
 // The draw tool's schema, places, parts, SMILES and picture fetching. Run: npm test
 import assert from 'node:assert/strict';
-import { DrawArgs, LIMITS, checkDraw, createParts, describeParts, faviconFor, fitWindow, parseSmiles, photoFor, resolveTargets, shapeRadius, windowSized } from '../draw.mjs';
+import { DrawArgs, LIMITS, checkDraw, createParts, describeParts, faviconFor, fitWindow, normColor, parseSmiles, photoFor, resolveTargets, shapeRadius, windowSized } from '../draw.mjs';
 
 // ---- schema and limits
 const ok = (a) => DrawArgs.safeParse(a).success;
@@ -25,6 +25,28 @@ assert.match(checkDraw({ edit: [{ do: 'recolor', part: 'p1' }] })[0], /recolor n
 assert.match(checkDraw({ edit: [{ do: 'erase' }] })[0], /needs part/);
 assert.deepEqual(checkDraw({ edit: [{ do: 'clear' }] }), [], 'start over needs no part');
 console.log('draw schema tests: passed');
+
+// ---- colour: a free hex on a mark or on any piece of a card, and a sphere that is a world
+assert.ok(ok({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'sphere', color: '#2f6fd0', planet: true, land: '#3f9e4f' }] }] }] }), 'a blue planet with green land');
+assert.ok(ok({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'Export' }, color: '#f00' }] }] }), 'a coloured mark');
+assert.ok(ok({ edit: [{ do: 'recolor', part: 'p2', color: '#2f6fd0' }] }), 'recolor by colour');
+assert.ok(!ok({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'a' }, color: '#1234567' }] }] }), 'a colour is at most #rrggbb');
+assert.equal(normColor('ABC'), '#aabbcc', 'a short hex without # becomes #rrggbb');
+assert.equal(normColor(' #2F6FD0 '), '#2f6fd0', 'case and spaces are forgiven');
+assert.equal(normColor('#abcd'), null, 'four digits is not a colour');
+assert.equal(normColor('blue'), null, 'a name is not a hex');
+const painted = { beats: [{ say: 'x', marks: [{ kind: 'bars', color: '#ABC', bars: [{ label: 'a', value: 1, color: '#e8b400' }, { label: 'b', value: 2 }] }] }] };
+assert.deepEqual(checkDraw(painted), [], 'a card and its pieces take colours');
+assert.equal(painted.beats[0].marks[0].color, '#aabbcc', 'the card’s colour is normalized');
+assert.equal(painted.beats[0].marks[0].bars[0].color, '#e8b400', 'a piece keeps its own colour');
+assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'graph', color: 'blue', plots: [{ points: [[0, 0], [1, 1]] }] }] }] })[0], /color must be a hex/, 'a colour name says what to write instead');
+assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'map', shade: [{ name: 'Peru', color: 'green' }] }] }] })[0], /\(Peru\): color must be a hex/, 'the message names the piece');
+assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'box', planet: true }] }] }] })[0], /planet is for a sphere/, 'only a sphere is a world');
+assert.deepEqual(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'sphere', planet: true, land: '3f9e4f' }] }] }] }), [], 'land without # is fine');
+const recol = { edit: [{ do: 'recolor', part: 'p1', color: '2F6FD0' }] };
+assert.deepEqual(checkDraw(recol), [], 'recolor by colour needs no tone');
+assert.equal(recol.edit[0].color, '#2f6fd0', 'an edit’s colour is normalized too');
+console.log('draw colour tests: passed');
 
 // ---- the shape rule: round for small square things, a pill for thin ones, a rounded box for big ones and fields
 assert.equal(shapeRadius(24, 24, 'checkbox'), 12, 'checkbox is round');

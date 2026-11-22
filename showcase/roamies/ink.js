@@ -14,7 +14,18 @@
   const TONES = { accent: ACC, teal: '#78ffe2', amber: '#ffcf5c', coral: '#ff8a7a', lilac: '#b9a4ff', sky: '#7cc8ff', lime: '#b6f36b', red: '#ff6b6b', white: '#e8fffa' };
   const LED = ['#051214', '#0e5c60', '#28c4b8', '#78ffe2', '#e6fffa'];
   const B4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-  const tone = (t) => TONES[t] || ACC;
+  // A tone's colour, or a hex colour as it is (the model may name any colour instead of a tone).
+  const tone = (t) => TONES[t] || (typeof t === 'string' && t[0] === '#' ? t : ACC);
+  // A mark's or a card piece's own colour first, then its tone, then that fallback tone.
+  const hue = (o, fallback) => o?.color || tone(o?.tone || fallback);
+  // Five shades of one colour, the same five steps as the LED palette (dark to bright), so a coloured thing reads both
+  // as its own colour and as a lit shape. Kept per colour: a card is drawn every frame.
+  const ramps = new Map();
+  const rampOf = (h) => {
+    let r = ramps.get(h);
+    if (!r) { r = [mixHex(h, LED[0], 0.82), mixHex(h, LED[0], 0.45), h, mixHex(h, '#ffffff', 0.30), mixHex(h, '#ffffff', 0.70)]; ramps.set(h, r); }
+    return r;
+  };
   const now = () => performance.now() / 1000;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -411,27 +422,27 @@
   const SCREEN_MARKS = {
     async point(m) {
       const [x0, y0, w0, h0] = rectOf(m), x = x0 + w0 / 2, y = y0 + h0 / 2, r = rnd(12, 15);
-      const s = strokeMark(m.part, loop(x - r, y - r, 2 * r, 2 * r, { pad: 0, r, over: rnd(0.12, 0.2) }), tone(m.tone), { marked: [x - r - 3, y - r - 3, 2 * r + 6, 2 * r + 6], more(b, l) { if (this.p > 0.98) { l.fillStyle = colorOf(this, this.color); l.beginPath(); l.arc(x, y, 3.2, 0, Math.PI * 2); l.fill(); } } });
+      const s = strokeMark(m.part, loop(x - r, y - r, 2 * r, 2 * r, { pad: 0, r, over: rnd(0.12, 0.2) }), hue(m), { marked: [x - r - 3, y - r - 3, 2 * r + 6, 2 * r + 6], more(b, l) { if (this.p > 0.98) { l.fillStyle = colorOf(this, this.color); l.beginPath(); l.arc(x, y, 3.2, 0, Math.PI * 2); l.fill(); } } });
       await drawStroke(s, 0.55); await name(m.part, s.marked, m.label); await rest(x + r, y + r);
     },
     target: (m) => pointer(m, false),
     hover: (m) => pointer(m, true),
     async ring(m) {
-      const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, loop(x, y, w, h, { r: m.at.r }), tone(m.tone));
+      const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, loop(x, y, w, h, { r: m.at.r }), hue(m));
       s.marked = boxOf(s.pts);
       await drawStroke(s); await name(m.part, s.marked, m.label); await rest(x + w, y + h);
     },
     async frame(m) {
       // An area: one pen line round it, closing on itself, then a faint tint.
       const [x, y, w, h] = rectOf(m), pts = loop(x, y, w, h, { pad: 4, r: Math.min(12, m.at.r ?? shapeRadius(w, h)), over: rnd(0.02, 0.05) });
-      const s = strokeMark(m.part, pts, tone(m.tone), { z: 1, fa: 0, marked: [x - 4, y - 4, w + 8, h + 8] });
+      const s = strokeMark(m.part, pts, hue(m), { z: 1, fa: 0, marked: [x - 4, y - 4, w + 8, h + 8] });
       s.draw = function (b, l) { if (this.fa) { const path = new Path2D(); pts.forEach((q, i) => (i ? path.lineTo(q[0], q[1]) : path.moveTo(q[0], q[1]))); b.fillStyle = rgba(colorOf(this, this.color), 0.11 * this.fa); b.fill(path); } pen(b, l, this, pts, this.p, this.color); };
       await drawStroke(s); sfx('scan'); await tween(0.2, (u) => (s.fa = u)); await name(m.part, s.marked, m.label);
     },
-    async underline(m) { const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, handLine([x - 2, y + h + 3], [x + w + 2, y + h + 3 + rnd(-1.5, 1.5)], { bow: rnd(0.01, 0.035) }), tone(m.tone), { w: 3.2 }); await drawStroke(s); await name(m.part, [x, y, w, h + 4], m.label); await rest(x + w, y + h); },
-    async strike(m) { const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, handLine([x - 3, y + h / 2 + rnd(-1, 1)], [x + w + 3, y + h / 2 + rnd(-1.5, 1)]), tone(m.tone || 'coral'), { w: 3 }); await drawStroke(s); await name(m.part, [x, y, w, h], m.label); await rest(x + w, y + h / 2); },
-    check: (m) => { const [x, y] = glyphSpot(m); return glyph(m, [handLine([x - 9, y - 1], [x - 2, y + 7], { jitter: 1 }), handLine([x - 2, y + 7], [x + 11, y - 9], { jitter: 1, bow: 0.04 })], tone(m.tone || 'lime')); },
-    cross: (m) => { const [x, y] = glyphSpot(m); return glyph(m, [handLine([x - 8, y - 8], [x + 8, y + 8], { jitter: 1 }), handLine([x + 8, y - 8], [x - 8, y + 8], { jitter: 1 })], tone(m.tone || 'coral')); },
+    async underline(m) { const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, handLine([x - 2, y + h + 3], [x + w + 2, y + h + 3 + rnd(-1.5, 1.5)], { bow: rnd(0.01, 0.035) }), hue(m), { w: 3.2 }); await drawStroke(s); await name(m.part, [x, y, w, h + 4], m.label); await rest(x + w, y + h); },
+    async strike(m) { const [x, y, w, h] = rectOf(m), s = strokeMark(m.part, handLine([x - 3, y + h / 2 + rnd(-1, 1)], [x + w + 3, y + h / 2 + rnd(-1.5, 1)]), hue(m, 'coral'), { w: 3 }); await drawStroke(s); await name(m.part, [x, y, w, h], m.label); await rest(x + w, y + h / 2); },
+    check: (m) => { const [x, y] = glyphSpot(m); return glyph(m, [handLine([x - 9, y - 1], [x - 2, y + 7], { jitter: 1 }), handLine([x - 2, y + 7], [x + 11, y - 9], { jitter: 1, bow: 0.04 })], hue(m, 'lime')); },
+    cross: (m) => { const [x, y] = glyphSpot(m); return glyph(m, [handLine([x - 8, y - 8], [x + 8, y + 8], { jitter: 1 }), handLine([x + 8, y - 8], [x - 8, y + 8], { jitter: 1 })], hue(m, 'coral')); },
     async connect(m) {
       const A = rectOf(m), B = locRect(m.to.rect), ca = [B[0] + B[2] / 2, B[1] + B[3] / 2], cb = [A[0] + A[2] / 2, A[1] + A[3] / 2];
       await arrow(m.part, edgeToward(A, ca), edgeToward(B, cb, 8), { tone: m.tone });
@@ -439,7 +450,7 @@
     },
     async trace(m) {
       const p0 = pathPts(m), base = catmull(p0, true), pts = handPath(base, 1.4), tail = handPath(base.slice(0, 12), 1).map((q) => [q[0] + rnd(1, 3), q[1] - rnd(1, 3)]), all = [...pts, ...tail];
-      const s = strokeMark(m.part, all, tone(m.tone), { z: 1, fa: 0, marked: boxOf(pts) });
+      const s = strokeMark(m.part, all, hue(m), { z: 1, fa: 0, marked: boxOf(pts) });
       s.draw = function (b, l) { if (this.fa) { const path = new Path2D(); pts.forEach((q, i) => (i ? path.lineTo(q[0], q[1]) : path.moveTo(q[0], q[1]))); b.fillStyle = rgba(colorOf(this, this.color), 0.11 * this.fa); b.fill(path); } pen(b, l, this, all, this.p, this.color); };
       await drawStroke(s); await tween(0.35, (u) => (s.fa = u)); await name(m.part, s.marked, m.label);
     },
@@ -453,13 +464,13 @@
     async write(m) {
       const [x0, y0, w0, h0] = rectOf(m), str = m.text || m.label, S0 = scr(), size = clamp(Math.min(m.size ?? 30, ((S0[2] - S0[0] - 40) / Math.max(1, textW(str, `800 30px ${DOTO}`))) * 30), 12, 64), font = `800 ${size}px ${DOTO}`, w = textW(str, font);
       const x = clamp(x0, scr()[0], scr()[2] - w), y = y0 + h0 + size * 1.05;
-      const s = add({ z: 4, part: m.part, screen: true, color: tone(m.tone), box: [x - 4, y - size, w + 8, size * 1.4], marked: [x, y - size, w, size * 1.2], draw(b) { typed(b, str, x, y, font, colorOf(this, this.color), this.p, { rim: 5 }); } });
+      const s = add({ z: 4, part: m.part, screen: true, color: hue(m), box: [x - 4, y - size, w + 8, size * 1.4], marked: [x, y - size, w, size * 1.2], draw(b) { typed(b, str, x, y, font, colorOf(this, this.color), this.p, { rim: 5 }); } });
       await trace(handLine([x, y - size * 0.3], [x + w, y - size * 0.3], { jitter: 1 }), 0.4 + str.length * 0.06, (e) => (s.p = e)); await rest(x + w, y);
     },
     async scroll(m) {
       const [x0, y0, w0, h0] = rectOf(m), x = x0 + w0 / 2, y = y0 + h0 / 2, sgn = m.dir === 'up' ? -1 : 1;
       const cs = [0, 1].map((k) => { const yy = y + k * 13 * sgn; return handLine([x - 11, yy - 6 * sgn], [x, yy + 5 * sgn], { jitter: 0.6 }).concat(handLine([x, yy + 5 * sgn], [x + 11, yy - 6 * sgn], { jitter: 0.6 })); });
-      const s = add({ z: 4, part: m.part, screen: true, p: 0, p2: 0, color: tone(m.tone), box: [x - 20, y - 30, 40, 70], marked: [x - 14, y - 14, 28, 44], live: () => true, draw(b, l, t) { const bob = this.p2 >= 1 && !reduced() ? Math.sin(t * 4) * 3 * sgn : 0; l.save(); b.save(); l.translate(0, bob); b.translate(0, bob); pen(b, l, this, cs[0], this.p, this.color, { key: 'a' }); pen(b, l, this, cs[1], this.p2, this.color, { key: 'b' }); l.restore(); b.restore(); } });
+      const s = add({ z: 4, part: m.part, screen: true, p: 0, p2: 0, color: hue(m), box: [x - 20, y - 30, 40, 70], marked: [x - 14, y - 14, 28, 44], live: () => true, draw(b, l, t) { const bob = this.p2 >= 1 && !reduced() ? Math.sin(t * 4) * 3 * sgn : 0; l.save(); b.save(); l.translate(0, bob); b.translate(0, bob); pen(b, l, this, cs[0], this.p, this.color, { key: 'a' }); pen(b, l, this, cs[1], this.p2, this.color, { key: 'b' }); l.restore(); b.restore(); } });
       await trace(cs[0], 0.3, (e) => (s.p = e)); await trace(cs[1], 0.3, (e) => (s.p2 = e));
       await name(m.part, s.marked, m.label);
     },
@@ -481,12 +492,12 @@
     },
     async highlight(m) {
       const [x, y, w, h] = rectOf(m), band = handLine([x, y + h / 2], [x + w, y + h / 2 + rnd(-1.5, 1.5)], { jitter: 1 });
-      const s = add({ z: 0, part: m.part, screen: true, color: tone(m.tone || 'amber'), box: [x - 6, y - 6, w + 12, h + 12], draw(b) { const k = Math.max(2, Math.round(band.length * this.p)); b.save(); b.lineCap = 'butt'; b.lineJoin = 'round'; b.lineWidth = h; b.strokeStyle = rgba(colorOf(this, this.color), 0.4); b.beginPath(); band.slice(0, k).forEach((q, i) => (i ? b.lineTo(q[0], q[1]) : b.moveTo(q[0], q[1]))); b.stroke(); b.restore(); } });
+      const s = add({ z: 0, part: m.part, screen: true, color: hue(m, 'amber'), box: [x - 6, y - 6, w + 12, h + 12], draw(b) { const k = Math.max(2, Math.round(band.length * this.p)); b.save(); b.lineCap = 'butt'; b.lineJoin = 'round'; b.lineWidth = h; b.strokeStyle = rgba(colorOf(this, this.color), 0.4); b.beginPath(); band.slice(0, k).forEach((q, i) => (i ? b.lineTo(q[0], q[1]) : b.moveTo(q[0], q[1]))); b.stroke(); b.restore(); } });
       await trace(band, 0.5, (e) => (s.p = e)); await name(m.part, [x, y, w, h], m.label);
     },
     line: (m) => free(m, handPath(pathPts(m))),
     curve: (m) => free(m, handPath(catmull(pathPts(m), false), 1)),
-    async arrow(m) { const p = pathPts(m); await arrow(m.part, p[0], p[p.length - 1], { bend: 0.03, tone: m.tone, via: p.length > 2 ? p : null }); },
+    async arrow(m) { const p = pathPts(m); await arrow(m.part, p[0], p[p.length - 1], { bend: 0.03, tone: m.tone, color: m.color, via: p.length > 2 ? p : null }); },
     circle: (m) => { const [x, y, w, h] = rectOf(m), r = Math.max(w, h) / 2; return free(m, loop(x + w / 2 - r, y + h / 2 - r, 2 * r, 2 * r, { pad: 4, r })); },
     rect: (m) => { const [x, y, w, h] = rectOf(m); return free(m, loop(x, y, w, h, { pad: 4, r: 6, over: rnd(0.03, 0.08) })); },
   };
@@ -494,7 +505,7 @@
   // on it, tapping (click) or circling slowly (hover).
   async function pointer(m, hov) {
     const [x, y, w, h] = rectOf(m), pts = loop(x, y, w, h, { r: m.at.r, pad: 5 });
-    const s = add({ z: 3, part: m.part, screen: true, pts, color: tone(m.tone), marked: boxOf(pts), waiting: false, live() { return this.waiting; }, draw(b, l, t) {
+    const s = add({ z: 3, part: m.part, screen: true, pts, color: hue(m), marked: boxOf(pts), waiting: false, live() { return this.waiting; }, draw(b, l, t) {
       if (this.p >= 1 && this.waiting && !hov && !reduced()) {
         const u = 0.5 + 0.5 * Math.sin(t * 4), path = new Path2D(); pts.forEach((q, i) => (i ? path.lineTo(q[0], q[1]) : path.moveTo(q[0], q[1])));
         b.fillStyle = rgba(colorOf(this, this.color), 0.06 + 0.07 * u); b.fill(path); l.save(); l.globalAlpha *= 0.85 + 0.15 * u; pen(b, l, this, pts, 1, this.color); l.restore(); return;
@@ -513,7 +524,7 @@
     const all = strokes.flat(), s = add({ z: 3, part: m.part, screen: true, pts: all, color, ps: strokes.map(() => 0), marked: boxOf(all), draw(b, l) { strokes.forEach((q, i) => pen(b, l, this, q, this.ps[i], this.color, { key: 's' + i, w: 3.4 })); } });
     return (async () => { for (const [i, q] of strokes.entries()) await trace(q, 0.22, (e) => (s.ps[i] = e)); sfx('tick'); await name(m.part, s.marked, m.label); await rest(...all[all.length - 1]); })();
   }
-  async function free(m, pts) { const s = strokeMark(m.part, pts, tone(m.tone)); s.marked = boxOf(pts); await drawStroke(s); await name(m.part, s.marked, m.label); }
+  async function free(m, pts) { const s = strokeMark(m.part, pts, hue(m)); s.marked = boxOf(pts); await drawStroke(s); await name(m.part, s.marked, m.label); }
   // A curved arrow, the head drawn as two quick strokes after the line.
   async function arrow(part, a, b, o = {}) {
     let curve;
@@ -524,7 +535,7 @@
     }
     const end = curve[curve.length - 1], prev = curve[Math.max(0, curve.length - 8)], ang = Math.atan2(end[1] - prev[1], end[0] - prev[0]), hl = rnd(11, 15), sp = rnd(2.5, 2.8);
     const head = handLine([end[0] + Math.cos(ang + sp) * hl, end[1] + Math.sin(ang + sp) * hl], end, { jitter: 0.5 }).concat(handLine(end, [end[0] + Math.cos(ang - sp) * hl, end[1] + Math.sin(ang - sp) * hl], { jitter: 0.5 }));
-    const s = strokeMark(part, curve, tone(o.tone), { screen: o.screen ?? true, hp: 0, box: () => boxOf([...curve, ...head]), more(bb, l) { if (this.hp) pen(bb, l, this, head, this.hp, this.color, { key: 'h' }); } });
+    const s = strokeMark(part, curve, o.color || tone(o.tone), { screen: o.screen ?? true, hp: 0, box: () => boxOf([...curve, ...head]), more(bb, l) { if (this.hp) pen(bb, l, this, head, this.hp, this.color, { key: 'h' }); } });
     await drawStroke(s); await trace(head, 0.22, (e) => (s.hp = e)); await rest(end[0], end[1]);
     return s;
   }
@@ -616,7 +627,7 @@
     const full = h;
     h = Math.min(full, maxCardH());
     const [x, y] = roomFor(w, h, m.part), bar = o.bar === false ? 0 : 26;
-    const c = add({ z: 2, part: m.part, card: true, kind: m.kind, cw: 0, ch: 0, p: 0, done: 0, w, h, ox: x, oy: y, sy: 0, scrollMax: Math.max(0, full - h), color: tone(m.tone), live: o.live, box: () => [x - 4, y - 4, w + 8, h + 14],
+    const c = add({ z: 2, part: m.part, card: true, kind: m.kind, cw: 0, ch: 0, p: 0, done: 0, w, h, ox: x, oy: y, sy: 0, scrollMax: Math.max(0, full - h), color: hue(m), live: o.live, box: () => [x - 4, y - 4, w + 8, h + 14],
       draw(b, l, t) {
         if (this.cw < 4) return;
         chrome(b, x, y, this.cw, this.ch, { edge: o.edge ? colorOf(this, this.color) : ACC });
@@ -829,7 +840,7 @@
       const plots = (m.plots ?? []).map((p) => ({ ...p, pts: handPath([...p.points].sort((a, b) => a[0] - b[0]).map(([a, v]) => [sx(a), sy(v)]), 0.5), p: 0 }));
       const dots = (m.dots ?? []).map((d) => ({ ...d, pts: loop(sx(d.x) - 5, sy(d.y) - 5, 10, 10, { pad: 0, r: 5 }), p: 0 }));
       const fmt = (v) => (Math.abs(v) >= 1000 ? `${Math.round(v / 100) / 10}k` : String(Math.round(v * 10) / 10));
-      const keys = plots.filter((p) => p.label).map((p) => [p.tone, p.label]);
+      const keys = plots.filter((p) => p.label).map((p) => [hue(p), p.label]);
       // Keys flow onto more rows rather than being left out.
       const kAt = []; { let kx = gx0, kr = 0; for (const [, words] of keys) { const kw = textW(words, SMALL) + 30; if (kx > gx0 && kx + kw - 16 > w - 10) { kr++; kx = gx0; } kAt.push([kx, kr]); kx += kw; } }
       const h = 26 + 250 + Math.max(0, (kAt.at(-1)?.[1] ?? 0) * 18);
@@ -844,9 +855,9 @@
           for (let k = 0; k <= 4; k++) { const v = xr[0] + ((xr[1] - xr[0]) * k) / 4, v2 = yr[0] + ((yr[1] - yr[0]) * k) / 4; b.textAlign = 'center'; b.fillText(fmt(v), x + sx(v), y + gy0 + gh + 16); b.textAlign = 'right'; b.fillText(fmt(v2), x + gx0 - 8, y + sy(v2) + 3); }
           b.textAlign = 'left';
         }
-        plots.forEach((p, i) => pen(b, l, this, O.plots[i], p.p, tone(p.tone), { key: 'p' + i }));
-        dots.forEach((d, i) => { pen(b, l, this, O.dots[i], d.p, HOT, { key: 'd' + i, w: 2.6 }); if (d.p >= 1 && d.label) { const lab = ellipsize(d.label, w - 40, SMALL), lx = Math.min(x + sx(d.x) + 9, x + w - 12 - textW(lab, SMALL)); typed(b, lab, lx, y + sy(d.y) - 8, SMALL, TEXT, 1); } });
-        keys.forEach(([tn, words], i) => { const [kx, kr] = kAt[i], ky = y + gy0 + gh + 38 + kr * 18; b.fillStyle = tone(tn); b.beginPath(); b.arc(x + kx + 4, ky, 4, 0, Math.PI * 2); b.fill(); typed(b, words, x + kx + 14, ky + 4, SMALL, DIM, 1); });
+        plots.forEach((p, i) => pen(b, l, this, O.plots[i], p.p, hue(p), { key: 'p' + i }));
+        dots.forEach((d, i) => { pen(b, l, this, O.dots[i], d.p, d.color ? tone(d.color) : HOT, { key: 'd' + i, w: 2.6 }); if (d.p >= 1 && d.label) { const lab = ellipsize(d.label, w - 40, SMALL), lx = Math.min(x + sx(d.x) + 9, x + w - 12 - textW(lab, SMALL)); typed(b, lab, lx, y + sy(d.y) - 8, SMALL, TEXT, 1); } });
+        keys.forEach(([tn, words], i) => { const [kx, kr] = kAt[i], ky = y + gy0 + gh + 38 + kr * 18; b.fillStyle = tn; b.beginPath(); b.arc(x + kx + 4, ky, 4, 0, Math.PI * 2); b.fill(); typed(b, words, x + kx + 14, ky + 4, SMALL, DIM, 1); });
       }, { title: m.title || 'graph' });
       const [x, y] = [markBox(c)[0] + 4, markBox(c)[1] + 4 + 26];
       await trace(axes.map(([px, py]) => [px + x, py + y]), 0.7, (e) => (ax = e));
@@ -858,7 +869,7 @@
       const maxW = 420, at0 = []; let cx = 18, row = 0, widest = 0;
       for (const k of m.keys) { const text = ellipsize(k.text, maxW - 54, SMALL), kw = textW(text, SMALL) + 32; if (cx > 18 && cx + kw > maxW - 4) { row++; cx = 18; } at0.push([cx, row, text]); cx += kw; widest = Math.max(widest, cx); }
       const w = Math.min(maxW, widest + 4), h = 18 + (row + 1) * 22;
-      await card(m, w, h, function (b, l, t, x, y, age) { m.keys.forEach((k, i) => { const [kx, r, text] = at0[i], ky = y + 20 + r * 22; b.fillStyle = tone(k.tone); b.beginPath(); b.arc(x + kx + 4, ky - 4, 4, 0, Math.PI * 2); b.fill(); typed(b, text, x + kx + 14, ky, SMALL, DIM, age / 0.4); }); }, { bar: false });
+      await card(m, w, h, function (b, l, t, x, y, age) { m.keys.forEach((k, i) => { const [kx, r, text] = at0[i], ky = y + 20 + r * 22; b.fillStyle = hue(k); b.beginPath(); b.arc(x + kx + 4, ky - 4, 4, 0, Math.PI * 2); b.fill(); typed(b, text, x + kx + 14, ky, SMALL, DIM, age / 0.4); }); }, { bar: false });
     },
     async timeline(m) {
       const ev = m.events, w = clamp(ev.length * 82, 320, 620);
@@ -896,7 +907,17 @@
       await card(m, w, h, function (b, l, t, x, y, age) {
         if (!view3d) { typed(b, '3D isn’t available here', x + w / 2, y + 100, SMALL, DIM, 1, { anchor: 'middle' }); return; }
         const u = clamp(age / 0.8, 0, 1), f = view3d.frame(reduced() ? 0 : t);
-        for (let i = 0; i < f.lv.length; i++) { const v = f.lv[i]; if (!v) continue; const gx = i % f.gw, gy = (i / f.gw) | 0; if ((B4[(gy % 4) * 4 + (gx % 4)] + 0.5) / 16 > u * 1.05) continue; b.fillStyle = LED[v]; b.fillRect(x + 12 + gx * 3, y + 6 + gy * 3, 3, 3); }
+        // Each coloured part's five shades, in its own colour; a planet's land in the land colour. A cell with no colour
+        // of its own keeps the app's LED palette, so an untinted model looks exactly as it did.
+        const shades = f.tints.map((q) => (q ? [rampOf(q.sea), q.land ? rampOf(q.land) : null] : null));
+        for (let i = 0; i < f.lv.length; i++) {
+          const v = f.lv[i]; if (!v) continue; const gx = i % f.gw, gy = (i / f.gw) | 0;
+          if ((B4[(gy % 4) * 4 + (gx % 4)] + 0.5) / 16 > u * 1.05) continue;
+          const tn = shades[f.pal[i]], land = f.st[i] && tn?.[1];
+          // Land stops at its second-brightest shade, so continents read as green on a blue world instead of white glare.
+          b.fillStyle = tn ? (land ? tn[1] : tn[0])[land ? Math.min(v, 2) : v] : LED[v];
+          b.fillRect(x + 12 + gx * 3, y + 6 + gy * 3, 3, 3);
+        }
         // Labels follow their parts as it turns; one that would land on another this frame waits its turn.
         if (u >= 1) { const took = []; for (const lab of f.labels) { const lx = x + 12 + lab.x, ly = y + 6 + lab.y, r = [lx - 2, ly - 14, textW(lab.text, `600 10px ${MONO}`) + 10, 16]; if (took.some((q) => overlap(q, r) > 0)) continue; took.push(r); b.fillStyle = ACC; b.fillRect(lx - 1.5, ly - 1.5, 3, 3); typed(b, lab.text, lx + 6, ly - 4, `600 10px ${MONO}`, TEXT, 1, { rim: 3 }); } }
       }, { title: m.title || m.label || 'model', live: () => !!view3d && !reduced() });
@@ -1127,7 +1148,7 @@
         const a = age - 0.25 - i * 0.08, mid = y + tops[i] + rowH[i] / 2;
         names[i].forEach((r, k) => typed(b, r, x + 16 + labW, mid + 4 - ((names[i].length - 1) * LH) / 2 + k * LH, TD, TEXT, (age - i * 0.05) / 0.3, { anchor: 'end' }));
         if (a <= 0) return;
-        const u = reduced() ? 1 : ease(clamp(a / 0.5, 0, 1)), full = Math.max(2, (q.value / top) * track), bw = Math.max(2, full * u), col = tone(q.tone);
+        const u = reduced() ? 1 : ease(clamp(a / 0.5, 0, 1)), full = Math.max(2, (q.value / top) * track), bw = Math.max(2, full * u), col = hue(q);
         if (u < 1) touch(0.1);
         b.fillStyle = col; b.fillRect(x + x0, mid - BH / 2, bw, BH);
         b.fillStyle = 'rgba(255,255,255,0.45)'; b.fillRect(x + x0, mid - BH / 2, bw, 1.5); b.fillStyle = 'rgba(3,39,34,0.3)'; b.fillRect(x + x0, mid + BH / 2 - 1.5, bw, 1.5);
@@ -1236,7 +1257,7 @@
     else if (nd.n.shape === 'round') { path = new Path2D(); roundRect(x, y, w, h, Math.min(h / 2, 15)).forEach((q, i) => (i ? path.lineTo(q[0], q[1]) : path.moveTo(q[0], q[1]))); path.closePath(); }
     else path = steppedPath(x, y, w, h, P);
     b.save(); b.globalAlpha *= u;
-    b.fillStyle = rgba(ACC, 0.07); b.fill(path); b.strokeStyle = tone(nd.n.tone); b.lineWidth = 1.5; b.stroke(path);
+    b.fillStyle = rgba(ACC, 0.07); b.fill(path); b.strokeStyle = hue(nd.n); b.lineWidth = 1.5; b.stroke(path);
     b.restore();
     nd.rows.forEach((r, k) => typed(b, r, x + w / 2, y + 19 + k * 15, NODEF, TEXT, (age - 0.05) / 0.25, { anchor: 'middle' }));
   }
@@ -1418,7 +1439,7 @@
 
   // ---------------------------------------------------------------- geometry: points, lines, angles and circles
   async function drawGeometry(m) {
-    const w = 340, GW = w - 84, GH = 196, col = tone(m.tone);
+    const w = 340, GW = w - 84, GH = 196, col = hue(m);
     const vs = m.vertices, by = new Map(vs.map((v) => [v.id, v])), circles = (m.circles ?? []).filter((q) => by.has(q.at));
     // Fitted to the card: the figure's own units, y up, scaled to fill the drawing area with room for names.
     const ext = [...vs.map((v) => [v.x, v.y]), ...circles.flatMap((q) => { const o = by.get(q.at); return [[o.x - q.r, o.y - q.r], [o.x + q.r, o.y + q.r]]; })];
@@ -1472,7 +1493,7 @@
     const c = await card(m, w, h, function (b, l, t, x, y) {
       const mine = colorOf(this, this.color);
       lines.forEach((q, i) => {
-        const lc = q.tone ? tone(q.tone) : mine, pts = placed(this, `l${i}`, q.pts, x, y);
+        const lc = q.color || q.tone ? hue(q) : mine, pts = placed(this, `l${i}`, q.pts, x, y);
         if (q.dash && q.p > 0) {
           // A dashed line: drawn straight onto both layers, as far as the pen has got.
           const n = Math.max(2, Math.round(pts.length * q.p));
@@ -1481,7 +1502,7 @@
         } else pen(b, l, this, pts, q.p, lc, { key: `l${i}`, w: 2.6 });
         if (q.label && q.p >= 1) typed(b, q.label, x + q.at[0], y + q.at[1] + 4, SMALL, TEXT, (t - q.done) / 0.3, { anchor: 'middle', rim: 3 });
       });
-      rings.forEach((q, i) => { pen(b, l, this, placed(this, `c${i}`, q.pts, x, y), q.p, q.tone ? tone(q.tone) : mine, { key: `c${i}`, w: 2.4 }); if (q.label && q.p >= 1) typed(b, q.label, x + q.at[0], y + q.at[1], SMALL, TEXT, (t - q.done) / 0.3, { rim: 3 }); });
+      rings.forEach((q, i) => { pen(b, l, this, placed(this, `c${i}`, q.pts, x, y), q.p, q.color || q.tone ? hue(q) : mine, { key: `c${i}`, w: 2.4 }); if (q.label && q.p >= 1) typed(b, q.label, x + q.at[0], y + q.at[1], SMALL, TEXT, (t - q.done) / 0.3, { rim: 3 }); });
       angles.forEach((q, i) => { pen(b, l, this, placed(this, `a${i}`, q.pts, x, y), q.p, tone('amber'), { key: `a${i}`, w: 2 }); if (q.label && q.p >= 1) typed(b, q.label, x + q.at[0], y + q.at[1] + 4, SMALL, TEXT, (t - q.done) / 0.3, { anchor: 'middle', rim: 3 }); });
       for (const v of vs) {
         const s0 = seen.get(v.id); if (s0 == null) continue;
@@ -1539,7 +1560,7 @@
       lc.strokeStyle = rgba(LED[0], 1); lc.lineWidth = 1; for (const p of paths) lc.stroke(p);
     }
     const pins = (m.pins ?? []).map((p) => ({ ...p, at: proj(p.lon, p.lat, near(p.lon)) })), byName = new Map(pins.map((p) => [p.name, p]));
-    const shaded = world ? (m.shade ?? []).filter((q) => world.countries[q.i]).map((q) => ({ ...q, path: pathOf(world.countries[q.i][1]), edge: tone(q.tone), fill: mixHex(tone(q.tone), LED[0], 0.62), c: proj(q.at[0], q.at[1], near(q.at[0])) })) : [];
+    const shaded = world ? (m.shade ?? []).filter((q) => world.countries[q.i]).map((q) => ({ ...q, path: pathOf(world.countries[q.i][1]), edge: hue(q), fill: mixHex(hue(q), LED[0], 0.62), c: proj(q.at[0], q.at[1], near(q.at[0])) })) : [];
     const routes = (m.routes ?? []).filter((q) => byName.has(q.from) && byName.has(q.to)).map((q) => {
       // A gentle arc between its pins, bowed towards the top of the map.
       const a = byName.get(q.from).at, b = byName.get(q.to).at, d = dist(a, b), n = [-(b[1] - a[1]) / (d || 1), (b[0] - a[0]) / (d || 1)], up = n[1] > 0 ? -1 : 1, c = [(a[0] + b[0]) / 2 + n[0] * d * 0.18 * up, (a[1] + b[1]) / 2 + n[1] * d * 0.18 * up];
@@ -1569,7 +1590,7 @@
         if (a < 1) touch(0.1);
         b.save(); b.translate(mx, my); b.globalAlpha *= a; b.fillStyle = q.fill; b.fill(q.path, 'evenodd'); b.strokeStyle = q.edge; b.lineWidth = 1.5; b.lineJoin = 'round'; b.stroke(q.path); b.restore();
       }
-      routes.forEach((q, i) => pen(b, l, this, placed(this, `r${i}`, q.pts, mx, my), q.p, tone(q.tone), { key: `r${i}`, w: 2.4 }));
+      routes.forEach((q, i) => pen(b, l, this, placed(this, `r${i}`, q.pts, mx, my), q.p, hue(q), { key: `r${i}`, w: 2.4 }));
       for (const q of shaded) if (q.born != null) typed(b, q.name, mx + q.name_[0], my + q.name_[1] + 11, NAMEF, TEXT, (t - q.born) / 0.3, { rim: 3 });
       for (const p of pins) {
         if (p.born == null) continue;
@@ -1717,7 +1738,7 @@
     const ms = partMarks(e.part);
     if (!ms.length) return;
     const box = partBox(ms);
-    if (e.do === 'recolor') { if (box) await tap(box[0] + box[2] * 0.5, box[1]); for (const m of ms) { m.color0 = colorOf(m, m.color); m.color = tone(e.tone); m.recolor = now(); } sfx('blip'); touch(0.6); await sleep(550); for (const m of ms) m.recolor = null; }
+    if (e.do === 'recolor') { if (box) await tap(box[0] + box[2] * 0.5, box[1]); for (const m of ms) { m.color0 = colorOf(m, m.color); m.color = e.color || tone(e.tone); m.recolor = now(); } sfx('blip'); touch(0.6); await sleep(550); for (const m of ms) m.recolor = null; }
     else if (e.do === 'move') {
       const dx = e.dx ?? 0, dy = e.dy ?? 0, start = ms.map((m) => [m.dx, m.dy]);
       if (box) await fly(box[0] + box[2] / 2, box[1] + box[3] / 2);

@@ -9,6 +9,16 @@ import { COUNTRIES } from './countries.mjs';
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
   nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4 };
 export const TONES = ['accent', 'teal', 'amber', 'coral', 'lilac', 'sky', 'lime', 'red', 'white'];
+// A free colour for one mark or one piece of a card (#rgb or #rrggbb, the # optional, any case). It wins over tone,
+// so a drawing can show what things really look like: a blue Earth, a gold Sun, red blood.
+const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** '#a1b' / 'A1B2C3' → '#aabbcc' / '#a1b2c3'; null when it isn't a hex colour. */
+export function normColor(c) {
+  const h = typeof c === 'string' ? String(c).trim().match(HEX)?.[1].toLowerCase() : null;
+  if (!h) return null;
+  return '#' + (h.length === 3 ? [...h].map((x) => x + x).join('') : h);
+}
+const Color = z.string().min(1).max(7);
 // Marks on the real screen (they need a place on it), actions in apps, and cards drawn on calm space.
 export const SCREEN = ['point', 'target', 'hover', 'ring', 'frame', 'underline', 'strike', 'check', 'cross', 'connect', 'trace', 'num', 'label', 'write', 'scroll', 'spotlight', 'highlight', 'line', 'curve', 'arrow', 'circle', 'rect'];
 export const ACTIONS = ['emote', 'sfx', 'type', 'copy', 'open', 'handoff', 'button'];
@@ -34,46 +44,48 @@ const Mark = z.object({
   kind: z.enum(KINDS),
   at: Target.optional(), to: Target.optional(), tie: Target.optional(),
   label: z.string().min(1).max(40).optional(), text: z.string().min(1).max(600).optional(),
-  r: num.optional(), n: z.number().int().optional(), dir: z.enum(['up', 'down', 'right']).optional(), tone: z.enum(TONES).optional(),
+  r: num.optional(), n: z.number().int().optional(), dir: z.enum(['up', 'down', 'right']).optional(), tone: z.enum(TONES).optional(), color: Color.optional(),
   size: num.optional(), points: z.array(pair).max(LIMITS.points).optional(),
   name: z.string().max(20).optional(), url: z.string().max(2000).optional(), query: z.string().min(1).max(100).optional(),
   title: z.string().min(1).max(60).optional(), heading: z.string().min(1).max(80).optional(),
   items: z.array(z.string().min(1).max(120)).max(12).optional(),
   sources: z.array(z.object({ name: z.string().min(1).max(40), url: z.string().max(2000) })).max(8).optional(),
   x_range: pair.optional(), y_range: pair.optional(),
-  plots: z.array(z.object({ points: z.array(pair).min(2).max(LIMITS.points), tone: z.enum(TONES).optional(), label: z.string().max(30).optional() })).max(4).optional(),
-  dots: z.array(z.object({ x: num, y: num, label: z.string().max(30).optional() })).max(12).optional(),
-  keys: z.array(z.object({ tone: z.enum(TONES), text: z.string().min(1).max(40) })).max(8).optional(),
+  plots: z.array(z.object({ points: z.array(pair).min(2).max(LIMITS.points), tone: z.enum(TONES).optional(), color: Color.optional(), label: z.string().max(30).optional() })).max(4).optional(),
+  dots: z.array(z.object({ x: num, y: num, label: z.string().max(30).optional(), color: Color.optional() })).max(12).optional(),
+  keys: z.array(z.object({ tone: z.enum(TONES).optional(), color: Color.optional(), text: z.string().min(1).max(40) })).max(8).optional(),
   events: z.array(z.object({ when: z.string().min(1).max(16), text: z.string().min(1).max(60) })).max(10).optional(),
   smiles: z.string().min(1).max(200).optional(),
   parts: z.array(z.object({
     // One number for a size means that size every way (models write size: 2 for a ball or a cube).
     shape: z.enum(SHAPES), at: triple.optional(), size: z.preprocess((v) => (typeof v === 'number' ? [v, v, v] : v), triple).optional(), rot: triple.optional(),
-    tone: z.enum(TONES).optional(), label: z.string().max(30).optional(),
+    tone: z.enum(TONES).optional(), color: Color.optional(), label: z.string().max(30).optional(),
+    // A world: the sphere gets continents, in `land` (default green) over the sea, which is its own color.
+    planet: z.boolean().optional(), land: Color.optional(),
     motion: z.object({ do: z.enum(MOTIONS), axis: z.enum(['x', 'y', 'z']).optional(), around: triple.optional(), to: triple.optional(), secs: num.optional() }).optional(),
   })).max(LIMITS.parts3d).optional(),
-  nodes: z.array(z.object({ id: z.string().min(1).max(16), text: z.string().min(1).max(60), shape: z.enum(NODE_SHAPES).optional(), tone: z.enum(TONES).optional() })).max(LIMITS.nodes).optional(),
+  nodes: z.array(z.object({ id: z.string().min(1).max(16), text: z.string().min(1).max(60), shape: z.enum(NODE_SHAPES).optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.nodes).optional(),
   links: z.array(z.object({ from: z.string().min(1).max(16), to: z.string().min(1).max(16), label: z.string().max(30).optional(), flow: z.boolean().optional() })).max(LIMITS.links).optional(),
   columns: z.array(z.string().max(30)).max(LIMITS.columns).optional(),
   rows: z.array(z.array(z.string().max(80)).max(LIMITS.columns)).max(LIMITS.rows).optional(),
-  bars: z.array(z.object({ label: z.string().min(1).max(30), value: num, tone: z.enum(TONES).optional() })).max(LIMITS.bars).optional(),
+  bars: z.array(z.object({ label: z.string().min(1).max(30), value: num, tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.bars).optional(),
   unit: z.string().max(12).optional(),
   labels: z.array(z.object({ text: z.string().min(1).max(30), x: num, y: num })).max(LIMITS.labels).optional(),
   region: z.string().max(80).optional(),
-  shade: z.array(z.object({ name: z.string().min(1).max(50), tone: z.enum(TONES).optional() })).max(LIMITS.shade).optional(),
+  shade: z.array(z.object({ name: z.string().min(1).max(50), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.shade).optional(),
   pins: z.array(z.object({ name: z.string().min(1).max(30), lat: num, lon: num })).max(LIMITS.pins).optional(),
-  routes: z.array(z.object({ from: z.string().min(1).max(30), to: z.string().min(1).max(30), tone: z.enum(TONES).optional() })).max(LIMITS.routes).optional(),
+  routes: z.array(z.object({ from: z.string().min(1).max(30), to: z.string().min(1).max(30), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.routes).optional(),
   steps: z.array(z.object({ tex: z.string().min(1).max(160), note: z.string().max(80).optional() })).max(LIMITS.steps).optional(),
   vertices: z.array(z.object({ id: z.string().min(1).max(8), x: num, y: num })).max(LIMITS.vertices).optional(),
-  lines: z.array(z.object({ from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(20).optional(), dash: z.boolean().optional(), tone: z.enum(TONES).optional() })).max(24).optional(),
+  lines: z.array(z.object({ from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(20).optional(), dash: z.boolean().optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(24).optional(),
   angles: z.array(z.object({ at: z.string().min(1).max(8), from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(12).optional() })).max(8).optional(),
-  circles: z.array(z.object({ at: z.string().min(1).max(8), r: num, label: z.string().max(20).optional(), tone: z.enum(TONES).optional() })).max(4).optional(),
+  circles: z.array(z.object({ at: z.string().min(1).max(8), r: num, label: z.string().max(20).optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(4).optional(),
   questions: z.array(z.object({ text: z.string().min(1).max(160), options: z.array(z.string().min(1).max(80)).min(2).max(4), answer: z.string().min(1).max(80), explain: z.string().max(200).optional() })).max(LIMITS.questions).optional(),
   action: z.object({ do: z.enum(['ask', 'open', 'copy']), value: z.string().min(1).max(600) }).optional(),
   task: z.string().max(120).optional(),
 });
 const Beat = z.object({ say: z.string().min(1).max(240), marks: z.array(Mark).max(LIMITS.marks), wait: z.enum(['click', 'hover']).optional() });
-const Edit = z.object({ do: z.enum(['recolor', 'move', 'erase', 'clear']), part: z.string().max(8).optional(), tone: z.enum(TONES).optional(), dx: num.optional(), dy: num.optional() });
+const Edit = z.object({ do: z.enum(['recolor', 'move', 'erase', 'clear']), part: z.string().max(8).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), dx: num.optional(), dy: num.optional() });
 export const DrawArgs = z.object({
   target: z.string().optional(),
   beats: z.array(Beat).max(LIMITS.beats).optional(),
@@ -114,16 +126,27 @@ export function checkDraw(args) {
       if (m.kind === 'molecule') { need(m.smiles, 'smiles'); if (m.smiles) { try { parseSmiles(m.smiles); } catch (e) { out.push(`${where}: ${e.message}`); } } }
       if (m.kind === 'ticket') need(m.title, 'title');
       if (m.kind === 'medal') need(m.text, 'text');
+      // Colours are checked here so the message names the piece, and normalized to #rrggbb so every renderer only
+      // has one shape to read.
+      colorSpots(m).forEach((it) => {
+        const who = it === m ? '' : ` (${it.label ?? it.text ?? it.name ?? 'piece'})`;
+        if (it.color != null) { const c = normColor(it.color); if (c) it.color = c; else out.push(`${where}${who}: color must be a hex like #2f6fd0, not "${it.color}".`); }
+        if (it.land != null) { const c = normColor(it.land); if (c) it.land = c; else out.push(`${where}${who}: land must be a hex like #3f9e4f, not "${it.land}".`); }
+      });
     });
     if (b.wait && !b.marks.some((m) => SCREEN.includes(m.kind) && hasAt(m.at))) out.push(`beat ${i + 1}: wait needs a mark on the thing to ${b.wait} (a target or hover with at).`);
   });
   edits.forEach((e, i) => {
     if (e.do !== 'clear' && !e.part) out.push(`edit ${i + 1} (${e.do}): needs part (an id like p3).`);
-    if (e.do === 'recolor' && !e.tone) out.push(`edit ${i + 1}: recolor needs tone.`);
+    if (e.color != null) { const c = normColor(e.color); if (c) e.color = c; else out.push(`edit ${i + 1}: color must be a hex like #2f6fd0, not "${e.color}".`); }
+    if (e.do === 'recolor' && !e.tone && !e.color) out.push(`edit ${i + 1}: recolor needs tone or color.`);
     if (e.do === 'move' && e.dx == null && e.dy == null) out.push(`edit ${i + 1}: move needs dx or dy (screen points).`);
   });
   return out;
 }
+
+// Every place a mark can carry a colour: on itself, and on each piece of the card it draws.
+const colorSpots = (m) => [m, ...(m.parts ?? []), ...(m.nodes ?? []), ...(m.plots ?? []), ...(m.dots ?? []), ...(m.bars ?? []), ...(m.keys ?? []), ...(m.shade ?? []), ...(m.routes ?? []), ...(m.lines ?? []), ...(m.circles ?? [])];
 
 const quoted = (list) => list.map((s) => `"${s}"`).join(', ');
 // Ids that must be there and be different: nodes of a flow, vertices of a figure.
@@ -138,6 +161,7 @@ const CHECKS = {
     const out = [];
     m.parts.forEach((p, k) => {
       const mo = p.motion, who = `part ${k + 1}${p.label ? ` (${p.label})` : ''}`;
+      if (p.planet && p.shape !== 'sphere') out.push(`${who}: planet is for a sphere (the world's sea), not a ${p.shape}.`);
       if (!mo) return;
       if (mo.do === 'slide' && !mo.to) out.push(`${who}: slide needs to ([x, y, z]: where it slides to and back from at).`);
       if (mo.secs != null && !(mo.secs >= 0.3 && mo.secs <= 60)) out.push(`${who}: secs (one full cycle) must be between 0.3 and 60.`);
