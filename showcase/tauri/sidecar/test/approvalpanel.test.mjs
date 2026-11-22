@@ -100,4 +100,19 @@ const request = (extra = {}) => ({
   console.log('unreadable: passed');
 }
 
+// ---------------------------------------------------------------- it goes away once it is answered
+// Regression: the answered sheet stayed on screen until another request replaced it.
+{
+  const fs = await import('node:fs/promises');
+  const url = new URL('../../../panel/panel.js', import.meta.url);
+  const src = await fs.readFile(url, 'utf8');
+  assert.match(src, /function dismissApproval\(\)/, 'the panel can put the sheet away');
+  assert.match(src, /approval = null;\s*drawApproval\(\);/, 'putting it away clears the answer and hides the sheet');
+  assert.match(src, /else approveHide = setTimeout\(dismissApproval, 2600\)/, 'an answered sheet leaves by itself');
+  assert.match(src, /\$\('approve'\)\.addEventListener\('pointerdown'/, 'a click on it also puts it away');
+  assert.match(src, /if \(!v \|\| !v\.canAnswer\) dismissApproval\(\)/, 'but only once it cannot be answered any more');
+  assert.match(src, /clearTimeout\(approveHide\)/, 'a new request or a redraw cancels the timer');
+  console.log('dismissal: passed');
+}
+
 console.log('approval panel: passed');

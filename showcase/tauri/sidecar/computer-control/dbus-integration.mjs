@@ -28,6 +28,13 @@ function unwrap(v) {
   return v && typeof v === 'object' && 'value' in v ? v.value : v;
 }
 
+/** The portal builds a D-Bus object path from the handle token, so it may only hold [A-Za-z0-9_].
+ * A token like `jarvis-1795…` makes the request path invalid and every capture fails. */
+export function portalToken(token) {
+  const clean = String(token ?? '').replace(/[^A-Za-z0-9_]/g, '_').slice(0, 120);
+  return clean && !/^_*$/.test(clean) ? clean : `jarvis_${Date.now()}`;
+}
+
 function fileUriPath(uri) {
   const s = String(uri || '');
   if (!s.startsWith('file://')) return null;
@@ -75,9 +82,9 @@ class DBusIntegration {
    * @param {boolean} cursor include the pointer (the portal may ignore it)
    * @returns {Promise<{ok:boolean, uri?:string, file?:string, dataUrl?:string, buffer?:Buffer, error?:string}>}
    */
-  async requestScreenshot(handleToken = `jarvis-${Date.now()}`, interactive = true, cursor = false) {
+  async requestScreenshot(handleToken = `jarvis_${Date.now()}`, interactive = true, cursor = false) {
     if (!this.bus) await this.connect();
-    const token = String(handleToken);
+    const token = portalToken(handleToken);
     const sender = String(this.bus.name || ':1.0').replace(/^:/, '').replace(/\./g, '_');
     const requestPath = `/org/freedesktop/portal/desktop/request/${sender}/${token}`;
 

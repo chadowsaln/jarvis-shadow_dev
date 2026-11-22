@@ -30,17 +30,46 @@ console.log('draw schema tests: passed');
 assert.ok(ok({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'sphere', color: '#2f6fd0', planet: true, land: '#3f9e4f' }] }] }] }), 'a blue planet with green land');
 assert.ok(ok({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'Export' }, color: '#f00' }] }] }), 'a coloured mark');
 assert.ok(ok({ edit: [{ do: 'recolor', part: 'p2', color: '#2f6fd0' }] }), 'recolor by colour');
-assert.ok(!ok({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'a' }, color: '#1234567' }] }] }), 'a colour is at most #rrggbb');
+assert.ok(!ok({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'a' }, color: 'x'.repeat(30) }] }] }), 'a colour string is not unbounded');
+assert.ok(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'ring', at: { text: 'a' }, color: '#1234567' }] }] }).length, 'seven hex digits is not a colour');
 assert.equal(normColor('ABC'), '#aabbcc', 'a short hex without # becomes #rrggbb');
 assert.equal(normColor(' #2F6FD0 '), '#2f6fd0', 'case and spaces are forgiven');
-assert.equal(normColor('#abcd'), null, 'four digits is not a colour');
-assert.equal(normColor('blue'), null, 'a name is not a hex');
+assert.equal(normColor('#abcd'), '#aabbcc', 'a four-digit hex drops its alpha');
+assert.equal(normColor('blue'), '#0000ff', 'a CSS colour name is a colour');
+assert.equal(normColor('Green'), '#008000', 'any case');
+assert.equal(normColor('dark green'), '#006400', 'spaces and the name people say');
+assert.equal(normColor('rgb(47, 111, 208)'), '#2f6fd0', 'rgb()');
+assert.equal(normColor('rgba(0,0,0,0.5)'), '#000000', 'an rgba alpha is dropped');
+assert.equal(normColor('rgb(300, 0, 0)'), null, 'a channel over 255 is not a colour');
+assert.equal(normColor('mauve'), null, 'a name it does not know is refused');
 const painted = { beats: [{ say: 'x', marks: [{ kind: 'bars', color: '#ABC', bars: [{ label: 'a', value: 1, color: '#e8b400' }, { label: 'b', value: 2 }] }] }] };
 assert.deepEqual(checkDraw(painted), [], 'a card and its pieces take colours');
 assert.equal(painted.beats[0].marks[0].color, '#aabbcc', 'the card’s colour is normalized');
 assert.equal(painted.beats[0].marks[0].bars[0].color, '#e8b400', 'a piece keeps its own colour');
-assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'graph', color: 'blue', plots: [{ points: [[0, 0], [1, 1]] }] }] }] })[0], /color must be a hex/, 'a colour name says what to write instead');
-assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'map', shade: [{ name: 'Peru', color: 'green' }] }] }] })[0], /\(Peru\): color must be a hex/, 'the message names the piece');
+{
+  const named = { beats: [{ say: 'x', marks: [{ kind: 'bars', color: 'green', bars: [{ label: 'a', value: 1, color: 'black' }, { label: 'b', value: 2 }] }] }] };
+  assert.deepEqual(checkDraw(named), [], 'names are colours: green, black');
+  assert.equal(named.beats[0].marks[0].color, '#008000');
+  assert.equal(named.beats[0].marks[0].bars[0].color, '#000000');
+}
+assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'graph', color: 'mauve', plots: [{ points: [[0, 0], [1, 1]] }] }] }] })[0], /color must be a name like "black"/, 'a name it does not know says what to write instead');
+assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'map', shade: [{ name: 'Peru', color: 'mauve' }] }] }] })[0], /\(Peru\): color must be a name/, 'the message names the piece');
+// intensity: how strong the colour is. It dims toward the paper, never to nothing, and 100 leaves it alone.
+{
+  const { fadeColor } = await import('../draw.mjs');
+  assert.equal(fadeColor('#2f6fd0', 100), '#2f6fd0');
+  assert.equal(fadeColor('#2f6fd0', undefined), '#2f6fd0');
+  const half = fadeColor('#2f6fd0', 50), none = fadeColor('#2f6fd0', 0);
+  assert.notEqual(half, '#2f6fd0');
+  assert.notEqual(half, none, 'lower is weaker');
+  assert.notEqual(none, '#04100f', 'a 0 still shows where the shape is');
+  const strong = { beats: [{ say: 'x', marks: [{ kind: 'model', intensity: 40, parts: [{ shape: 'sphere', color: 'blue' }, { shape: 'box', color: 'red', intensity: 100 }] }] }] };
+  assert.deepEqual(checkDraw(strong), []);
+  assert.equal(strong.beats[0].marks[0].parts[0].color, fadeColor('#0000ff', 40), 'the mark\'s intensity dims its pieces');
+  assert.equal(strong.beats[0].marks[0].parts[1].color, '#ff0000', 'a piece can stay full strength');
+  assert.equal(fadeColor('#0000ff', 140), '#0000ff', 'over 100 is clamped, not brightened');
+  assert.equal(fadeColor('#0000ff', -20), fadeColor('#0000ff', 0), 'under 0 is clamped too');
+}
 assert.match(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'box', planet: true }] }] }] })[0], /planet is for a sphere/, 'only a sphere is a world');
 assert.deepEqual(checkDraw({ beats: [{ say: 'x', marks: [{ kind: 'model', parts: [{ shape: 'sphere', planet: true, land: '3f9e4f' }] }] }] }), [], 'land without # is fine');
 const recol = { edit: [{ do: 'recolor', part: 'p1', color: '2F6FD0' }] };

@@ -1,7 +1,7 @@
 // What the model is told about each system, and which features each one gets. Run: npm test
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { canCircle, canSnap, hasHands, hasHotkeys, hasVoice, linuxSession, micTrouble, needsVoiceModel, platformLine, samePair, seesPointer, writeChord, writeChords } from '../platform.mjs';
+import { canCircle, canSnap, hasDesktopControl, hasHands, hasHotkeys, hasVoice, linuxSession, micTrouble, needsVoiceModel, platformLine, samePair, seesPointer, writeChord, writeChords } from '../platform.mjs';
 
 const win = platformLine('win32', { arch: 'x64', release: '10.0.22631' });
 assert.match(win, /^Platform: Windows 11 on x64\./);
@@ -40,8 +40,12 @@ assert.ok(hasHotkeys('darwin') && hasHotkeys('win32') && hasHotkeys('linux', 'x1
 // Voice: Linux has it, with the same downloaded model as Windows.
 assert.ok(hasVoice('darwin') && hasVoice('win32') && hasVoice('linux') && !hasVoice('freebsd'));
 assert.ok(!needsVoiceModel('darwin') && needsVoiceModel('win32') && needsVoiceModel('linux'));
-// No hands helper on Linux yet: nothing reads or works other apps, no area snap, no circling.
+// No hands helper on Linux yet (so no area snap, no circling), but Linux works other apps through
+// computer-control: the model must be told it can, or it writes a Python script instead of clicking.
 assert.ok(!hasHands('linux', '') && !canSnap('linux', '') && !canCircle('linux'));
+assert.ok(hasDesktopControl('linux', ''), 'Linux can work other apps without a helper');
+assert.ok(hasDesktopControl('darwin', '') && hasDesktopControl('win32', 'C:\\x\\roamies-hands.exe'));
+assert.ok(!hasDesktopControl('win32', ''), 'Windows without the helper cannot');
 
 // Ask About an Area needs the helper's area selection: macOS, and Windows with the helper there.
 assert.ok(canSnap('darwin', '') && canSnap('win32', 'C:\\Roamies\\roamies-hands.exe'));

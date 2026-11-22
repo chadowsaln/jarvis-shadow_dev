@@ -1244,8 +1244,17 @@
   // expiry) and takes one answer for that exact one. This sheet only repeats back what it was shown: closing it,
   // letting it run out, or losing the panel is never a yes, and a yes is never remembered for the next call.
   const APPROVAL = import('./approval.js').catch(() => null);
-  let approvalMod = null, approval = null, approveTick = 0;
+  let approvalMod = null, approval = null, approveTick = 0, approveHide = 0;
   APPROVAL.then((m) => { approvalMod = m; if (approval) drawApproval(); });
+
+  // Put the sheet away. Once answered it has nothing left to say, so nothing keeps it on screen.
+  function dismissApproval() {
+    clearTimeout(approveHide);
+    approveHide = 0;
+    if (!approval) return;
+    approval = null;
+    drawApproval();
+  }
 
   // One answer, sent once: the buttons die on the press, so a second one can never go out.
   function decide(decision) {
@@ -1261,6 +1270,8 @@
     const box = $('approve');
     if (!box) return;
     clearInterval(approveTick);
+    clearTimeout(approveHide);
+    approveHide = 0;
     if (!approval) { box.hidden = true; box.replaceChildren(); return; }
     box.hidden = false;
     // No module (or a request it can't read) means no answer from here: the sidecar's own timer denies it.
@@ -1299,7 +1310,17 @@
       const n = box.querySelector('.left');
       if (n) n.textContent = now.leftLabel;
     }, 1000);
+    // Answered, refused, ran out of time or taken away: it stays just long enough to read, then goes.
+    else approveHide = setTimeout(dismissApproval, 2600);
   }
+
+  // A click on the dimmed area (or on the sheet itself, away from its buttons) puts an answered sheet away at
+  // once. While it still needs an answer it stays: the two buttons are the only way to answer.
+  $('approve').addEventListener('pointerdown', (e) => {
+    if (!approval || e.target.closest?.('button')) return;
+    const v = approvalMod ? approvalMod.viewOf(approval.request, Date.now(), approval) : null;
+    if (!v || !v.canAnswer) dismissApproval();
+  });
 
   // ---------------------------------------------------------------- sidebar and keys
   const TABS = Object.keys(PANES);
@@ -1399,6 +1420,7 @@
     disarm(); ui.key = null; ui.recordTalk = false; unarmQuit();
     // A dialog going away is not a yes: it reads as cancelled here, and the sidecar denies it when the panel closes.
     if (approval && !approval.decision && !approval.closed) { approval.closed = 'cancelled'; drawApproval(); }
+    clearTimeout(approveHide);
     body.classList.remove('opening');
     if (REDUCED.matches) { body.classList.add('shut'); return; }
     body.classList.add('shutting');

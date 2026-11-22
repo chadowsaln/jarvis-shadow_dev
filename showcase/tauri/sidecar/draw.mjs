@@ -9,16 +9,66 @@ import { COUNTRIES } from './countries.mjs';
 export const LIMITS = { beats: 12, marks: 40, points: 200, parts3d: 40, atoms: 120, photoBytes: 800_000, iconBytes: 64_000,
   nodes: 16, links: 24, columns: 6, rows: 12, bars: 12, labels: 8, pins: 12, shade: 40, routes: 8, steps: 10, tex: 300, vertices: 16, questions: 6, cardsShown: 4 };
 export const TONES = ['accent', 'teal', 'amber', 'coral', 'lilac', 'sky', 'lime', 'red', 'white'];
-// A free colour for one mark or one piece of a card (#rgb or #rrggbb, the # optional, any case). It wins over tone,
-// so a drawing can show what things really look like: a blue Earth, a gold Sun, red blood.
-const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
-/** '#a1b' / 'A1B2C3' → '#aabbcc' / '#a1b2c3'; null when it isn't a hex colour. */
+// A free colour for one mark or one piece of a card. It wins over tone, so a drawing can show what things really
+// look like: a black cat, a green leaf, a blue Earth, a gold Sun. Written as a hex (#rgb, #rrggbb, the # optional,
+// any case), a CSS colour name ("green", "dodgerblue"), or rgb(r, g, b).
+const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const RGB = /^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/i;
+// The names people actually say, so the model never has to look a hex up to say "green".
+export const NAMED_COLORS = {
+  black: '#000000', white: '#ffffff', gray: '#808080', grey: '#808080', silver: '#c0c0c0', dimgray: '#696969',
+  lightgray: '#d3d3d3', lightgrey: '#d3d3d3', gainsboro: '#dcdcdc', whitesmoke: '#f5f5f5', snow: '#fffafa',
+  ivory: '#fffff0', beige: '#f5f5dc', linen: '#faf0e6', seashell: '#fff5ee', oldlace: '#fdf5e6',
+  red: '#ff0000', darkred: '#8b0000', crimson: '#dc143c', maroon: '#800000', firebrick: '#b22222',
+  salmon: '#fa8072', tomato: '#ff6347', coral: '#ff7f50', orangered: '#ff4500', indianred: '#cd5c5c',
+  orange: '#ffa500', darkorange: '#ff8c00', gold: '#ffd700', khaki: '#f0e68c', moccasin: '#ffe4b5',
+  yellow: '#ffff00', lightyellow: '#ffffe0', lemonchiffon: '#fffacd',
+  olive: '#808000', green: '#008000', darkgreen: '#006400', forestgreen: '#228b22', seagreen: '#2e8b57',
+  lime: '#00ff00', limegreen: '#32cd32', lightgreen: '#90ee90', palegreen: '#98fb98', springgreen: '#00ff7f',
+  teal: '#008080', turquoise: '#40e0d0', mediumturquoise: '#48d1cc', aqua: '#00ffff', cyan: '#00ffff',
+  darkcyan: '#008b8b', lightcyan: '#e0ffff', powderblue: '#b0e0e6', cadetblue: '#5f9ea0',
+  blue: '#0000ff', navy: '#000080', darkblue: '#00008b', mediumblue: '#0000cd', royalblue: '#4169e1',
+  steelblue: '#4682b4', dodgerblue: '#1e90ff', cornflowerblue: '#6495ed', skyblue: '#87ceeb', lightblue: '#add8e6',
+  deepskyblue: '#00bfff', slateblue: '#6a5acd', indigo: '#4b0082', purple: '#800080', darkviolet: '#9400d3',
+  violet: '#ee82ee', orchid: '#da70d6', magenta: '#ff00ff', fuchsia: '#ff00ff', plum: '#dda0dd',
+  thistle: '#d8bfd8', lavender: '#e6e6fa', pink: '#ffc0cb', hotpink: '#ff69b4', deeppink: '#ff1493',
+  lightpink: '#ffb6c1', rosybrown: '#bc8f8f', brown: '#a52a2a', chocolate: '#d2691e', peru: '#cd853f',
+  sienna: '#a0522d', saddlebrown: '#8b4513', tan: '#d2b48c', wheat: '#f5deb3', burlywood: '#deb887',
+  sandybrown: '#f4a460', goldenrod: '#daa520', darkgoldenrod: '#b8860b', olivedrab: '#6b8e23',
+  rebeccapurple: '#663399', darkgray: '#a9a9a9', darkgrey: '#a9a9a9',
+};
+const hex2 = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+/** '#a1b' / 'A1B2C3' / 'green' / 'rgb(20, 120, 60)' → '#aabbcc' / '#a1b2c3' / '#008000' / '#14783c';
+ *  null when it isn't a colour it knows. An alpha channel (#rrggbbaa) is dropped: the paper is opaque. */
 export function normColor(c) {
-  const h = typeof c === 'string' ? String(c).trim().match(HEX)?.[1].toLowerCase() : null;
+  if (typeof c !== 'string') return null;
+  const s = c.trim();
+  const named = NAMED_COLORS[s.toLowerCase().replace(/[\s_-]+/g, '')];
+  if (named) return named;
+  const rgb = s.match(RGB);
+  if (rgb) {
+    const [r, g, b] = rgb.slice(1, 4).map(Number);
+    if ([r, g, b].some((v) => v > 255)) return null;
+    return `#${hex2(r)}${hex2(g)}${hex2(b)}`;
+  }
+  const h = s.match(HEX)?.[1].toLowerCase();
   if (!h) return null;
-  return '#' + (h.length === 3 ? [...h].map((x) => x + x).join('') : h);
+  const six = h.length <= 4 ? [...h.slice(0, 3)].map((x) => x + x).join('') : h.slice(0, 6);
+  return `#${six}`;
 }
-const Color = z.string().min(1).max(7);
+// How strongly a colour lands, 0-100. 100 is the colour itself; lower fades it toward the desk's dark paper.
+const PAPER = '#04100f';
+/** intensity 0-100 → the same colour, mixed toward the dark background. 100 (or none) leaves it alone. */
+export function fadeColor(hex, intensity) {
+  const k = intensity == null ? 1 : Math.max(0, Math.min(100, Number(intensity))) / 100;
+  if (k >= 1) return hex;
+  const mix = (1 - k) * 0.85; // never quite the background: a 0 still shows where the shape is
+  const px = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [r, g, b] = px(hex), [pr, pg, pb] = px(PAPER);
+  return '#' + hex2(r + (pr - r) * mix) + hex2(g + (pg - g) * mix) + hex2(b + (pb - b) * mix);
+}
+const Color = z.string().min(1).max(24);
+const Strength = z.number().min(0).max(100);
 // Marks on the real screen (they need a place on it), actions in apps, and cards drawn on calm space.
 export const SCREEN = ['point', 'target', 'hover', 'ring', 'frame', 'underline', 'strike', 'check', 'cross', 'connect', 'trace', 'num', 'label', 'write', 'scroll', 'spotlight', 'highlight', 'line', 'curve', 'arrow', 'circle', 'rect'];
 export const ACTIONS = ['emote', 'sfx', 'type', 'copy', 'open', 'handoff', 'button'];
@@ -44,48 +94,48 @@ const Mark = z.object({
   kind: z.enum(KINDS),
   at: Target.optional(), to: Target.optional(), tie: Target.optional(),
   label: z.string().min(1).max(40).optional(), text: z.string().min(1).max(600).optional(),
-  r: num.optional(), n: z.number().int().optional(), dir: z.enum(['up', 'down', 'right']).optional(), tone: z.enum(TONES).optional(), color: Color.optional(),
+  r: num.optional(), n: z.number().int().optional(), dir: z.enum(['up', 'down', 'right']).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional(),
   size: num.optional(), points: z.array(pair).max(LIMITS.points).optional(),
   name: z.string().max(20).optional(), url: z.string().max(2000).optional(), query: z.string().min(1).max(100).optional(),
   title: z.string().min(1).max(60).optional(), heading: z.string().min(1).max(80).optional(),
   items: z.array(z.string().min(1).max(120)).max(12).optional(),
   sources: z.array(z.object({ name: z.string().min(1).max(40), url: z.string().max(2000) })).max(8).optional(),
   x_range: pair.optional(), y_range: pair.optional(),
-  plots: z.array(z.object({ points: z.array(pair).min(2).max(LIMITS.points), tone: z.enum(TONES).optional(), color: Color.optional(), label: z.string().max(30).optional() })).max(4).optional(),
-  dots: z.array(z.object({ x: num, y: num, label: z.string().max(30).optional(), color: Color.optional() })).max(12).optional(),
-  keys: z.array(z.object({ tone: z.enum(TONES).optional(), color: Color.optional(), text: z.string().min(1).max(40) })).max(8).optional(),
+  plots: z.array(z.object({ points: z.array(pair).min(2).max(LIMITS.points), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional(), label: z.string().max(30).optional() })).max(4).optional(),
+  dots: z.array(z.object({ x: num, y: num, label: z.string().max(30).optional(), color: Color.optional(), intensity: Strength.optional() })).max(12).optional(),
+  keys: z.array(z.object({ tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional(), text: z.string().min(1).max(40) })).max(8).optional(),
   events: z.array(z.object({ when: z.string().min(1).max(16), text: z.string().min(1).max(60) })).max(10).optional(),
   smiles: z.string().min(1).max(200).optional(),
   parts: z.array(z.object({
     // One number for a size means that size every way (models write size: 2 for a ball or a cube).
     shape: z.enum(SHAPES), at: triple.optional(), size: z.preprocess((v) => (typeof v === 'number' ? [v, v, v] : v), triple).optional(), rot: triple.optional(),
-    tone: z.enum(TONES).optional(), color: Color.optional(), label: z.string().max(30).optional(),
+    tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional(), label: z.string().max(30).optional(),
     // A world: the sphere gets continents, in `land` (default green) over the sea, which is its own color.
     planet: z.boolean().optional(), land: Color.optional(),
     motion: z.object({ do: z.enum(MOTIONS), axis: z.enum(['x', 'y', 'z']).optional(), around: triple.optional(), to: triple.optional(), secs: num.optional() }).optional(),
   })).max(LIMITS.parts3d).optional(),
-  nodes: z.array(z.object({ id: z.string().min(1).max(16), text: z.string().min(1).max(60), shape: z.enum(NODE_SHAPES).optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.nodes).optional(),
+  nodes: z.array(z.object({ id: z.string().min(1).max(16), text: z.string().min(1).max(60), shape: z.enum(NODE_SHAPES).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(LIMITS.nodes).optional(),
   links: z.array(z.object({ from: z.string().min(1).max(16), to: z.string().min(1).max(16), label: z.string().max(30).optional(), flow: z.boolean().optional() })).max(LIMITS.links).optional(),
   columns: z.array(z.string().max(30)).max(LIMITS.columns).optional(),
   rows: z.array(z.array(z.string().max(80)).max(LIMITS.columns)).max(LIMITS.rows).optional(),
-  bars: z.array(z.object({ label: z.string().min(1).max(30), value: num, tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.bars).optional(),
+  bars: z.array(z.object({ label: z.string().min(1).max(30), value: num, tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(LIMITS.bars).optional(),
   unit: z.string().max(12).optional(),
   labels: z.array(z.object({ text: z.string().min(1).max(30), x: num, y: num })).max(LIMITS.labels).optional(),
   region: z.string().max(80).optional(),
-  shade: z.array(z.object({ name: z.string().min(1).max(50), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.shade).optional(),
+  shade: z.array(z.object({ name: z.string().min(1).max(50), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(LIMITS.shade).optional(),
   pins: z.array(z.object({ name: z.string().min(1).max(30), lat: num, lon: num })).max(LIMITS.pins).optional(),
-  routes: z.array(z.object({ from: z.string().min(1).max(30), to: z.string().min(1).max(30), tone: z.enum(TONES).optional(), color: Color.optional() })).max(LIMITS.routes).optional(),
+  routes: z.array(z.object({ from: z.string().min(1).max(30), to: z.string().min(1).max(30), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(LIMITS.routes).optional(),
   steps: z.array(z.object({ tex: z.string().min(1).max(160), note: z.string().max(80).optional() })).max(LIMITS.steps).optional(),
   vertices: z.array(z.object({ id: z.string().min(1).max(8), x: num, y: num })).max(LIMITS.vertices).optional(),
-  lines: z.array(z.object({ from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(20).optional(), dash: z.boolean().optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(24).optional(),
+  lines: z.array(z.object({ from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(20).optional(), dash: z.boolean().optional(), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(24).optional(),
   angles: z.array(z.object({ at: z.string().min(1).max(8), from: z.string().min(1).max(8), to: z.string().min(1).max(8), label: z.string().max(12).optional() })).max(8).optional(),
-  circles: z.array(z.object({ at: z.string().min(1).max(8), r: num, label: z.string().max(20).optional(), tone: z.enum(TONES).optional(), color: Color.optional() })).max(4).optional(),
+  circles: z.array(z.object({ at: z.string().min(1).max(8), r: num, label: z.string().max(20).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional() })).max(4).optional(),
   questions: z.array(z.object({ text: z.string().min(1).max(160), options: z.array(z.string().min(1).max(80)).min(2).max(4), answer: z.string().min(1).max(80), explain: z.string().max(200).optional() })).max(LIMITS.questions).optional(),
   action: z.object({ do: z.enum(['ask', 'open', 'copy']), value: z.string().min(1).max(600) }).optional(),
   task: z.string().max(120).optional(),
 });
 const Beat = z.object({ say: z.string().min(1).max(240), marks: z.array(Mark).max(LIMITS.marks), wait: z.enum(['click', 'hover']).optional() });
-const Edit = z.object({ do: z.enum(['recolor', 'move', 'erase', 'clear']), part: z.string().max(8).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), dx: num.optional(), dy: num.optional() });
+const Edit = z.object({ do: z.enum(['recolor', 'move', 'erase', 'clear']), part: z.string().max(8).optional(), tone: z.enum(TONES).optional(), color: Color.optional(), intensity: Strength.optional(), dx: num.optional(), dy: num.optional() });
 export const DrawArgs = z.object({
   target: z.string().optional(),
   beats: z.array(Beat).max(LIMITS.beats).optional(),
@@ -128,17 +178,31 @@ export function checkDraw(args) {
       if (m.kind === 'medal') need(m.text, 'text');
       // Colours are checked here so the message names the piece, and normalized to #rrggbb so every renderer only
       // has one shape to read.
+      // `intensity` on the mark dims every colour it draws; on a piece it dims just that piece.
       colorSpots(m).forEach((it) => {
         const who = it === m ? '' : ` (${it.label ?? it.text ?? it.name ?? 'piece'})`;
-        if (it.color != null) { const c = normColor(it.color); if (c) it.color = c; else out.push(`${where}${who}: color must be a hex like #2f6fd0, not "${it.color}".`); }
-        if (it.land != null) { const c = normColor(it.land); if (c) it.land = c; else out.push(`${where}${who}: land must be a hex like #3f9e4f, not "${it.land}".`); }
+        const strength = it.intensity ?? m.intensity;
+        if (it.color != null) {
+          const c = normColor(it.color);
+          if (c) it.color = fadeColor(c, strength);
+          else out.push(`${where}${who}: color must be a name like "black", "green" or "teal", a hex like #2f6fd0, or rgb(47, 111, 208), not "${it.color}".`);
+        }
+        if (it.land != null) {
+          const c = normColor(it.land);
+          if (c) it.land = fadeColor(c, strength);
+          else out.push(`${where}${who}: land must be a colour name like "green", a hex like #3f9e4f, or rgb(63, 158, 79), not "${it.land}".`);
+        }
       });
     });
     if (b.wait && !b.marks.some((m) => SCREEN.includes(m.kind) && hasAt(m.at))) out.push(`beat ${i + 1}: wait needs a mark on the thing to ${b.wait} (a target or hover with at).`);
   });
   edits.forEach((e, i) => {
     if (e.do !== 'clear' && !e.part) out.push(`edit ${i + 1} (${e.do}): needs part (an id like p3).`);
-    if (e.color != null) { const c = normColor(e.color); if (c) e.color = c; else out.push(`edit ${i + 1}: color must be a hex like #2f6fd0, not "${e.color}".`); }
+    if (e.color != null) {
+      const c = normColor(e.color);
+      if (c) e.color = fadeColor(c, e.intensity);
+      else out.push(`edit ${i + 1}: color must be a name like "black", "green" or "teal", a hex like #2f6fd0, or rgb(47, 111, 208), not "${e.color}".`);
+    }
     if (e.do === 'recolor' && !e.tone && !e.color) out.push(`edit ${i + 1}: recolor needs tone or color.`);
     if (e.do === 'move' && e.dx == null && e.dy == null) out.push(`edit ${i + 1}: move needs dx or dy (screen points).`);
   });

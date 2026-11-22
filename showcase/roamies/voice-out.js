@@ -10,6 +10,16 @@
   let rate = 15, secs = 0;
   // Replies that are over: their end arrived, or they were stopped or replaced (auto-listen waits for this).
   const over = new Set();
+  // Told once a session when sound cannot start here (the page has no audio, or the system keeps it shut), so the
+  // reason is in the activity log instead of a silent reply.
+  let told = false;
+  const cannotPlay = (why) => {
+    if (told) return;
+    told = true;
+    const msg = { type: 'speech_failed', why: String(why || 'no sound') };
+    if (R.ink?.send) R.ink.send(msg);
+    else console.warn('speech failed:', msg.why);
+  };
   const isOver = (x) => { over.add(x); if (over.size > 20) over.delete(over.values().next().value); };
 
   const ctx = () => {
@@ -24,6 +34,9 @@
     if (ac.state !== 'running') { try { ac.resume()?.catch?.(() => {}); } catch {} }
     return ac;
   };
+
+  // A context left suspended plays nothing and says nothing: report the state, once, with what it is.
+  const checkRunning = (a) => setTimeout(() => { if (a.state !== 'running') cannotPlay(a.state); }, 600);
 
   const pcm = (b64, rate) => {
     const raw = atob(b64), n = raw.length >> 1, f = new Float32Array(n);
@@ -43,15 +56,19 @@
   };
 
   const play = (m) => {
-    const a = ctx();
+    let a;
+    try { a = ctx(); } catch (e) { return cannotPlay(e?.message || 'no audio context'); }
     if (m.id !== id) { stop(); id = m.id; secs = 0; }
-    const b = pcm(m.pcm, m.rate || 44100), s = a.createBufferSource();
+    let b, s;
+    try { b = pcm(m.pcm, m.rate || 44100); s = a.createBufferSource(); } catch (e) { return cannotPlay(e?.message || 'bad audio'); }
     s.buffer = b; s.connect(out);
     const now = a.currentTime;
     if (!live.length) { out.gain.cancelScheduledValues(now); out.gain.setValueAtTime(1, now); }
     const at = Math.max(endAt, now + LEAD);
-    s.start(at); endAt = at + b.duration; secs += b.duration;
+    try { s.start(at); } catch (e) { return cannotPlay(e?.message || 'not started'); }
+    endAt = at + b.duration; secs += b.duration;
     live.push(s);
+    checkRunning(a);
     s.onended = () => { live = live.filter((x) => x !== s); };
   };
 

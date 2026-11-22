@@ -5,6 +5,7 @@
 // instead of silently pretending a click was sent.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 
 const IS_LINUX = process.platform === 'linux';
 const UID = process.getuid?.() ?? 1000;
@@ -20,8 +21,14 @@ function run(cmd, args, opts = {}) {
   });
 }
 
+/** Whether the program is on PATH. Asked of the filesystem, not of the program: ydotool 1.x rejects
+ * `--version` with "Unknown command" and exit 1, which used to be read as "not installed". */
 async function hasCommand(cmd) {
-  try { await run(cmd, ['--version']); return true; } catch { return false; }
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    try { fs.accessSync(path.join(dir, cmd), fs.constants.X_OK); return true; } catch { /* keep looking */ }
+  }
+  return false;
 }
 
 function unavail(reason, remediation) {
@@ -57,7 +64,7 @@ async function glide(moveTo, x, y, durationMs, stepLimit) {
 
 // ---------------------------------------------------------------- ydotool
 
-const YDOTOOL_REMEDIATION = 'Run the ydotoold daemon for this user (systemctl --user enable --now ydotool, or ydotoold &) and make sure the socket is in XDG_RUNTIME_DIR. On X11, install xdotool instead.';
+const YDOTOOL_REMEDIATION = 'Run the ydotoold daemon for this user (systemctl --user enable --now ydotoold, or ydotoold &) and make sure the socket is in XDG_RUNTIME_DIR. On X11, install xdotool instead.';
 
 class YdotoolBackend {
   constructor() {
@@ -68,18 +75,12 @@ class YdotoolBackend {
 
   getBackend() { return 'ydotool'; }
 
+  /** Ask the daemon for a round trip instead of opening a socket: ydotoold listens on a
+   * SOCK_SEQPACKET socket, which Node's net cannot connect to (EPROTOTYPE), so a stream connect
+   * always failed and every healthy daemon was reported as "not accepting connections".
+   * `key 0:1 0:0` sends no real key event; the daemon answers and the client exits 0. */
   async _socketAnswers() {
-    let net;
-    try { net = await import('node:net'); } catch { return false; }
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (ok) => { if (settled) return; settled = true; try { s.destroy(); } catch { /* already closed */ } resolve(ok); };
-      const s = net.createConnection(this.socket);
-      s.once('connect', () => done(true));
-      s.once('error', () => done(false));
-      const timer = setTimeout(() => done(false), 800);
-      timer.unref?.();
-    });
+    try { await run('ydotool', ['key', '0:1', '0:0'], { env: this._env() }); return true; } catch { return false; }
   }
 
   async probe() {
@@ -126,24 +127,20 @@ class YdotoolBackend {
   }
   async click(x, y, button = 'left') {
     if (Number.isFinite(x) && Number.isFinite(y)) await this.move(x, y);
-    const map = { left: '0xC0', right: '0xC1', middle: '0xC2' };
-    await this._yd(['click', map[button] || '0xC0']);
+    await this._yd(['click', BUTTON_MASKS[button]?.click || BUTTON_MASKS.left.click]);
   }
   async doubleClick(x, y) {
     if (Number.isFinite(x) && Number.isFinite(y)) await this.move(x, y);
-    await this._yd(['click', '--repeat', '2', '--delay', '80', '0xC0']).catch(async () => {
+    // ydotool spells them -r/--repeat and -D/--next-delay; there is no --delay, which used to fail
+    // and fall back to two separate clicks.
+    await this._yd(['click', '--repeat', '2', '--next-delay', '80', '0xC0']).catch(async () => {
       await this._yd(['click', '0xC0']);
       await this._yd(['click', '0xC0']);
     });
   }
-  async down(button = 'left') {
-    const map = { left: '0', right: '1', middle: '2' };
-    await this._yd(['mousedown', map[button] || '0']);
-  }
-  async up(button = 'left') {
-    const map = { left: '0', right: '1', middle: '2' };
-    await this._yd(['mouseup', map[button] || '0']);
-  }
+  // ydotool 1.x has no mousedown/mouseup commands: the 0x40 bit is a press, 0x80 a release.
+  async down(button = 'left') { await this._yd(['click', (BUTTON_MASKS[button] || BUTTON_MASKS.left).down]); }
+  async up(button = 'left') { await this._yd(['click', (BUTTON_MASKS[button] || BUTTON_MASKS.left).up]); }
   async drag(fromX, fromY, toX, toY) {
     await this.move(fromX, fromY);
     await this.down('left');
@@ -157,27 +154,67 @@ class YdotoolBackend {
   async type(text, delayMs = 10) {
     await this._yd(['type', '--key-delay', String(delayMs), '--', String(text)]);
   }
-  async press(key) {
-    const k = KEY_MAP[String(key).toLowerCase()] || key;
-    await this._yd(['key', `${k}:1`, `${k}:0`]).catch(async () => this._yd(['key', String(key)]));
-  }
-  async hotkey(modifiers = [], key) {
-    const seq = [...modifiers.map((m) => KEY_MAP[String(m).toLowerCase()] || m), KEY_MAP[String(key).toLowerCase()] || key];
-    const down = seq.map((k) => `${k}:1`);
-    const up = [...seq].reverse().map((k) => `${k}:0`);
-    await this._yd(['key', ...down, ...up]);
-  }
+  async press(key) { await this._yd(ydotoolKeyArgs([], key)); }
+  async hotkey(modifiers = [], key) { await this._yd(ydotoolKeyArgs(modifiers, key)); }
   async waitForIdle() {}
 }
 
-const KEY_MAP = {
-  enter: 'KEY_ENTER', return: 'KEY_ENTER', tab: 'KEY_TAB', escape: 'KEY_ESC', esc: 'KEY_ESC',
-  space: 'KEY_SPACE', backspace: 'KEY_BACKSPACE', delete: 'KEY_DELETE',
-  up: 'KEY_UP', down: 'KEY_DOWN', left: 'KEY_LEFT', right: 'KEY_RIGHT',
-  home: 'KEY_HOME', end: 'KEY_END', pageup: 'KEY_PAGEUP', pagedown: 'KEY_PAGEDOWN',
-  control: 'KEY_LEFTCTRL', ctrl: 'KEY_LEFTCTRL', shift: 'KEY_LEFTSHIFT',
-  alt: 'KEY_LEFTALT', meta: 'KEY_LEFTMETA', super: 'KEY_LEFTMETA',
+// Mouse buttons as ydotool writes them: button number, plus 0x40 (down), 0x80 (up) or both (a click).
+const BUTTON_MASKS = {
+  left: { click: '0xC0', down: '0x40', up: '0x80' },
+  right: { click: '0xC1', down: '0x41', up: '0x81' },
+  middle: { click: '0xC2', down: '0x42', up: '0x82' },
 };
+
+/** Linux input-event-codes (/usr/include/linux/input-event-codes.h). ydotool 1.x takes these raw
+ * numbers: a `KEY_ENTER`-style name is "non-interpretable", so it is ignored and only costs a delay —
+ * presses used to do nothing while the tool reported success. */
+export const KEYCODES = {
+  escape: 1, esc: 1, '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10, '0': 11,
+  minus: 12, equal: 13, backspace: 14, tab: 15,
+  q: 16, w: 17, e: 18, r: 19, t: 20, y: 21, u: 22, i: 23, o: 24, p: 25,
+  leftbrace: 26, rightbrace: 27, enter: 28, return: 28, leftctrl: 29, control: 29, ctrl: 29,
+  a: 30, s: 31, d: 32, f: 33, g: 34, h: 35, j: 36, k: 37, l: 38,
+  semicolon: 39, apostrophe: 40, grave: 41, leftshift: 42, shift: 42, backslash: 43,
+  z: 44, x: 45, c: 46, v: 47, b: 48, n: 49, m: 50,
+  comma: 51, dot: 52, period: 52, slash: 53, rightshift: 54,
+  kpasterisk: 55, leftalt: 56, alt: 56, space: 57, capslock: 58,
+  f1: 59, f2: 60, f3: 61, f4: 62, f5: 63, f6: 64, f7: 65, f8: 66, f9: 67, f10: 68,
+  numlock: 69, scrolllock: 70, kp7: 71, kp8: 72, kp9: 73, kpminus: 74, kp4: 75, kp5: 76, kp6: 77, kpplus: 78,
+  kp1: 79, kp2: 80, kp3: 81, kp0: 82, kpdot: 83, f11: 87, f12: 88,
+  kpenter: 96, rightctrl: 97, kpslash: 98, printscreen: 99, rightalt: 100,
+  home: 102, up: 103, pageup: 104, left: 105, right: 106, end: 107, down: 108, pagedown: 109,
+  insert: 110, delete: 111, del: 111, mute: 113, volumedown: 114, volumeup: 115,
+  leftmeta: 125, meta: 125, super: 125, win: 125, rightmeta: 126, compose: 127,
+};
+
+/** The keycode for a key name ("Enter", "KEY_ENTER", "a", "F5", or a number), or null. */
+export function evdevCode(key) {
+  const raw = String(key ?? '').trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  const code = KEYCODES[lower] ?? KEYCODES[lower.replace(/^key_/, '')];
+  if (Number.isInteger(code)) return code;
+  // A bare number is a raw keycode, but only after the digit keys ("0" is the 0 key, code 11).
+  if (/^\d{1,3}$/.test(raw)) return Number(raw);
+  return null;
+}
+
+/** `ydotool key` arguments for one key, with optional modifiers held around it. Throws (rather than
+ * sending a press that does nothing) when a name has no keycode. */
+export function ydotoolKeyArgs(modifiers = [], key) {
+  const k = evdevCode(key);
+  if (k == null) {
+    throw new Error(`Cannot send the key "${key}" on Linux: use a letter, a digit, or a name like Enter, Tab, Escape, Space, Backspace, Delete, Home, End, PageUp, PageDown, Left/Right/Up/Down, F1-F12, or Control/Shift/Alt/Super.`);
+  }
+  const mods = modifiers.map((m) => {
+    const code = evdevCode(m);
+    if (code == null) throw new Error(`Cannot send the modifier "${m}" on Linux: use Control, Shift, Alt or Super.`);
+    return code;
+  });
+  const seq = [...mods, k];
+  return ['key', ...seq.map((c) => `${c}:1`), ...[...seq].reverse().map((c) => `${c}:0`)];
+}
 
 // ---------------------------------------------------------------- xdotool
 

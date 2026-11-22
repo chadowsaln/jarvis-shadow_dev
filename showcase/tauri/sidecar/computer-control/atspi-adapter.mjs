@@ -25,7 +25,9 @@ const REGISTRY_BUS = 'org.a11y.atspi.Registry';
 const REGISTRY_PATH = '/org/a11y/atspi/accessible/root';
 const NULL_PATH = '/org/a11y/atspi/null';
 const MAX_ELEMENTS = 400;
-const MAX_DEPTH = 8;
+// GTK4/libadwaita nests deeply: at depth 8 a Text Editor window exposed 11 of its 118 elements (no
+// buttons, no tabs), at 20 it exposed all of them.
+const MAX_DEPTH = 20;
 
 // AT-SPI StateType bit positions (atspi-constants.h): word 0 holds the first 32.
 export const STATE_NAMES = [

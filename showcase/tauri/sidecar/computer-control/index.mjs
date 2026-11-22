@@ -54,7 +54,7 @@ class ComputerControlServiceImpl {
   async typeIntoElement(criteria, text) { await this.clickElement(criteria); await this.input.type(text); }
   async listWindows() { return this.atspi.getWindowList(); }
   async listApplications() { return this.atspi.getApplicationList(); }
-  async captureScreen(interactive = true) { const dbus = await getDBusIntegration(); return dbus.requestScreenshot(`lb-${Date.now()}`, interactive, false); }
+  async captureScreen(interactive = true) { const dbus = await getDBusIntegration(); return dbus.requestScreenshot(`jarvis_${Date.now()}`, interactive, false); }
   async verify(conditions) { return this.verification.verify(conditions); }
 }
 
@@ -125,7 +125,7 @@ if (process.argv.includes('--doctor')) {
       try { execSync('pgrep -x ydotoold', { stdio: 'ignore' }); daemon = true; } catch {}
       try { const fs = await import('node:fs'); fs.accessSync('/dev/uinput', fs.constants.W_OK); uinput = true; } catch {}
       ok('ydotool installed', ydotool, 'Install ydotool (dnf install ydotool)');
-      ok('ydotoold running', daemon, 'Start: systemctl --user enable --now ydotool (or ydotoold)');
+      ok('ydotoold running', daemon, 'Start: systemctl --user enable --now ydotoold');
       ok('/dev/uinput writable', uinput, 'Add udev rule: echo \'KERNEL=="uinput", GROUP="input", MODE="0660"\' | sudo tee /etc/udev/rules.d/80-uinput.rules; sudo udevadm control --reload-rules');
     } catch (e) { ok('ydotool checks', false, e?.message); }
     // portals

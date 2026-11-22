@@ -840,6 +840,8 @@ fn show_panel(app: &AppHandle, rect: Option<tauri::Rect>, toggle: bool) {
                 Ok(w) => {
                     #[cfg(target_os = "macos")]
                     over_fullscreen(&w);
+                    #[cfg(target_os = "linux")]
+                    allow_audio(&w);
                     let app2 = app.clone();
                     w.on_window_event(move |e| {
                         if let tauri::WindowEvent::Focused(false) = e {
@@ -995,6 +997,8 @@ fn open_onboarding(app: &AppHandle, mode: Option<&str>) {
     match b.build() {
         Ok(w) => {
             ONBOARDING.store(true, Ordering::Relaxed);
+            #[cfg(target_os = "linux")]
+            allow_audio(&w);
             let app2 = app.clone();
             w.on_window_event(move |e| {
                 if let tauri::WindowEvent::Destroyed = e {
@@ -1182,6 +1186,8 @@ fn build_overlays(app: &AppHandle) -> tauri::Result<()> {
             .initialization_script(init)
             .build()?;
         w.set_ignore_cursor_events(true)?;
+        #[cfg(target_os = "linux")]
+        allow_audio(&w);
         #[cfg(target_os = "macos")]
         full_frame_rate(&w);
         #[cfg(target_os = "macos")]
@@ -1208,6 +1214,20 @@ fn over_fullscreen(w: &WebviewWindow) {
         let behavior: usize = msg_send![win, collectionBehavior];
         let _: () = msg_send![win, setCollectionBehavior: behavior | FULL_SCREEN_AUXILIARY];
         let _: () = msg_send![win, setLevel: STATUS_BAR_LEVEL + 1];
+    });
+}
+
+/// Sound on Linux: WebKitGTK refuses to let a page start audio until the user has interacted with it, and the
+/// overlay is click-through, so every spoken reply was silent (the AudioContext stayed suspended). Nothing here
+/// plays by itself: the page only plays the audio the sidecar sends. A no-op where the setting isn't there.
+#[cfg(target_os = "linux")]
+fn allow_audio(w: &WebviewWindow) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+    let _ = w.with_webview(|wv| {
+        if let Some(settings) = wv.inner().settings() {
+            settings.set_media_playback_requires_user_gesture(false);
+            settings.set_enable_webaudio(true);
+        }
     });
 }
 

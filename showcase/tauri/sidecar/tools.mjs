@@ -1063,7 +1063,8 @@ math (steps [{tex, note}]) writes worked maths one step at a time. tex: one line
 molecule (smiles, label) for chemistry. model (parts [{shape: box|sphere|cylinder|cone|torus, at [x,y,z], size [x,y,z], rot [deg x,y,z], tone, color, label, motion, planet, land}] within about -1 to 1, title) for objects and machines, each part in its own color if it has one (a gold Sun beside a blue Earth). A sphere can be a planet: planet: true draws the world's real continents on that sphere in land (a hex, green by default) over its color, the sea, so the Earth is {shape: 'sphere', color: '#2f6fd0', planet: true}; the continents turn with it. motion {do: spin|orbit|slide|pulse, axis: x|y|z, around [x,y,z], to [x,y,z], secs} makes a part move to show how the thing works: slide goes from at to "to" and back (a piston), orbit circles the point "around" (a planet, a crank pin), spin turns it in place (a round part spinning on its own axis looks still, so spin a box or orbit one round it), pulse swells and shrinks (a heart).
 quiz (questions [{text, options: 2 to 4, answer: the right option word for word, explain}], up to ${LIMITS.questions}) for "test me": they answer by clicking and see right or wrong at once, and their score comes to you with their next message, so say a line and stop: never ask the questions in words too, or ask them for their answers or score.
 Actions: type (text into the field at; needs actions allowed), copy (text to the clipboard), open (url), handoff (task), button (text + action {do: ask|open|copy, value}: a likely next step they can click), emote (name: hype, wave, upset, remind, motivate), sfx (name). tone: accent, teal, amber, coral, lilac, sky, lime, red, white.
-color is the real colour of a thing instead of the app's tones: any hex like #2f6fd0 (or #abc), on a screen mark, on a card as a whole, or on any piece of one (a bar, a plot line, a dot, a node, a legend key, a shaded country, a route, a geometry line or circle, a part of a model). It wins over tone and is drawn in five shades of itself, so it stays readable; use it when the colour is the point (a blue sea, a gold Sun, red blood) and leave both off otherwise.
+color is the real colour of a thing instead of the app's tones: any name the user would say (black, white, gray, red, crimson, orange, gold, yellow, olive, green, darkgreen, lime, teal, turquoise, aqua, cyan, blue, navy, dodgerblue, skyblue, indigo, purple, violet, magenta, pink, brown, tan, beige, silver…), a hex like #2f6fd0 (or #abc, or #000), or rgb(47, 111, 208). It goes on a screen mark, on a card as a whole, or on any piece of one (a bar, a plot line, a dot, a node, a legend key, a shaded country, a route, a geometry line or circle, a part of a model). It wins over tone and is drawn in five shades of itself, so it stays readable; use it when the colour is the point (a black cat, a green leaf, a blue sea, a gold Sun, red blood) and leave both off otherwise.
+intensity is how strong that colour is, 0 to 100: 100 (the default) is the colour itself, 40 a pale, quiet version of it, 0 barely there. Put it on the mark to dim everything it draws, or on one piece to dim just that piece (a dark green land over a pale blue sea).
 A drawing stays until the user clears it or the window changes; your next drawing replaces it. At most ${LIMITS.cardsShown} cards show at once (one more closes the oldest), so make a point with the fewest cards. Every drawn piece gets an id (p1, p2 …) in the result. To change what's drawn ("make that red", "move it left", "never mind"): edit [{do: recolor|move|erase|clear, part, tone, color, dx, dy}] with no beats (recolor takes tone or color). Up to 12 beats, 40 marks each.${POINTER_OK ? '' : " On this desktop (Wayland) clicks and hovers in other apps can't be seen: never use wait; beats play one after another, so say each step's line in an order that reads well without pausing."}`,
       parameters: DrawArgs,
       // Drawing is the assistant's own channel: assist, not trusted. Typing and opening from a mark still need the
@@ -1382,10 +1383,18 @@ A drawing stays until the user clears it or the window changes; your next drawin
               if (everdict?.level === BLOCK) throw new Error(everdict.reason);
             }
             if (!element) throw new Error('Element not found');
-            if (!element.coordinates) throw new Error('Element has no coordinates');
             if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {
               throw new Error(`${userName} said no, so I didn't click "${element.name}".`);
             }
+            // Wayland gives apps no screen offsets: every element reports 0,0, so a synthesized click
+            // would land at the window's corner. Ask the element to activate itself instead.
+            const noOffsets = !!process.env.WAYLAND_DISPLAY || /wayland/i.test(process.env.XDG_SESSION_TYPE || '');
+            const own = element.actions?.find((a) => /^(click|press|activate|do[-_]default)$/i.test(a));
+            if ((criteria.button || 'left') === 'left' && own && (noOffsets || !element.coordinates)) {
+              const done = await driver.doAction(element, own);
+              return `Clicked ${element.role} "${element.name}" through its own accessibility action (${done.action}); the pointer was not moved.`;
+            }
+            if (!element.coordinates) throw new Error('Element has no coordinates');
             const centerX = element.coordinates.x + element.coordinates.width / 2;
             const centerY = element.coordinates.y + element.coordinates.height / 2;
             await input.click(centerX, centerY, criteria.button || 'left');
@@ -1521,8 +1530,11 @@ A drawing stays until the user clears it or the window changes; your next drawin
           const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
           const driver = await createATSPIDriver();
           try {
-            await driver.focusWindow(title);
-            return `Focused window matching "${title}"`;
+            const w = await driver.focusWindow(title);
+            // Wayland compositors refuse focus requests from apps: say so instead of claiming success.
+            return w.focused
+              ? `Focused window "${w.title}"`
+              : `Found "${w.title}", but the desktop would not switch focus to it (Wayland does not let apps take focus). Ask ${userName} to click it, or act on it without focusing.`;
           } finally {
             await driver.disconnect();
           }
