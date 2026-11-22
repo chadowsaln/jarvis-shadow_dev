@@ -43,7 +43,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 18
+          node-version: 22
           cache: npm
           cache-dependency-path: showcase/tauri/sidecar/package-lock.json
 
@@ -131,13 +131,18 @@ jobs:
             const sig = (f) => fs.readFileSync("sigs/" + f, "utf8").trim();
             const api = Object.fromEntries(JSON.parse(fs.readFileSync("assets.json", "utf8")).assets.map((a) => [a.name, a.apiUrl]));
             const link = (f) => { if (!api[f]) throw new Error(`${f} is not on the release`); return api[f]; };
+            // Only the Linux AppImage is built. Find it among the release assets instead of spelling its name:
+            // the product name has changed (Roamies to jarvis), and a misspelt name wrote a feed with no platform
+            // at all, which every installed copy then read as "nothing to update to".
             const platforms = {};
-            // Only Linux AppImage is built
-            const linux = `Roamies_${VER}_amd64.AppImage`;
-            if (api[linux] && fs.existsSync("sigs/" + linux + ".sig")) {
-              platforms["linux-x86_64"] = linux;
-            } else {
-              console.log("No Linux AppImage on this release: latest.json leaves Linux out.");
+            for (const name of Object.keys(api)) {
+              if (!/_amd64\.AppImage$/.test(name) || !fs.existsSync("sigs/" + name + ".sig")) continue;
+              platforms["linux-x86_64"] = name;
+            }
+            // An empty feed is worse than no new feed: it hides the release this tag just published.
+            if (!Object.keys(platforms).length) {
+              console.error("No signed Linux AppImage on this release: leaving its latest.json alone.");
+              process.exit(1);
             }
             const out = { version: VER, notes: `Roamies ${VER}`, pub_date: new Date().toISOString(), platforms: {} };
             for (const [k, f] of Object.entries(platforms)) out.platforms[k] = { signature: sig(f + ".sig"), url: link(f) };
