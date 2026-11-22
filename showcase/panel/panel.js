@@ -915,6 +915,10 @@
           if (x === 'voice' && !hasKey) { ui.key = tts; render(`key-${tts}`); note(`Add a ${T} key to hear me talk.`); return; }
           act(`replies:${x}`);
         }, 'replies'),
+        // A line said on the spot: the model isn't asked, so an outage or an empty quota can't hide a broken voice.
+        el('div', { className: 'setting' },
+          el('span', {}, 'Test', el('small', { textContent: 'Hear the voice now, without asking me anything' })),
+          el('span', { className: 'row-btns' }, link('Test voice', () => act('voicetest'), { k: 'voicetest', aria: 'Hear a test line in my voice' }))),
         picks('Speaking speed', [[0.9, 'Slower'], [1, 'Normal'], [1.1, 'Faster']], state.speechRate ?? 1, (x) => act(`speechrate:${x}`), 'speechrate',
           { 0.9: 'A little slower. Pitch drops with it, like a tape.', 1: "The service's own pace.", 1.1: 'A little quicker. Pitch rises with it.' }),
         el('p', { className: 'sub', textContent: 'Voice provider' }),

@@ -1835,12 +1835,27 @@ async function setReplies(mode) {
   else say('Text only from now on.', 'happy');
 }
 
-// A line from the app itself (not the model), shown and spoken.
-function speakLine(text, mood = 'happy') {
+// A line from the app itself (not the model), shown and spoken. evenIfText: speak it although replies are written
+// (the Voice page's test, which is there to be heard before switching anything).
+function speakLine(text, mood = 'happy', { evenIfText = false } = {}) {
   say(text, mood);
-  const v = config.replies === 'voice' ? speech.start() : null;
+  const v = config.replies === 'voice' || evenIfText ? speech.start() : null;
   if (v && onboarding) guideVoices.add(v.id); // heard in the setup guide, where it was switched on
   if (v) { v.say(text); v.end(); }
+}
+
+// Say a line now, without asking the model. A model that is out of quota (or offline) has nothing to say, which looks
+// exactly like a voice that does not work; this separates the two.
+const VOICE_SAMPLE = 'This is how I sound. If you can hear this, the voice works.';
+async function testVoice() {
+  await voiceKeysLoaded;
+  if (tts().local) { if (!(await studioReady())) return; }
+  else if (!speech.on) {
+    panelNote(`Add a ${TTS[tts().id].name} key below to hear the voice.`);
+    return;
+  }
+  logLine('voice_test', { provider: tts().id, model: config.tts === 'gemini' ? config.geminiModel : tts().local ? config.studioVoices?.[config.look] ?? null : config.fishModel });
+  speakLine(VOICE_SAMPLE, 'happy', { evenIfText: true });
 }
 
 // Fish Audio or Gemini. One without a key yet speaks once it has one (the panel and the guide ask for it).
@@ -2483,6 +2498,7 @@ async function onMenu(id, via) {
     else if (!canHear()) panelNote(`Saved ${key}. It listens once the voice model is downloaded.`);
     else panelNote(`Press ${key} to listen; press it again or pause to send.`);
   }
+  else if (id === 'voicetest') testVoice().catch((e) => console.error('voice test', e.message));
   else if (id === 'voicestudio_check') { await speech.checkLocal(); menu(); if (onboarding) obState(); }
   else if (id.startsWith('geminimodel:') && GEMINI_CHOICES.some((c) => c.id === id.slice(12))) {
     config.geminiModel = id.slice(12); saveConfig(); if (tts().id === 'gemini') speech.setModel(config.geminiModel); menu();
