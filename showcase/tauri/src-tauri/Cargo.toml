@@ -1,6 +1,6 @@
 [package]
 name = "jarvis_v2"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "JARVIS V2: AI Agent + Computer Control + Perception + Memory + Skills + Security"
