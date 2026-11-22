@@ -26,7 +26,7 @@ import { arabicSupport, cleanSpoken, isArabic, languageOf, pickVoice } from './l
 // (Gemini has 30 voices to try out, and making 34 beats for each one passed over would waste the allowance).
 export const PROVIDERS = {
   fish: { id: 'fish', name: 'Fish Audio', Voice: FishVoice, account: fishAccount, models: FISH_MODELS, freeModel: FREE_MODEL, rate: RATE, defaultVoice: DEFAULT_VOICE },
-  gemini: { id: 'gemini', name: 'Gemini', Voice: GeminiVoice, account: geminiAccount, models: GEMINI_MODELS, pick: GEMINI_MODEL, freeModel: null, rate: GEMINI_RATE, play: Math.round(GEMINI_RATE * GEMINI_PITCH), defaultVoice: GEMINI_DEFAULT_VOICE, warmDelay: 15_000 },
+  gemini: { id: 'gemini', name: 'Gemini', Voice: GeminiVoice, account: geminiAccount, models: GEMINI_MODELS, pick: GEMINI_MODEL, freeModel: null, rate: GEMINI_RATE, play: Math.round(GEMINI_RATE * GEMINI_PITCH), defaultVoice: GEMINI_DEFAULT_VOICE, warmDelay: 15_000, anyModel: true },
 };
 
 // Silence trimmed from both ends (a little kept), so a beat starts the moment it plays.
@@ -47,6 +47,8 @@ export const BEATS = [
   'Moment.', 'Okay, checking.', 'Sure, checking.', 'Okie-dokie.',
 ];
 const RECENT = 8; // a beat isn't picked again until this many others have played
+// How long to wait before retrying a sentence's voice on another model after a rate limit (a per-minute quota).
+const RATE_PAUSE = 1200;
 
 // The beats shipped with the app (beats/make.mjs), next to this file or the bundle: (voice, model) → Map of phrase →
 // { rate, pcm } (base64), or null for a voice or model not recorded. The free tier uses the S2.1 Pro takes.
@@ -78,8 +80,12 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   // The user's picks per language for the service in use ({ ar, en }); a language with none uses its own voice.
   let langVoices = {};
   const voiceFor = (text) => pickVoice(text, { voices: langVoices, fallback: voice }).voice;
-  // The pick and the cheaper ones after it (models run from priciest to free).
-  const chain = () => P.models.slice(Math.max(0, P.models.indexOf(pref)));
+  // The models to try after one fails before any audio: the pick and the cheaper ones after it (models run from
+  // priciest to free), so a reply is never moved onto a pricier one. Gemini's two are the same key on separate
+  // free-tier quotas, so a 429 on one is answered by the other, in either direction.
+  const chain = () => (P.anyModel ? P.models : P.models.slice(Math.max(0, P.models.indexOf(pref))));
+  // The next model to try after m: never m itself (a rate limit won't clear by asking the same one at once).
+  const nextModel = (m) => { const c = chain(), i = c.indexOf(m); return c.slice(i + 1).concat(P.anyModel ? c.slice(0, i) : []).find((x) => x !== m) ?? m; };
   let beats = new Map(), recent = [], warming = null; // phrase → [base64 PCM], for the current key, voice and model
   // A random beat, not one of the last few: one that's already made if there is one, so it plays instantly.
   const shipped = () => bundled(voice, model);
@@ -267,10 +273,14 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
             const a = await check();
             if (done) return;
             if (!a.ok && a.reason === 'key') { onProblem('key'); return finish(); }
-            if (tries < chain().length) {
-              // Retry: the free tier when there's no credit, else the next model down (the free one again once at the bottom).
-              const c = chain();
-              const next = a.ok && P.freeModel && model === P.freeModel ? P.freeModel : c[Math.min(c.indexOf(m) + 1, c.length - 1)];
+            // Gemini's two models differ only in price and quota, so only a limit or an outage is worth the other one:
+            // a bad voice or key (4xx) would fail there too.
+            const retriable = !P.anyModel || !err.status || err.status === 429 || err.status >= 500;
+            const next = a.ok && P.freeModel && model === P.freeModel ? P.freeModel : nextModel(m);
+            if (retriable && tries < chain().length && next !== m) {
+              // A per-minute limit: one breath, then the other model, rather than asking at once.
+              if (err.status === 429) await new Promise((r) => { setTimeout(r, RATE_PAUSE).unref?.(); });
+              if (done) return;
               connect(next);
               for (const s of said) v.say(s);
               if (ended) v.end();

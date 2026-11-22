@@ -207,6 +207,18 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   assert.equal(made.at(-1).model, 'gemini-3.8-flash-tts');
   made.at(-1).onError(Object.assign(new Error('Gemini: overloaded'), { heard: false, status: 503 })); await tick(); await tick();
   assert.equal(made.at(-1).model, 'gemini-3.8-flash-lite-tts'); assert.deepEqual(made.at(-1).said, ['Hi.']);
+  // Rate limited: one breath, then the other Gemini model (its own quota, same key) says the reply — not a problem,
+  // and never the same model asked twice at once.
+  const told = problems.length;
+  const r6 = sp.start(); r6.say('Hi.');
+  assert.equal(made.at(-1).model, 'gemini-3.8-flash-tts');
+  made.at(-1).onError(Object.assign(new Error('Gemini is rate limiting'), { heard: false, status: 429 })); await tick();
+  assert.equal(made.at(-1).model, 'gemini-3.8-flash-tts', 'not at once');
+  await new Promise((r) => setTimeout(r, 1400));
+  assert.equal(made.at(-1).model, 'gemini-3.8-flash-lite-tts', 'the other model, after the pause');
+  assert.deepEqual(made.at(-1).said, ['Hi.']);
+  made.at(-1).onAudio(new Uint8Array([0, 0])); made.at(-1).onEnd();
+  assert.equal(problems.length, told, 'no problem told');
   // Back to Fish: its own voice class and rate again.
   sp.setProvider('fish'); sp.setKey('fish-key'); await tick(); await tick();
   const r4 = sp.start(); r4.say('Hi.');
