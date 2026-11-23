@@ -51,13 +51,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential python3
-          npm install -g node-gyp@latest
 
       - name: Install sidecar dependencies
         working-directory: showcase/tauri/sidecar
         run: |
-          export npm_config_node_gyp="$(which node-gyp)"
-          npm ci
+          npm ci --ignore-scripts
+          npx --yes node-gyp@latest rebuild -C node_modules/better-sqlite3
 
       - name: Test sidecar
         working-directory: showcase/tauri/sidecar
