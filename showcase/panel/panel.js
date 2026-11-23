@@ -175,11 +175,12 @@
       ? ` (${per100(c.promo.perM)} until ${new Date(Date.parse(c.promo.until) - 1).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'America/Los_Angeles' })})` : '';
     return `$${c.perM} per million characters: about ${per100(c.perM)} per 100 replies${promo}. Billed to your Fish Audio account.`;
   };
-  // Gemini's two: a reply is about 12 seconds of speech, so 100 replies are about 20 minutes.
-  const GEMINI_WHY = { 'gemini-3.8-flash-lite-tts': 'Quick. Costs less.', 'gemini-3.8-flash-tts': 'Studio quality. Costs more.' };
+  // Gemini's three: a reply is about 12 seconds of speech, so 100 replies are about 20 minutes.
+  const GEMINI_WHY = { 'gemini-3.8-live': 'Talks as it thinks. Any language.', 'gemini-3.8-flash-lite-tts': 'Quick. Reads word for word.', 'gemini-3.8-flash-tts': 'Studio quality. Reads word for word.' };
   const GEMINI_WHY_LONG = {
-    'gemini-3.8-flash-lite-tts': 'The quick, cheaper one: good for everyday replies.',
-    'gemini-3.8-flash-tts': "Google's best voice quality, with more feeling in it.",
+    'gemini-3.8-live': 'Live over a realtime socket: it starts speaking as each sentence is ready and works the language out from the text itself, so Arabic and English both sound right in the same voice.',
+    'gemini-3.8-flash-lite-tts': 'The quick, cheaper one, and it reads the reply exactly as written: good for everyday replies.',
+    'gemini-3.8-flash-tts': "Google's best exact-reading voice, with more feeling in it.",
   };
   const geminiPrice = (c) => `About $${(c.per10s * 120).toFixed(2)} per 100 replies, billed to your Google AI Studio account (it has a free tier).`;
   const where = () => (state?.os === 'mac' ? 'your Keychain' : state?.os === 'win' ? 'Windows, encrypted for your account' : state?.os === 'linux' ? 'your keyring' : 'this computer');
@@ -1513,8 +1514,9 @@
       tts: new URLSearchParams(location.search).get('tts') === 'gemini' ? 'gemini' : 'fish', geminiKey: new URLSearchParams(location.search).get('tts') === 'gemini', geminiVoice: 'Kore',
       geminiVoices: [['Zephyr', 'Bright'], ['Puck', 'Upbeat'], ['Charon', 'Informative'], ['Kore', 'Firm']].map(([id, style]) => ({ id, style })),
       // &shared: speaking with the AI's Gemini key, none saved for the voice.
-      geminiShared: new URLSearchParams(location.search).has('shared'), geminiModel: 'gemini-3.8-flash-lite-tts',
-      geminiModels: [{ id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite', per10s: 0.0015 }, { id: 'gemini-3.8-flash-tts', name: 'Flash', per10s: 0.00225 }],
+      geminiShared: new URLSearchParams(location.search).has('shared'), geminiModel: 'gemini-3.8-live',
+      geminiModels: [{ id: 'gemini-3.8-live', name: 'Live', per10s: 0.003, live: true }, { id: 'gemini-3.8-flash-tts', name: 'Flash (exact)', per10s: 0.00225 }, { id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite (exact)', per10s: 0.0015 }],
+
       fishModels: [{ id: 'drama-3', name: 'Drama 3', perM: 50, promo: { perM: 10, until: '2026-12-01T08:00:00Z' } }, { id: 's2.1-pro', name: 'S2.1 Pro', perM: 15 }],
       voice: { on: true, keys: '⌃⌥', talkKey: '', ready: true, mac: true, mute: true, wakeWord: false, download: null }, askKeys: '⌥⌘',
       // ?micfallback: the picked microphone is gone, so the default is recording (the row says so).

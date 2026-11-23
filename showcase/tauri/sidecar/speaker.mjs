@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_VOICE, FISH_MODELS, FREE_MODEL, FishVoice, RATE, fishAccount } from './fish.mjs';
 import { StudioVoice, studioStatus } from './voicestudio.mjs';
-import { GEMINI_DEFAULT_VOICE, GEMINI_MODEL, GEMINI_MODELS, GEMINI_PITCH, GEMINI_RATE, GeminiVoice, geminiAccount } from './gemini.mjs';
+import { GEMINI_DEFAULT_VOICE, GEMINI_LIVE_MODEL, GEMINI_MODELS, GEMINI_PITCH, GEMINI_RATE, GeminiSpeaker, geminiAccount } from './gemini.mjs';
 import { arabicSupport, cleanSpoken, isArabic, languageOf, pickVoice } from './lang.mjs';
 
 // The services that can speak. models: priciest first, the pick and the ones after it are tried in turn; pick:
@@ -26,7 +26,9 @@ import { arabicSupport, cleanSpoken, isArabic, languageOf, pickVoice } from './l
 // (Gemini has 30 voices to try out, and making 34 beats for each one passed over would waste the allowance).
 export const PROVIDERS = {
   fish: { id: 'fish', name: 'Fish Audio', Voice: FishVoice, account: fishAccount, models: FISH_MODELS, freeModel: FREE_MODEL, rate: RATE, defaultVoice: DEFAULT_VOICE },
-  gemini: { id: 'gemini', name: 'Gemini', Voice: GeminiVoice, account: geminiAccount, models: GEMINI_MODELS, pick: GEMINI_MODEL, freeModel: null, rate: GEMINI_RATE, play: Math.round(GEMINI_RATE * GEMINI_PITCH), defaultVoice: GEMINI_DEFAULT_VOICE, warmDelay: 15_000, anyModel: true },
+  // Live first (spoken as it arrives, in the text's own language); the exact-reading models are the fallback and a pick
+  // of their own. GeminiSpeaker opens a socket for the live one, a request per sentence for the others.
+  gemini: { id: 'gemini', name: 'Gemini', Voice: GeminiSpeaker, account: geminiAccount, models: GEMINI_MODELS, pick: GEMINI_LIVE_MODEL, freeModel: null, rate: GEMINI_RATE, play: Math.round(GEMINI_RATE * GEMINI_PITCH), defaultVoice: GEMINI_DEFAULT_VOICE, warmDelay: 15_000, anyModel: true },
 };
 
 // Silence trimmed from both ends (a little kept), so a beat starts the moment it plays.

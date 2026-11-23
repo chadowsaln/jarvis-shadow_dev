@@ -180,12 +180,12 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   assert.equal(sp.start(), null);
   sp.setKey('g-key'); sp.setVoice('Puck'); await tick(); await tick();
   assert.equal(made.length, 0, 'beats wait a while, in case the voice is still being picked');
-  assert.equal(sp.model, 'gemini-3.8-flash-lite-tts'); assert.equal(sp.pick, 'gemini-3.8-flash-lite-tts');
+  assert.equal(sp.model, 'gemini-3.8-live'); assert.equal(sp.pick, 'gemini-3.8-live');
   const r = sp.start();
   assert.equal(r.beat(), true);
   const v = made[0];
   assert.deepEqual(v.said, ['One sec.'], 'the beat is said live');
-  assert.equal(v.key, 'g-key'); assert.equal(v.voice, 'Puck'); assert.equal(v.model, 'gemini-3.8-flash-lite-tts');
+  assert.equal(v.key, 'g-key'); assert.equal(v.voice, 'Puck'); assert.equal(v.model, 'gemini-3.8-live');
   v.onAudio(new Uint8Array([1, 0]));
   assert.equal(out.at(-1).rate, 25440, 'played a semitone up');
   // A failure that isn't the key: said as it is, and not tried again (there's no cheaper model than this one).
@@ -255,11 +255,11 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   const { sp } = mk();
   sp.setProvider('gemini'); sp.setVoice('Puck'); sp.setKey('g-key'); await settle();
   assert.equal(made.length, 1, 'one at a time');
-  assert.deepEqual(made[0].said, ['One sec.']); assert.equal(made[0].voice, 'Puck'); assert.equal(made[0].model, 'gemini-3.8-flash-lite-tts');
+  assert.deepEqual(made[0].said, ['One sec.']); assert.equal(made[0].voice, 'Puck'); assert.equal(made[0].model, 'gemini-3.8-live');
   made[0].onAudio(new Uint8Array([1, 0])); made[0].onAudio(new Uint8Array([2, 0])); made[0].onEnd(); await settle();
   made[1].onAudio(new Uint8Array([3, 0])); made[1].onEnd(); await settle();
   assert.equal(sp.ready, 2);
-  assert.deepEqual(writes, ['gemini.Puck.gemini-3.8-flash-lite-tts']);
+  assert.deepEqual(writes, ['gemini.Puck.gemini-3.8-live']);
   assert.deepEqual(kept.get(writes[0]), { rate: 24000, beats: { 'One sec.': Buffer.from([1, 0, 2, 0]).toString('base64'), 'On it.': Buffer.from([3, 0]).toString('base64') } });
   // The next run: read back, nothing asked of Gemini, and played at once at its rate.
   made.length = 0;

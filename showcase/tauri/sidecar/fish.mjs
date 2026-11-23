@@ -142,7 +142,7 @@ export class FishVoice {
     return b;
   }
 
-  arm(ms, why) { this.clear(); this.timer = setTimeout(() => this.fail(new Error(why)), ms); }
+  arm(ms, why) { this.clear(); this.timer = setTimeout(() => this.fail(new Error(why)), ms); this.timer?.unref?.(); }
   clear() { clearTimeout(this.timer); this.timer = null; }
 
   close() {

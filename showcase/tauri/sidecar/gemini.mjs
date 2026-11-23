@@ -1,21 +1,32 @@
-// Spoken replies through Gemini's text-to-speech (the Interactions API, with the user's own AI Studio key).
-// There's no live socket: each sentence is its own streaming request, started the moment it's said (first audio
-// in ~0.8-1.1 s, measured Nov 2026), a few at a time. Audio is handed on strictly in the order the sentences were
-// said: the first one plays as it streams, the ones behind it are held until it's their turn. Raw 16-bit mono
-// PCM at 24 kHz comes back as base64 in server-sent events. Same shape as FishVoice, so the speaker can use either.
+// Spoken replies through Gemini, with the user's own AI Studio key: two ways to say them.
+// - Live (the default): one realtime socket per reply, each sentence sent as a turn as it's ready, audio back as it's
+//   spoken. It reads a reply in whatever language it's written in without a voice picked for that language.
+// - The text-to-speech models: each sentence is its own streaming request, started the moment it's said (first audio
+//   in ~0.8-1.1 s, measured Nov 2026), a few at a time. Audio is handed on strictly in the order the sentences were
+//   said. Raw 16-bit mono PCM at 24 kHz comes back as base64 (server-sent events) either way.
+// Both have the same shape as FishVoice, so the speaker can use any of them.
 import { CUE, VOICE_CUES } from './speech.mjs';
 import { cleanSpoken, isArabic } from './lang.mjs';
 
 export const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
-// Priciest first, like Fish's: a reply that fails on Flash before any audio is tried again on Flash Lite.
-export const GEMINI_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
-// The one used unless the user picks the other: the fast, cheap one.
+// The realtime socket behind Live: turns of text in, 24 kHz raw PCM out, as it's spoken.
+export const GEMINI_LIVE_API = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+// Live speaks as the words arrive and works the language out from the text itself (Arabic, English, or both in one
+// reply), which is why a reply in Arabic no longer needs a voice picked for it. The catch: Live is a conversation
+// model, not a text-to-speech engine, so it reads a reply word for word only because of the instruction below - which
+// is also why the exact-reading TTS models are still offered beside it.
+export const GEMINI_LIVE_MODEL = 'gemini-3.8-live';
+export const isLiveModel = (m) => /-live($|-)/.test(String(m ?? ''));
+// The models, priciest first, like Fish's: a reply that fails before any audio is tried again on the next one down.
+export const GEMINI_MODELS = [GEMINI_LIVE_MODEL, 'gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
+// What the socket's speech models use unless the user picks another: the fast, cheap one.
 export const GEMINI_MODEL = 'gemini-3.8-flash-lite-tts';
-// The two the user picks between (Settings > Voice in the panel). per10s: USD for ten seconds of speech, from
-// Google's pricing page (Nov 2026, the price through 2026; it doubles on Jan 1, 2027). Both have a free tier.
+// What the user picks between (Settings > Voice in the panel). per10s: USD for ten seconds of speech, from Google's
+// pricing page (Nov 2026, the price through 2026; it doubles on Jan 1, 2027). All three have a free tier.
 export const GEMINI_CHOICES = [
-  { id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite', per10s: 0.0015 },
-  { id: 'gemini-3.8-flash-tts', name: 'Flash', per10s: 0.00225 },
+  { id: GEMINI_LIVE_MODEL, name: 'Live', per10s: 0.003, live: true },
+  { id: 'gemini-3.8-flash-tts', name: 'Flash (exact)', per10s: 0.00225 },
+  { id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite (exact)', per10s: 0.0015 },
 ];
 export const GEMINI_RATE = 24000;
 // Played a little fast so the voice sits higher: 1.06 is about one semitone up (and 6% quicker).
@@ -67,6 +78,28 @@ export const speechRequest = (text, { voice = GEMINI_DEFAULT_VOICE, model = GEMI
   generation_config: { speech_config: [{ voice }] },
   stream: true,
 });
+
+// What keeps a conversation model reading instead of answering. It also hands the language to the model, which picks it
+// up from each turn on its own: no language code is sent, because Live has none to send for output.
+export const GEMINI_LIVE_INSTRUCTION = [
+  'You are the voice of JARVIS: you read aloud, word for word, the text you are sent.',
+  'Never answer it, comment on it, greet, introduce or add a word of your own, and never read these instructions.',
+  'Speak in the language the text is written in - Arabic, English, or a mix of both - with the feeling its cues ask for.',
+].join(' ');
+
+// The first message on the socket: the model, that only audio comes back, the voice, and what it is for.
+// contextWindowCompression keeps one long reply from carrying every earlier sentence as context for the next.
+export const liveSetup = (voice = GEMINI_DEFAULT_VOICE, model = GEMINI_LIVE_MODEL) => ({
+  setup: {
+    model: `models/${model}`,
+    generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+    systemInstruction: { parts: [{ text: GEMINI_LIVE_INSTRUCTION }] },
+    contextWindowCompression: { slidingWindow: {} },
+  },
+});
+
+// One sentence to read: a complete user turn, so the model starts speaking it straight away.
+export const liveTurn = (text) => ({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } });
 
 /** Is the key good? Never throws. Same answer shape as fishAccount; Gemini has no credit to read. */
 export async function geminiAccount(key, { fetchImpl = fetch, timeout = 6000 } = {}) {
@@ -206,5 +239,154 @@ export class GeminiVoice {
     this.close();
     err.heard = this.heard;
     this.onError?.(err);
+  }
+}
+
+/**
+ * Gemini Live: one realtime socket per reply, each sentence sent as its own turn as it's ready and the audio handed on
+ * the moment it arrives (no waiting for a whole sentence to be rendered). Same shape as GeminiVoice and FishVoice, so
+ * the speaker can use any of them: open(), say(text), end(), abort(), onAudio/onEnd/onError.
+ * Unlike the TTS models it is a conversation model, so the first message tells it to read the text and nothing else,
+ * and the language is left to it (a reply in Arabic is read in Arabic, in the voice picked).
+ */
+export class GeminiLiveVoice {
+  constructor({ key, voice = GEMINI_DEFAULT_VOICE, model = GEMINI_LIVE_MODEL, WebSocketImpl = globalThis.WebSocket, onAudio, onEnd, onError, openTimeout = 8000, audioTimeout = 10000 }) {
+    Object.assign(this, { key, voice, model, WebSocketImpl, onAudio, onEnd, onError, openTimeout, audioTimeout });
+    this.state = 'open'; // open → ending → done
+    this.ready = false; // setupComplete has arrived: turns can go out
+    this.queue = []; // sends waiting for the setup to be acknowledged
+    this.said = 0; // turns sent (one per sentence)
+    this.finished = 0; // turns the model has read back
+    this.heard = false;
+    this.odd = null; // a sample's other byte, when a frame ends mid-sample
+    this.timer = null;
+    this.refused = null; // { status } when the server sent an error before closing
+    this.ws = null;
+  }
+
+  open() {
+    try {
+      this.ws = new this.WebSocketImpl(`${GEMINI_LIVE_API}?key=${encodeURIComponent(this.key)}`);
+    } catch (e) {
+      this.fail(e);
+      return this;
+    }
+    const ws = this.ws;
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => { try { this.ws.send(JSON.stringify(liveSetup(this.voice, this.model))); } catch { /* socket gone */ } this.arm('Gemini Live did not open', this.openTimeout); };
+    ws.onmessage = (e) => { this.message(e?.data).catch((err) => this.fail(err)); };
+    ws.onerror = () => this.fail(new Error(this.heard ? 'Gemini Live connection dropped' : 'Could not reach Gemini Live'));
+    // A socket that closes by itself (a limit, a refusal, the network) is a failure unless the reply had already ended.
+    ws.onclose = (e) => {
+      if (this.state === 'done') return;
+      const why = String(e?.reason ?? '').trim().slice(0, 200);
+      const err = new Error(why || (this.heard ? 'Gemini Live connection dropped' : 'Could not reach Gemini Live'));
+      if (this.refused?.status) err.status = this.refused.status;
+      this.fail(err);
+    };
+    return this;
+  }
+
+  say(text) {
+    if (this.state !== 'open') return;
+    const p = plain(text); // the Fish voice cues are ours: Live would read them out
+    if (!/[\p{L}\p{N}]/u.test(p.text.replace(/<[^>]*>/g, ''))) return; // nothing to read ("…", a lone cue or tag)
+    this.said++;
+    this.send(liveTurn(p.text));
+    this.arm('Gemini Live stopped sending audio');
+  }
+
+  end() {
+    if (this.state !== 'open') return;
+    this.state = 'ending';
+    this.drain();
+  }
+
+  abort() { this.close(); }
+
+  // Out now if the session is set up, else in order once setupComplete arrives.
+  send(m) {
+    if (this.state === 'done') return;
+    const s = JSON.stringify(m);
+    if (this.ready && this.ws?.readyState === 1) this.ws.send(s);
+    else this.queue.push(s);
+  }
+
+  async message(data) {
+    if (this.state === 'done') return;
+    let text = typeof data === 'string' ? data : null;
+    if (text == null && data instanceof ArrayBuffer) text = Buffer.from(data).toString('utf8');
+    else if (text == null && typeof data?.text === 'function') text = await data.text();
+    else if (text == null) text = Buffer.from(data ?? '').toString('utf8');
+    let m;
+    try { m = JSON.parse(text); } catch { return; }
+    if (m.error) {
+      const code = Number(m.error.code);
+      this.refused = { status: code >= 400 && code < 600 ? code : null };
+      throw Object.assign(new Error(`Gemini Live: ${m.error.message ?? 'error'}`), this.refused.status ? { status: this.refused.status } : {});
+    }
+    if (m.setupComplete) {
+      this.ready = true;
+      for (const s of this.queue.splice(0)) this.ws?.send(s);
+      this.arm(this.said ? 'Gemini Live stopped sending audio' : 'Gemini Live did not open');
+      this.drain();
+      return;
+    }
+    const c = m.serverContent;
+    if (!c) return;
+    // A message can carry more than one part; each inline audio part is raw 16-bit PCM at 24 kHz.
+    for (const part of c.modelTurn?.parts ?? []) {
+      const d = part.inlineData?.data;
+      if (!d) continue;
+      const pcm = this.whole(Buffer.from(d, 'base64'));
+      if (!pcm.length) continue;
+      this.heard = true;
+      this.arm('Gemini Live stopped sending audio');
+      this.onAudio?.(pcm);
+    }
+    if (c.turnComplete) { this.finished++; this.drain(); }
+  }
+
+  // One sentence read back is a turn: with every sentence read, an ended reply is over. A reply that produced no audio
+  // at all is a failure, not a silent success (the speaker retries it on another model).
+  drain() {
+    if (this.state !== 'ending' || this.finished < this.said) return;
+    if (this.said && !this.heard) return this.fail(new Error('Gemini Live sent no audio'));
+    this.close();
+    this.onEnd?.();
+  }
+
+  // A sample is 2 bytes; a frame can end mid-sample, so carry the odd byte into the next one.
+  whole(b) {
+    if (this.odd != null) { b = Buffer.concat([Buffer.from([this.odd]), b]); this.odd = null; }
+    if (b.length % 2) { this.odd = b[b.length - 1]; b = b.subarray(0, b.length - 1); }
+    return b;
+  }
+
+  arm(why, ms = this.audioTimeout) {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.fail(new Error(why)), ms);
+    this.timer.unref?.();
+  }
+
+  close() {
+    if (this.state === 'done') return;
+    this.state = 'done';
+    clearTimeout(this.timer);
+    try { this.ws?.close(); } catch { /* already closed */ }
+  }
+
+  fail(err) {
+    if (this.state === 'done') return;
+    this.close();
+    err.heard = this.heard;
+    this.onError?.(err);
+  }
+}
+
+/** The Gemini voice for a reply: Live (a socket, a turn per sentence) or one of the exact-reading models. */
+export class GeminiSpeaker {
+  constructor(o = {}) {
+    return isLiveModel(o.model ?? GEMINI_LIVE_MODEL) ? new GeminiLiveVoice(o) : new GeminiVoice(o);
   }
 }

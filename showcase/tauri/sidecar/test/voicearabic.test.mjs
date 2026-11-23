@@ -63,14 +63,17 @@ const fish = (opts = {}) => {
   const start = ws.sent.find((m) => m.event === 'start').request;
   assert.equal(start.reference_id, 'arabic-voice');
   assert.equal(start.language, 'ar', "Fish's numbers and dates are normalized per language");
+  v.abort();
 }
 { // English (and mixed text, where Fish detects each chunk itself) sends no language.
   const { v } = fish();
   v.say('Hello there.');
   FakeWS.last.open();
   assert.equal('language' in FakeWS.last.sent.find((m) => m.event === 'start').request, false);
+  v.abort();
   const m = fish(); m.v.say('مرحبا, how are you?'); FakeWS.last.open();
   assert.equal('language' in FakeWS.last.sent.find((m) => m.event === 'start').request, false, 'mixed: detected per chunk');
+  m.v.abort();
 }
 
 // A fake VoiceStudio socket: one request per sentence, each with its own voice.
@@ -91,6 +94,7 @@ class FakeWS2 {
   v.say('Hello.');
   assert.deepEqual(FakeWS2.last.sent.map((m) => m.voice), ['ar-profile', undefined], 'no voice means the engine default');
   assert.deepEqual(FakeWS2.last.sent.map((m) => m.text), ['مرحبا بك.', 'Hello.']);
+  v.abort();
 }
 
 // The speaker: an engine that can't say Arabic is told once and the reply stays text (never another, paid service).

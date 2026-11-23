@@ -164,7 +164,7 @@ export class StudioVoice {
     return b;
   }
 
-  arm(ms, reason) { this.clear(); this.timer = setTimeout(() => this.fail(reason), ms); }
+  arm(ms, reason) { this.clear(); this.timer = setTimeout(() => this.fail(reason), ms); this.timer?.unref?.(); }
   clear() { clearTimeout(this.timer); this.timer = null; }
 
   close() {

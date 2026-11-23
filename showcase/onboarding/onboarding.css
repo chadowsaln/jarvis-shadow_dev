@@ -125,10 +125,16 @@ body {
   background: var(--fill);
   border: var(--bw) solid var(--bc);
   border-radius: 12px;
-  transition: background-color .15s var(--ease), border-color .15s var(--ease), transform .15s var(--ease);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: background-color .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease), transform .15s var(--ease);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18), inset 0 0 1px rgba(120, 255, 226, 0.12);
 }
-.px:focus-visible, .px:has(:focus-visible) { --bc: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.px:hover {
+  --bc: var(--line-hi);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.24), 0 0 12px rgba(0, 240, 255, 0.08);
+}
+.px:focus-visible, .px:has(:focus-visible) { --bc: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 16px rgba(120, 255, 226, 0.35); }
 
 /* An LED status light: a lit square with a soft glow. */
 .led { display: inline-block; flex: none; width: 8px; height: 8px; background: #1e3f3d; }
@@ -209,14 +215,14 @@ h2 { margin: 0; font: 700 13px/1.35 var(--mono); font-stretch: 87.5%; color: var
   appearance: none; border: 0; padding: 10px 16px; cursor: pointer; color: var(--ink);
   font: 700 12px/1.25 var(--mono); font-stretch: 87.5%; letter-spacing: 0.06em; text-transform: uppercase;
 }
-.btn.primary { --bc: var(--accent); --fill: var(--accent); color: var(--accent-ink); }
-.btn.primary:hover { --bc: var(--accent-hi); --fill: var(--accent-hi); }
-.btn.primary:active { --fill: var(--accent-lo); }
-.btn.primary:disabled { --bc: #1c3634; --fill: #1c3634; color: #7f9f9a; cursor: default; }
+.btn.primary { --bc: var(--accent); --fill: var(--accent); color: var(--accent-ink); box-shadow: 0 0 12px rgba(120, 255, 226, 0.35); }
+.btn.primary:hover { --bc: var(--accent-hi); --fill: var(--accent-hi); box-shadow: 0 0 18px rgba(120, 255, 226, 0.6); }
+.btn.primary:active { --fill: var(--accent-lo); box-shadow: 0 0 8px rgba(120, 255, 226, 0.4); }
+.btn.primary:disabled { --bc: #1c3634; --fill: #1c3634; color: #7f9f9a; cursor: default; box-shadow: none; }
 .btn.ghost { --bc: var(--line-hi); }
-.btn.ghost:hover { --bc: var(--line-hot); }
+.btn.ghost:hover { --bc: var(--line-hot); box-shadow: 0 0 10px rgba(79, 191, 169, 0.25); }
 .btn.ghost:active { --fill: #0d2e2e; }
-.btn.ghost:disabled { --bc: var(--line); color: var(--ink-3); cursor: default; }
+.btn.ghost:disabled { --bc: var(--line); color: var(--ink-3); cursor: default; box-shadow: none; }
 .btn.text { background: transparent; color: var(--ink-2); padding-inline: 4px; }
 .btn.text:hover { color: var(--ink); }
 .btn.text:disabled { visibility: hidden; }

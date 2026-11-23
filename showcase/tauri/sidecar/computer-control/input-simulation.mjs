@@ -93,6 +93,14 @@ class YdotoolBackend {
     } else {
       let stat = null;
       try { stat = fs.statSync(this.socket); } catch { /* missing */ }
+      if (!stat || !stat.isSocket() || !(await this._socketAnswers())) {
+        // Attempt auto-start via systemctl or daemon
+        try {
+          await run('systemctl', ['--user', 'start', 'ydotoold']);
+          await sleep(200);
+          try { stat = fs.statSync(this.socket); } catch { /* still missing */ }
+        } catch { /* systemctl unavailable or failed */ }
+      }
       if (!stat) {
         result = unavail(`ydotoold is not listening: ${this.socket} does not exist.`, YDOTOOL_REMEDIATION);
       } else if (!stat.isSocket()) {

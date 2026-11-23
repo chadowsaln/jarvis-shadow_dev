@@ -16,6 +16,7 @@ import {
   signOutOfClaudeCode, storageKeyProvider,
 } from '@kenkaiiii/gg-core';
 import { discoverOpenRouterModels, openRouterModelInfo, validateOpenRouterKey } from './openrouter.mjs';
+import { discoverGeminiModels, seedEnvGeminiKey, validateGeminiKey } from './google-aistudio.mjs';
 import { execFile, execFileSync, fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -43,7 +44,7 @@ import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mj
 import { createSpeaker } from './speaker.mjs';
 import { arabicSupport } from './lang.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
-import { GEMINI_CHOICES, GEMINI_DEFAULT_VOICE, GEMINI_LOOK_VOICES, GEMINI_MODEL, GEMINI_VOICES } from './gemini.mjs';
+import { GEMINI_CHOICES, GEMINI_DEFAULT_VOICE, GEMINI_LIVE_MODEL, GEMINI_LOOK_VOICES, GEMINI_VOICES } from './gemini.mjs';
 import { STT_MODEL, STT_MODELS, sttAccount, transcribe } from './stt.mjs';
 import { createSecrets, retryLoad, runInput } from './secrets.mjs';
 import { initRespan, respanStatus, startRequestTrace, endRequestTrace, recordLlmTurn, recordToolCall, recordAgentStep, flushRespan, shutdownRespan, gatewayTarget } from './respan.mjs';
@@ -127,7 +128,7 @@ const DEFAULT_KEYS = process.platform === 'win32'
   ? { talk: ['control', 'option'], talkKey: '', summon: 'Control+Shift+KeyS', snap: 'Control+Shift+KeyA', list: 'Control+Shift+KeyL' }
   : { talk: ['control', 'option'], talkKey: '', summon: 'Control+Alt+KeyS', snap: 'Control+Alt+KeyA', list: 'Control+Alt+KeyL' };
 const DEFAULTS = {
-  provider: null, model: null, sound: true, allowActions: false, voice: true,
+  provider: null, model: null, sound: true, allowActions: true, voice: true,
   onboarded: false, onboardStep: 0, filesAsked: false, keys: DEFAULT_KEYS, muteWhileTalking: true, autoListen: false, wakeWord: false, setupVersion: 0, size: 'default', look: 'hybrid', introDone: false,
   replies: 'text', // 'voice': spoken (with Fish Audio or Gemini) as well as shown
   tts: 'fish', // which one speaks: 'fish' (Fish Audio), 'gemini' or 'voicestudio' (the VoiceStudio app on this computer)
@@ -140,7 +141,7 @@ const DEFAULTS = {
   studioVoices: {}, // look → its VoiceStudio voice (a saved profile id; none: the selected engine's default voice)
   fishModel: FISH_CHOICES[0].id, // Drama 3 (most expressive) or S2.1 Pro (natural pace, cheaper)
   geminiVoices: {}, // look → the Gemini voice it speaks in, where picked in the setup guide or the panel (else GEMINI_LOOK_VOICES)
-  geminiModel: GEMINI_MODEL, // Flash Lite (quick, cheaper) or Flash (studio quality)
+  geminiModel: GEMINI_LIVE_MODEL, // Live (speaks as it arrives, reads Arabic itself), or a TTS model that reads exactly
   // How fast the voice plays (1: the service's own pace). Tempo and pitch move together, like a tape.
   speechRate: 1,
   // Hearing: 'local' (the Mac's own recognizer, or Parakeet on Windows and Linux) or 'gemini' (its transcription
@@ -211,11 +212,20 @@ let openrouterModels = { models: [], status: 'idle', error: null };
 let config = { ...DEFAULTS };
 let diagnosing = false; // a diagnostics file is being made (diagnostics.mjs)
 let shellInfo = null; // resolves the shell's reply to it: screens, tray, panel, helpers, permissions, microphones
+let migratedConfig = false; // a saved setting was moved to its new home: written back once
 {
   const saved = readJson(CONFIG_PATH, { backup: true }); // an unreadable file is set aside, never overwritten
   if (saved && typeof saved === 'object' && !Array.isArray(saved)) config = { ...DEFAULTS, ...saved };
   // Only the hybrid look remains: migrate any saved (removed) look to it.
   if (config.look !== 'hybrid') config.look = 'hybrid';
+  // Gemini's voice is Live now: it speaks each sentence as it arrives and reads Arabic (or any language) without a
+  // voice picked for it. A model saved before this moves once; the exact-reading models stay in the list for anyone
+  // who picks one on purpose.
+  if (!config.geminiLiveVoice) {
+    config.geminiModel = GEMINI_LIVE_MODEL;
+    config.geminiLiveVoice = true;
+    migratedConfig = true;
+  }
   // Before voices were per look: the one picked becomes the current look's.
   for (const [one, each] of [['geminiVoice', 'geminiVoices'], ['studioVoice', 'studioVoices']]) {
     if (!(one in config)) continue;
@@ -224,6 +234,7 @@ let shellInfo = null; // resolves the shell's reply to it: screens, tray, panel,
   }
 }
 const saveConfig = () => writeJson(CONFIG_PATH, config, { backup: true });
+if (migratedConfig) saveConfig(); // so the move happens once, not on every launch
 
 // ---------- spoken replies (Fish Audio, Gemini or VoiceStudio) ----------
 // The key is the user's own: in the Keychain (macOS), DPAPI-encrypted (Windows) or the desktop's keyring (Linux),
@@ -637,6 +648,7 @@ const signedIn = new Map();
 // of key (keyCards' ids): Kimi and Xiaomi each take a plan key and a pay-per-token key, saved apart.
 const oauthOn = new Map(), keyOn = new Map(), storedKeys = new Set();
 async function refreshAuth() {
+  await seedEnvGeminiKey(auth).catch(() => {});
   for (const p of MENU_PROVIDERS) signedIn.set(p, await auth.hasProviderAuth(p).catch(() => false));
   for (const p of Object.keys(OAUTH)) {
     oauthOn.set(p, p === 'anthropic' ? await auth.hasClaudeCodeLogin().catch(() => false) : await auth.hasCredentials(dualAuthProvider(p)?.oauthKey ?? p).catch(() => false));
@@ -647,6 +659,29 @@ async function refreshAuth() {
     for (const k of apiKeyStorageKeys(meta.value)) if (await auth.hasCredentials(k).catch(() => false)) storedKeys.add(k); else storedKeys.delete(k);
   }
   if (await auth.hasCredentials(OLLAMA_KEY).catch(() => false)) storedKeys.add(OLLAMA_KEY); else storedKeys.delete(OLLAMA_KEY);
+}
+// Discover Google AI Studio's model catalog from https://generativelanguage.googleapis.com/v1beta/models using the saved key.
+let geminiModels = { models: [], status: 'idle', error: null };
+async function refreshGeminiModels() {
+  const meta = AUTH_PROVIDERS.find((p) => p.value === 'gemini');
+  if (!meta || !meta.methods?.includes('apikey')) { geminiModels = { models: [], status: 'idle', error: null }; return; }
+  const keyId = meta.apiKeyVariants?.[0]?.key ?? 'gemini-api';
+  if (!storedKeys.has(keyId)) { geminiModels = { models: [], status: 'idle', error: null }; return; }
+  const c = await auth.getCredentials(keyId).catch(() => null);
+  if (!c?.accessToken) { geminiModels = { models: [], status: 'idle', error: null }; return; }
+  geminiModels.status = 'loading'; geminiModels.error = null;
+  try {
+    const models = await discoverGeminiModels(c.accessToken);
+    geminiModels.models = models;
+    geminiModels.status = 'ready'; geminiModels.error = null;
+    registerRuntimeModels(models.map((m) => ({ ...m, provider: 'gemini' })));
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    geminiModels.models = [];
+    geminiModels.status = 'failed';
+    geminiModels.error = msg;
+  }
+  menu(); panel();
 }
 // Discover OpenRouter's model catalog from https://openrouter.ai/api/v1/models using the saved key.
 // Called at startup, when an OpenRouter key is saved, when the panel opens, and on retry.
@@ -717,9 +752,13 @@ async function connectOllama() {
 // Some models run on only one kind of key (Kimi K2.8 Preview on a Kimi Code plan key, MiMo UltraSpeed on API Credits).
 const canRun = (p, id) => {
   if (!signedIn.get(p)) return false;
-  // For OpenRouter with discovered models: any model in the catalog is runnable if the key is saved.
+  // For OpenRouter or Gemini with discovered models: any model in the catalog is runnable if the key is saved.
   if (p === 'openrouter' && openrouterModels.status === 'ready') {
     const inCatalog = openrouterModels.models.some((m) => m.id === id);
+    if (inCatalog) return true;
+  }
+  if (p === 'gemini' && geminiModels.status === 'ready') {
+    const inCatalog = geminiModels.models.some((m) => m.id === id);
     if (inCatalog) return true;
   }
   return getAuthStorageKeys(p, id).some((k) => k === p || storedKeys.has(k));
@@ -727,6 +766,9 @@ const canRun = (p, id) => {
 const runnable = (p) => {
   if (p === 'openrouter' && openrouterModels.status === 'ready') {
     return openrouterModels.models.filter((m) => canRun(p, m.id));
+  }
+  if (p === 'gemini' && geminiModels.status === 'ready') {
+    return geminiModels.models.filter((m) => canRun(p, m.id));
   }
   return getModelsForProvider(p).filter((m) => canRun(p, m.id));
 };
@@ -743,6 +785,15 @@ function ensureModel() {
       const inCatalog = openrouterModels.models.some((m) => m.id === config.model);
       if (inCatalog) return true;
     } else if (signedIn.get('openrouter')) {
+      return true;
+    }
+  }
+  // Google AI Studio: validate against discovered catalog if available, else keep pick if key is saved.
+  if (config.provider === 'gemini') {
+    if (geminiModels.status === 'ready') {
+      const inCatalog = geminiModels.models.some((m) => m.id === config.model);
+      if (inCatalog) return true;
+    } else if (signedIn.get('gemini')) {
       return true;
     }
   }
@@ -975,7 +1026,7 @@ Name apps and things the way ${userName} knows them (Gmail, the Downloads folder
 When you write as ${userName} (an email, a message, a post, a form answer), sound like them, plain and in their words, never like you: no cheekiness, emoji or tags in it.
 Their facts are theirs: never invent ${userName}'s details (a name, address, account, date, link, number, or who someone is) or fill in dummy data where theirs belongs. Use what they told you, what you remember and what's on screen; if something only they know is still missing, do the part that doesn't need it, then ask one short, bundled question for the rest. On a small ambiguity, take the likeliest reading and go.
 Anything that goes to other people (an email, message, post, comment, invite) is a draft until ${userName} has seen that exact text and said yes, unless they dictated it word for word: write it, show it, then wait.
-You can really help: look at the screen or just one app's window, open apps, websites and files, read and search files, search the web (web_search) and read pages (web_fetch, with offset to read on), and, when the user has allowed it, write files, run shell commands${CONTROL_PHRASE}. Whether that's allowed right now is in the <live-state> block.
+You can really help: look at the screen or just one app's window, open apps, websites and files, read and search files, search the web (web_search) and read pages (web_fetch, with offset to read on), and, when the user has allowed it, write files, run shell commands${CONTROL_PHRASE}. You understand Arabic and English commands seamlessly: when ${userName} asks in Arabic or English to control the computer (e.g., "افتح المتصفح", "ابحث عن...", "اضغط على...", "اكتب...", "التقط الشاشة"), execute the appropriate tools directly to fulfill the request. Whether that's allowed right now is in the <live-state> block.
 When you need to see a specific app they mention ("my browser", "this form", "Figma"), screenshot just that app, not the whole screen.
 Show, don't just tell. When they ask how to do something in an app (${process.platform === 'darwin' ? '"how do I add a layer mask"' : 'a how-to'}), walk them through it with draw (one call, a beat per step). When they ask what they're looking at or where something is, mark it on screen with draw (ring, frame, label, point) instead of describing where it is. When they ask you to explain, compare or teach something, draw it without being asked: the picture goes on cards beside their window while you say the short version. Pick the card by the question. How something works or happens: a model with moving parts for a physical thing (an engine, a piston, a heart, a pulley), with a flow beside it only when it also runs in stages; a flow for a process, a chain of causes or a decision (how a bill becomes law, what happens when a page loads). Comparing two or more things: table. How many, how much, biggest or fastest: bars (graph for a curve or a change over time). Where a place is: map. When, in what order, the history of something: timeline. Solving or working out maths: math, a step per line (geometry for a figure with angles or lengths). The parts of a thing ("the parts of a guitar"): see_photo, then a photo with labels. "Test me" or "quiz me": quiz. A compound: molecule. One or two cards per answer, the ones that carry it, and never the same content again as "- " points. Don't draw for a quick fact (a date, a capital, a score, a definition in a sentence), an opinion or advice, small talk, a yes or no, anything they asked for in one line or one sentence, or when they say not to: those are just said. Before you call draw, write one short line first: the answer to anything they said or asked besides the drawing ("I'm good, thanks!"), or what you're about to show. It's said while the drawing is made, so they hear you straight away and in order. After draw, add one short new line (a question, what comes next) or nothing.
 Be fast: every tool call is a round trip, so use as few as the task needs. To point at or click something whose exact words you know (the user said them, or you've seen them), use draw or act_in_app click_text with that text right away, with no read_window or screenshot first. Don't guess words: for "the version number" or "the settings icon" you don't know what's written, so look first. read_window and act_in_app results include the text on screen, so read pages from them; screenshot only when you need to see something words can't tell you (images, layout, colours).
@@ -1758,10 +1809,21 @@ async function apiKeyLogin(id, given) {
     }
     logLine('openrouter_key_ok', { models: check.models.length, skipped: check.skipped });
   }
+  if (provider === 'gemini') {
+    const check = await validateGeminiKey(key.trim());
+    if (!check.ok) {
+      logLine('gemini_key_rejected', { reason: check.reason, status: check.status ?? null });
+      throw new Error(check.reason === 'key' ? 'gemini_invalid_key'
+        : check.reason === 'rate_limited' ? 'gemini_rate_limited'
+        : `gemini_${check.status ?? 0}`);
+    }
+    logLine('gemini_key_ok', { models: check.models.length, skipped: check.skipped });
+  }
   await auth.setCredentials(variant?.key ?? provider, { accessToken: key.trim(), refreshToken: '', expiresAt: Date.now() + 100 * 365 * 864e5, ...(baseUrl ? { baseUrl } : {}) });
   await refreshAuth(); ensureModel(); agent = null;
-  // Discover OpenRouter's models once its key is saved, so they show in the Model page right away.
+  // Discover OpenRouter or Gemini models once key is saved, so they show in the Model page right away.
   if (provider === 'openrouter') await refreshOpenRouterModels().catch(() => {});
+  if (provider === 'gemini') await refreshGeminiModels().catch(() => {});
   // A Gemini key for the AI speaks too, unless the voice has a key of its own.
   if (provider === 'gemini') await syncGeminiVoiceKey();
   menu();
@@ -2447,6 +2509,7 @@ async function onMenu(id, via) {
     say(`Switched to ${getModel(config.model)?.name ?? config.model}.`, 'happy');
     if (p === 'local') measureLocal(config.model).catch(() => {});
   } else if (id === 'openrouter_retry') { await refreshOpenRouterModels(); say('OpenRouter models refreshed.', 'happy'); }
+  else if (id === 'gemini_retry') { await refreshGeminiModels(); say('Gemini models refreshed.', 'happy'); }
   else if (id.startsWith('login:')) oauthLogin(id.slice(6));
   else if (id.startsWith('key:')) apiKeyLogin(id.slice(4)).catch((e) => { const p = problem('key', e, { store: KEY_STORE }); panelNote(p.text, true, p); });
   else if (id.startsWith('signout:')) signOut(id.slice(8));
@@ -2799,7 +2862,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   else if (m.type === 'panel_open') {
     panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); requestMics();
-    Promise.all([refreshAuth(), signedIn.get('local') && syncLocal(), tts().local && speech.checkLocal()]).then(() => { if (signedIn.get('openrouter')) return refreshOpenRouterModels(); }).catch(() => {}).finally(() => panel());
+    Promise.all([refreshAuth(), signedIn.get('local') && syncLocal(), tts().local && speech.checkLocal()]).then(() => {
+      if (signedIn.get('openrouter')) refreshOpenRouterModels().catch(() => {});
+      if (signedIn.get('gemini')) refreshGeminiModels().catch(() => {});
+    }).catch(() => {}).finally(() => panel());
     // A new panel page has no memory of a dialog that was asked for while it was closed: show it again, as it is.
     if (agentCoreApprovals?.pendingCount()) setImmediate(() => { if (panelOpen) agentCoreApprovals.resend(); });
   }
@@ -2970,6 +3036,7 @@ await refreshAuth();
 if (signedIn.get('local')) await syncLocal();
 // Provider/model catalog refresh must not block sidecar startup or desktop readiness.
 if (signedIn.get('openrouter')) refreshOpenRouterModels().catch(() => {}); else emitProviderStatus('unknown');
+if (signedIn.get('gemini')) refreshGeminiModels().catch(() => {});
 ensureModel();
 // The first request after launch gets a warm Claude Code too.
 if (config.onboarded) warmUp();
