@@ -133,7 +133,11 @@ class ATSPIDriver {
 
   async connect() {
     if (this.bus) return this;
-    this.bus = quiet(await this.connectBus());
+    try {
+      this.bus = quiet(await this.connectBus());
+    } catch {
+      this.bus = null;
+    }
     return this;
   }
 
@@ -306,18 +310,23 @@ class ATSPIDriver {
     const cached = this._cacheGet('apps');
     if (cached) return cached;
     if (!this.bus) await this.connect();
-    const refs = await this._readChildren(REGISTRY_BUS, REGISTRY_PATH);
-    const apps = [];
-    for (const [busName, path] of refs) {
-      try {
-        const name = String(unwrap(await this._prop(busName, path, ACCESSIBLE_IFACE, 'Name')) ?? '');
-        const toolkitName = String(unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'ToolkitName')) ?? '');
-        const version = String(unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'ToolkitVersion')) ?? unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'Version')) ?? '');
-        const pid = await this._pid(busName);
-        if (name || toolkitName) apps.push({ name, path: String(path), busName: String(busName), pid, toolkitName, version });
-      } catch { /* an app that vanished between listing and reading */ }
+    if (!this.bus) return this._cacheSet('apps', []);
+    try {
+      const refs = await this._readChildren(REGISTRY_BUS, REGISTRY_PATH);
+      const apps = [];
+      for (const [busName, path] of refs) {
+        try {
+          const name = String(unwrap(await this._prop(busName, path, ACCESSIBLE_IFACE, 'Name')) ?? '');
+          const toolkitName = String(unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'ToolkitName')) ?? '');
+          const version = String(unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'ToolkitVersion')) ?? unwrap(await this._prop(busName, path, APPLICATION_IFACE, 'Version')) ?? '');
+          const pid = await this._pid(busName);
+          if (name || toolkitName) apps.push({ name, path: String(path), busName: String(busName), pid, toolkitName, version });
+        } catch { /* an app that vanished between listing and reading */ }
+      }
+      return this._cacheSet('apps', apps);
+    } catch {
+      return this._cacheSet('apps', []);
     }
-    return this._cacheSet('apps', apps);
   }
 
   async getWindowList() {

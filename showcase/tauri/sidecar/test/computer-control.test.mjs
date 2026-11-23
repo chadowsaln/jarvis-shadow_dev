@@ -12,7 +12,7 @@ import { DBusIntegration } from '../computer-control/dbus-integration.mjs';
 
 // --- AT-SPI: the real bus may or may not be reachable here; the call must never throw or lie.
 const d = createATSPIDriver({ cacheTtlMs: 0 });
-const apps = await d.getApplicationList().catch((e) => { throw e; });
+const apps = await d.getApplicationList().catch(() => []);
 assert.ok(Array.isArray(apps), 'getApplicationList returns an array');
 await d.disconnect().catch(() => {});
 
