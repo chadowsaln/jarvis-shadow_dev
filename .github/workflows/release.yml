@@ -98,7 +98,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           [[ "$TAG" == v* ]] || TAG="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Roamies $TAG" --generate-notes || true
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "JARVIS V2 $TAG" --generate-notes || true
           shopt -s nullglob
           B=src-tauri/target/${{ matrix.target }}/release/bundle
           files=($B/appimage/*.AppImage)
@@ -144,9 +144,10 @@ jobs:
               console.error("No signed Linux AppImage on this release: leaving its latest.json alone.");
               process.exit(1);
             }
-            const out = { version: VER, notes: `Roamies ${VER}`, pub_date: new Date().toISOString(), platforms: {} };
+            const out = { version: VER, notes: `JARVIS V2 ${VER}`, pub_date: new Date().toISOString(), platforms: {} };
             for (const [k, f] of Object.entries(platforms)) out.platforms[k] = { signature: sig(f + ".sig"), url: link(f) };
             fs.writeFileSync("latest.json", JSON.stringify(out, null, 2));
           '
           cat latest.json
           gh release upload "$TAG" latest.json --clobber
+          gh release edit "$TAG" --draft=false
