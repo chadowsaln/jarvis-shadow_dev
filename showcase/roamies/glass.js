@@ -6,42 +6,94 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
   const GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', CORAL = '#ff8a7a', NOTE = '#e9a196';
-  const MONO = '"Martian Mono", ui-monospace, monospace';
+  const SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Arabic", "Cairo", sans-serif';
+  const MONO = SANS;
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const rgba = (h, a) => `rgba(${hex(h).join(',')},${a})`;
 
-  // The outline, clockwise from the top-left; tail: { side: 'top'|'right'|'bottom'|'left', at, to: [x, y] } adds a
-  // stepped tail on that side, centred at `at` along it and stepping toward the point `to`.
-  function stepped(x, y, w, h, c = 8, tail = null) {
-    const s = c / 2, b = y + h, r = x + w;
-    const pts = [[x + c, y], [r - c, y], [r - c, y + s], [r - s, y + s], [r - s, y + c], [r, y + c], [r, b - c], [r - s, b - c], [r - s, b - s], [r - c, b - s], [r - c, b],
-      [x + c, b], [x + c, b - s], [x + s, b - s], [x + s, b - c], [x, b - c], [x, y + c], [x + s, y + c], [x + s, y + s], [x + c, y + s]];
-    if (!tail) return pts;
-    // Each side as the path walks it: where it starts, its direction, its outward normal, and the point it follows.
-    const SIDE = { top: [[x, y], [1, 0], [0, -1], 0], right: [[r, y], [0, 1], [1, 0], 5], bottom: [[r, b], [-1, 0], [0, 1], 10], left: [[x, b], [0, -1], [-1, 0], 15] }[tail.side];
-    if (!SIDE) return pts;
-    const [o, e, n, after] = SIDE, len = Math.abs(e[0]) ? w : h;
-    // Position along the walked side, kept clear of the corners.
-    const w0 = tail.w ?? 12, along = clamp(Math.abs(e[0]) ? (tail.at - o[0]) * e[0] : (tail.at - o[1]) * e[1], c + w0 / 2 + 2, len - c - w0 / 2 - 2);
+  // Smooth rounded rectangle with optional speech bubble pointer tail
+  function stepped(x, y, w, h, c = 10, tail = null) {
+    const r = clamp(c || 10, 4, Math.min(w, h) / 2);
+    const b = y + h, right = x + w;
+    if (!tail) {
+      return [
+        [x + r, y], [right - r, y], [right, y + r], [right, b - r],
+        [right - r, b], [x + r, b], [x, b - r], [x, y + r]
+      ];
+    }
+    const SIDE = { top: [[x, y], [1, 0], [0, -1]], right: [[right, y], [0, 1], [1, 0]], bottom: [[right, b], [-1, 0], [0, 1]], left: [[x, b], [0, -1], [-1, 0]] }[tail.side];
+    if (!SIDE) return [[x + r, y], [right - r, y], [right, b - r], [x + r, b]];
+    const [o, e, n] = SIDE, len = Math.abs(e[0]) ? w : h;
+    const w0 = tail.w ?? 14, along = clamp(Math.abs(e[0]) ? (tail.at - o[0]) * e[0] : (tail.at - o[1]) * e[1], r + w0 / 2 + 2, len - r - w0 / 2 - 2);
     const base = [o[0] + e[0] * along, o[1] + e[1] * along];
     const to = tail.to ?? [base[0] + n[0] * 14, base[1] + n[1] * 14];
-    const depth = clamp((to[0] - base[0]) * n[0] + (to[1] - base[1]) * n[1], 6, tail.max ?? 18), shift = (to[0] - base[0]) * e[0] + (to[1] - base[1]) * e[1];
-    const hs = depth / 3, ws = [w0, w0 * 0.66, w0 * 0.33], ds = [0, shift * 0.45, shift * 0.8];
-    const P = (a, d) => [base[0] + e[0] * a + n[0] * d, base[1] + e[1] * a + n[1] * d];
-    const t = [P(-ws[0] / 2, 0), P(-ws[0] / 2, hs), P(ds[1] - ws[1] / 2, hs), P(ds[1] - ws[1] / 2, 2 * hs), P(ds[2] - ws[2] / 2, 2 * hs), P(ds[2] - ws[2] / 2, 3 * hs),
-      P(ds[2] + ws[2] / 2, 3 * hs), P(ds[2] + ws[2] / 2, 2 * hs), P(ds[1] + ws[1] / 2, 2 * hs), P(ds[1] + ws[1] / 2, hs), P(ws[0] / 2, hs), P(ws[0] / 2, 0)];
-    pts.splice(after + 1, 0, ...t);
-    return pts;
+    const t0 = [base[0] - e[0] * (w0 / 2), base[1] - e[1] * (w0 / 2)];
+    const t1 = [to[0], to[1]];
+    const t2 = [base[0] + e[0] * (w0 / 2), base[1] + e[1] * (w0 / 2)];
+    return [[x + r, y], [right - r, y], [right, b - r], t0, t1, t2, [x + r, b], [x, y + r]];
   }
-  const steppedPath = (x, y, w, h, c, tail) => { const p = new Path2D(); stepped(x, y, w, h, c, tail).forEach((q, i) => (i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1]))); p.closePath(); return p; };
 
-  // Dark glass with a soft shadow, the accent edge with its glow, and a glint along the top.
+  function steppedPath(x, y, w, h, c = 10, tail = null) {
+    const p = new Path2D();
+    const r = clamp(c || 10, 4, Math.min(w, h) / 2);
+    const right = x + w, b = y + h;
+    if (!tail) {
+      if (typeof p.roundRect === 'function') {
+        p.roundRect(x, y, w, h, r);
+      } else {
+        p.moveTo(x + r, y);
+        p.lineTo(right - r, y); p.arcTo(right, y, right, y + r, r);
+        p.lineTo(right, b - r); p.arcTo(right, b, right - r, b, r);
+        p.lineTo(x + r, b); p.arcTo(x, b, x, b - r, r);
+        p.lineTo(x, y + r); p.arcTo(x, y, x + r, y, r);
+        p.closePath();
+      }
+      return p;
+    }
+    const SIDE = { top: [[x, y], [1, 0], [0, -1]], right: [[right, y], [0, 1], [1, 0]], bottom: [[right, b], [-1, 0], [0, 1]], left: [[x, b], [0, -1], [-1, 0]] }[tail.side];
+    if (!SIDE) {
+      if (typeof p.roundRect === 'function') p.roundRect(x, y, w, h, r);
+      return p;
+    }
+    const [o, e, n] = SIDE, len = Math.abs(e[0]) ? w : h;
+    const w0 = tail.w ?? 14, along = clamp(Math.abs(e[0]) ? (tail.at - o[0]) * e[0] : (tail.at - o[1]) * e[1], r + w0 / 2 + 2, len - r - w0 / 2 - 2);
+    const base = [o[0] + e[0] * along, o[1] + e[1] * along];
+    const to = tail.to ?? [base[0] + n[0] * 14, base[1] + n[1] * 14];
+    const t0 = [base[0] - e[0] * (w0 / 2), base[1] - e[1] * (w0 / 2)];
+    const t1 = [to[0], to[1]];
+    const t2 = [base[0] + e[0] * (w0 / 2), base[1] + e[1] * (w0 / 2)];
+
+    p.moveTo(x + r, y);
+    if (tail.side === 'top') {
+      p.lineTo(t0[0], y); p.lineTo(t1[0], t1[1]); p.lineTo(t2[0], y);
+    }
+    p.lineTo(right - r, y); p.arcTo(right, y, right, y + r, r);
+    if (tail.side === 'right') {
+      p.lineTo(right, t0[1]); p.lineTo(t1[0], t1[1]); p.lineTo(right, t2[1]);
+    }
+    p.lineTo(right, b - r); p.arcTo(right, b, right - r, b, r);
+    if (tail.side === 'bottom') {
+      p.lineTo(t2[0], b); p.lineTo(t1[0], t1[1]); p.lineTo(t0[0], b);
+    }
+    p.lineTo(x + r, b); p.arcTo(x, b, x, b - r, r);
+    if (tail.side === 'left') {
+      p.lineTo(x, t2[1]); p.lineTo(t1[0], t1[1]); p.lineTo(x, t0[1]);
+    }
+    p.lineTo(x, y + r); p.arcTo(x, y, x + r, y, r);
+    p.closePath();
+    return p;
+  }
+
+  // Modern dark glass with soft shadow, sleek glowing accent edge and subtle highlight
   function chrome(c, x, y, w, h, o = {}) {
-    const path = o.path || steppedPath(x, y, w, h, o.corner ?? 8, o.tail), edge = o.edge || ACC;
+    const path = o.path || steppedPath(x, y, w, h, o.corner ?? 12, o.tail), edge = o.edge || ACC;
     c.save();
-    c.fillStyle = GLASS; c.shadowColor = 'rgba(0,0,0,0.35)'; c.shadowBlur = 14; c.shadowOffsetY = 4; c.fill(path);
-    c.shadowColor = rgba(edge, 0.7); c.shadowBlur = 8; c.shadowOffsetY = 0; c.strokeStyle = edge; c.lineWidth = 1.5; c.globalAlpha *= 0.9; c.stroke(path);
-    if (o.glint !== false && w > 24) { c.globalAlpha *= 0.6; c.shadowBlur = 0; c.strokeStyle = '#ffffff'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 12, y + 1.5); c.lineTo(x + Math.min(w * 0.45, 90), y + 1.5); c.stroke(); }
+    c.fillStyle = GLASS; c.shadowColor = 'rgba(0,0,0,0.45)'; c.shadowBlur = 16; c.shadowOffsetY = 4; c.fill(path);
+    c.shadowColor = rgba(edge, 0.5); c.shadowBlur = 10; c.shadowOffsetY = 0; c.strokeStyle = edge; c.lineWidth = 1.2; c.stroke(path);
+    if (o.glint !== false && w > 24) {
+      c.globalAlpha *= 0.5; c.shadowBlur = 0; c.strokeStyle = '#ffffff'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x + 14, y + 1.2); c.lineTo(x + Math.min(w * 0.45, 90), y + 1.2); c.stroke();
+    }
     c.restore();
   }
 
@@ -124,5 +176,5 @@
     c.restore();
   }
 
-  R.glass = { ACC, HOT, MID, DEEP, EDGE, GLASS, TEXT, DIM, CORAL, NOTE, MONO, rgba, stepped, steppedPath, chrome, textW, typed, wrapRows, ringPts, pen, chip, chipW, CHIP_H: 23 };
+  R.glass = { ACC, HOT, MID, DEEP, EDGE, GLASS, TEXT, DIM, CORAL, NOTE, MONO, SANS, rgba, stepped, steppedPath, chrome, textW, typed, wrapRows, ringPts, pen, chip, chipW, CHIP_H: 23 };
 })();

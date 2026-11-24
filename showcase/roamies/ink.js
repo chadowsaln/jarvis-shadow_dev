@@ -8,7 +8,10 @@
   if (!R || typeof document === 'undefined') return;
 
   // ---------------------------------------------------------------- look
-  const P = 4, MONO = '"Martian Mono", ui-monospace, monospace', DOTO = '"Doto", "Martian Mono", ui-monospace, monospace';
+  const P = 4;
+  const SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Arabic", "Cairo", sans-serif';
+  const MONO = SANS;
+  const DOTO = SANS;
   const ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
   const GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', INKDARK = '#032722';
   const TONES = { accent: ACC, teal: '#78ffe2', amber: '#ffcf5c', coral: '#ff8a7a', lilac: '#b9a4ff', sky: '#7cc8ff', lime: '#b6f36b', red: '#ff6b6b', white: '#e8fffa' };
@@ -60,12 +63,26 @@
     r = clamp(r, 0, Math.min(w, h) / 2);
     return [...arc(x + w - r, y + r, r, r, -Math.PI / 2, 0, 10), ...arc(x + w - r, y + h - r, r, r, 0, Math.PI / 2, 10), ...arc(x + r, y + h - r, r, r, Math.PI / 2, Math.PI, 10), ...arc(x + r, y + r, r, r, Math.PI, Math.PI * 1.5, 10)];
   }
-  function stepped(x, y, w, h, c = 2 * P) {
-    const s = c / 2;
-    return [[x + c, y], [x + w - c, y], [x + w - c, y + s], [x + w - s, y + s], [x + w - s, y + c], [x + w, y + c], [x + w, y + h - c], [x + w - s, y + h - c], [x + w - s, y + h - s], [x + w - c, y + h - s], [x + w - c, y + h],
-      [x + c, y + h], [x + c, y + h - s], [x + s, y + h - s], [x + s, y + h - c], [x, y + h - c], [x, y + c], [x + s, y + c], [x + s, y + s], [x + c, y + s], [x + c, y]];
+  function roundRectPath(x, y, w, h, r = 12) {
+    const p = new Path2D();
+    r = clamp(r, 0, Math.min(w, h) / 2);
+    if (typeof p.roundRect === 'function') {
+      p.roundRect(x, y, w, h, r);
+    } else {
+      const right = x + w, b = y + h;
+      p.moveTo(x + r, y);
+      p.lineTo(right - r, y); p.arcTo(right, y, right, y + r, r);
+      p.lineTo(right, b - r); p.arcTo(right, b, right - r, b, r);
+      p.lineTo(x + r, b); p.arcTo(x, b, x, b - r, r);
+      p.lineTo(x, y + r); p.arcTo(x, y, x + r, y, r);
+      p.closePath();
+    }
+    return p;
   }
-  const steppedPath = (x, y, w, h, c) => { const p = new Path2D(); stepped(x, y, w, h, c).forEach((q, i) => (i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1]))); return p; };
+  function stepped(x, y, w, h, c = 12) {
+    return roundRect(x, y, w, h, Math.max(c, 10));
+  }
+  const steppedPath = (x, y, w, h, c) => roundRectPath(x, y, w, h, Math.max(c ?? 12, 10));
   function catmull(pts, closed) {
     const Q = closed ? [pts[pts.length - 1], ...pts, pts[0], pts[1]] : [pts[0], ...pts, pts[pts.length - 1]], out = [];
     for (let i = 1; i < Q.length - 2; i++) for (let k = 0; k < 10; k++) {
@@ -246,13 +263,16 @@
     base.save(); base.lineJoin = 'round'; base.lineWidth = 2.5; base.strokeStyle = EDGE; base.stroke(body); base.beginPath(); base.arc(pts[k][0], pts[k][1], ol.hw[k] + 1.2, 0, Math.PI * 2); base.fillStyle = EDGE; base.fill(); base.restore();
     lit.save(); lit.fillStyle = c; lit.fill(body); lit.beginPath(); lit.arc(pts[k][0], pts[k][1], ol.hw[k], 0, Math.PI * 2); lit.arc(pts[0][0], pts[0][1], ol.hw[0], 0, Math.PI * 2); lit.fill(); lit.restore();
   }
-  // Our chrome for cards and chips: stepped corners, dark glass, an accent edge, a glint along the top.
+  // Modern glass chrome for cards and chips: smooth rounded corners, dark glass, glowing accent edge, top glint.
   function chrome(c, x, y, w, h, o = {}) {
-    const path = steppedPath(x, y, w, h, o.corner ?? 2 * P), edge = o.edge || ACC;
+    const path = o.path || steppedPath(x, y, w, h, o.corner ?? 12), edge = o.edge || ACC;
     c.save();
-    c.fillStyle = o.fill || GLASS; c.shadowColor = 'rgba(0,0,0,0.35)'; c.shadowBlur = 14; c.shadowOffsetY = 4; c.fill(path);
-    c.shadowColor = rgba(edge, 0.7); c.shadowBlur = 8; c.shadowOffsetY = 0; c.strokeStyle = edge; c.lineWidth = 1.5; c.globalAlpha *= 0.9; c.stroke(path);
-    c.globalAlpha *= 0.6; c.shadowBlur = 0; c.strokeStyle = '#ffffff'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 3 * P, y + 1.5); c.lineTo(x + Math.min(w * 0.45, 90), y + 1.5); c.stroke();
+    c.fillStyle = o.fill || GLASS; c.shadowColor = 'rgba(0,0,0,0.45)'; c.shadowBlur = 16; c.shadowOffsetY = 4; c.fill(path);
+    c.shadowColor = rgba(edge, 0.5); c.shadowBlur = 10; c.shadowOffsetY = 0; c.strokeStyle = edge; c.lineWidth = 1.2; c.stroke(path);
+    if (o.glint !== false && w > 24) {
+      c.globalAlpha *= 0.5; c.shadowBlur = 0; c.strokeStyle = '#ffffff'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x + 14, y + 1.2); c.lineTo(x + Math.min(w * 0.45, 90), y + 1.2); c.stroke();
+    }
     c.restore();
   }
   // Words typing themselves in; the last couple land white.
@@ -619,9 +639,21 @@
   // The pin button in a card's title bar, centred on (px, py): drawn like the full-screen and close buttons; pinned, it
   // sits on a lit tile (the filled-button look), so the state shows by shape as well as colour.
   function pinIcon(b, px, py, m) {
-    if (m.pinned) { b.fillStyle = m.hoverPin ? HOT : ACC; b.fillRect(px - 10, py - 9, 20, 18); }
-    b.fillStyle = m.pinned ? INKDARK : m.hoverPin ? HOT : DIM;
-    b.fillRect(px - 4, py - 6, 8, 2); b.fillRect(px - 2, py - 4, 4, 4); b.fillRect(px - 5, py, 10, 2); b.fillRect(px - 1, py + 2, 2, 4);
+    if (m.pinned) {
+      b.fillStyle = m.hoverPin ? HOT : ACC;
+      b.fill(roundRectPath(px - 10, py - 9, 20, 18, 5));
+    }
+    b.save();
+    b.strokeStyle = m.pinned ? INKDARK : m.hoverPin ? HOT : DIM;
+    b.lineWidth = 1.3;
+    b.lineCap = 'round';
+    b.beginPath();
+    b.moveTo(px - 4, py - 4); b.lineTo(px + 4, py - 4);
+    b.moveTo(px - 2, py - 4); b.lineTo(px - 2, py + 1);
+    b.lineTo(px + 2, py + 1); b.lineTo(px + 2, py - 4);
+    b.moveTo(px, py + 1); b.lineTo(px, py + 6);
+    b.stroke();
+    b.restore();
   }
   async function card(m, w, h, inner, o = {}) {
     const full = h;
@@ -635,21 +667,46 @@
         if (bar) {
           b.fillStyle = 'rgba(120,255,226,0.06)'; b.fillRect(x + 2, y + 2, w - 4, bar - 2);
           b.fillStyle = DEEP; b.fillRect(x + 2, y + bar, w - 4, 1);
-          [0, 1].forEach((k) => { b.fillStyle = k ? DEEP : ACC; b.fillRect(x + 12 + k * 12, y + 11, 5, 5); });
-          if (o.title) typed(b, ellipsize(String(o.title).toLowerCase(), w - 176, `500 10px ${MONO}`), x + w / 2, y + 17, `500 10px ${MONO}`, DIM, (t - this.done) / 0.4, { anchor: 'middle' });
-          // pin: a pixel pushpin with the full-screen and close buttons, drawn like them; pinned, it sits on a lit tile
-          // (the filled-button look), so the state shows by shape as well as colour. The card stays until its ×.
+          [ACC, MID].forEach((col, k) => {
+            b.beginPath();
+            b.arc(x + 16 + k * 12, y + 13, 2.8, 0, Math.PI * 2);
+            b.fillStyle = col;
+            b.fill();
+          });
+          if (o.title) typed(b, ellipsize(String(o.title).toLowerCase(), w - 176, `600 11px ${MONO}`), x + w / 2, y + 17, `600 11px ${MONO}`, DIM, (t - this.done) / 0.4, { anchor: 'middle' });
           pinIcon(b, x + w - 70, y + 13, this);
-          // full screen: four pixel corners (pointing in once it's full)
-          { const fx = x + w - 44, fy = y + 13, s = 4, f = this.full ? -1 : 1;
-            b.fillStyle = this.hoverFull ? HOT : DIM;
+          // full screen: clean vector corner brackets
+          {
+            const fx = x + w - 44, fy = y + 13, f = this.full ? -1 : 1;
+            b.save();
+            b.strokeStyle = this.hoverFull ? HOT : DIM;
+            b.lineWidth = 1.3;
+            b.lineCap = 'round';
+            b.lineJoin = 'round';
+            const s = this.full ? 3 : 5, bl = 2.5;
             for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
               const cx = fx + sx * s, cy = fy + sy * s;
-              b.fillRect(cx - (sx * f < 0 ? 0 : 2), cy - 1, 3, 2); b.fillRect(cx - 1, cy - (sy * f < 0 ? 0 : 2), 2, 3);
-            } }
-          // close: a small pixel ×
+              b.beginPath();
+              b.moveTo(cx, cy - sy * f * bl);
+              b.lineTo(cx, cy);
+              b.lineTo(cx - sx * f * bl, cy);
+              b.stroke();
+            }
+            b.restore();
+          }
+          // close: crisp vector ×
           const cx = x + w - 18, cy = y + 13, hot = this.hoverClose;
-          b.fillStyle = hot ? HOT : DIM; for (let k = -3; k <= 3; k++) { b.fillRect(cx + k - 1, cy + k - 1, 2, 2); b.fillRect(cx + k - 1, cy - k - 1, 2, 2); }
+          b.save();
+          b.strokeStyle = hot ? '#ff6b6b' : DIM;
+          b.lineWidth = 1.4;
+          b.lineCap = 'round';
+          b.beginPath();
+          b.moveTo(cx - 3.5, cy - 3.5);
+          b.lineTo(cx + 3.5, cy + 3.5);
+          b.moveTo(cx + 3.5, cy - 3.5);
+          b.lineTo(cx - 3.5, cy + 3.5);
+          b.stroke();
+          b.restore();
         }
         // A last guard: nothing inside a card is drawn outside it.
         for (const c of [b, l]) { c.save(); c.beginPath(); c.rect(x + 2, y + bar + 1, w - 4, h - bar - 3); c.clip(); }
@@ -659,8 +716,17 @@
           b.fillStyle = rgba(ACC, 0.15); b.fillRect(x + w - 7, top, 2, len);
           b.fillStyle = ACC; b.fillRect(x + w - 7, ty, 2, th);
         }
-        // resize grip: three pixel steps in the bottom right corner
-        if (this.p >= 1 && !this.full) { b.fillStyle = this.hoverGrip ? HOT : rgba(ACC, 0.45); for (let k = 0; k < 3; k++) for (let j = 0; j <= k; j++) b.fillRect(x + w - 6 - j * 4, y + h - 14 + k * 4, 2, 2); }
+        // resize grip: clean subtle dots in the bottom right corner
+        if (this.p >= 1 && !this.full) {
+          b.fillStyle = this.hoverGrip ? HOT : rgba(ACC, 0.45);
+          for (let k = 0; k < 3; k++) {
+            for (let j = 0; j <= k; j++) {
+              b.beginPath();
+              b.arc(x + w - 6 - j * 4, y + h - 14 + k * 4, 1.2, 0, Math.PI * 2);
+              b.fill();
+            }
+          }
+        }
       },
       hits() {
         const out = bar ? [{ rect: [x + w - 28, y + 2, 26, 22], kind: 'close', part: m.part }, { rect: [x + w - 54, y + 2, 22, 22], kind: 'full', part: m.part }, { rect: [x + w - 82, y + 2, 24, 22], kind: 'pin', part: m.part }, { rect: [x, y, w - 84, bar], kind: 'drag', part: m.part }] : [{ rect: [x, y, w, Math.min(h, 24)], kind: 'drag', part: m.part }];
@@ -798,27 +864,36 @@
       // 12 above the picture, 12 between it and the caption, as at its sides.
       const capY = 12 + ah + 12 + (long ? 12 : 15), credY = capRows.length ? capY + (capRows.length - 1) * capLh + 16 : 12 + ah + 12 + 10;
       const h = 26 + 12 + ah + 12 + capRows.length * capLh + credRows.length * 14 + 12;
-      let ready = false;
-      if (img) {
-        const cv = document.createElement('canvas'); cv.width = gw; cv.height = gh;
-        const c2 = cv.getContext('2d', { willReadFrequently: true });
-        c2.drawImage(img, 0, 0, gw, gh); // the frame has the picture's proportions: all of it, none cut off
-        const d = c2.getImageData(0, 0, gw, gh).data;
-        // Into the Sidekick's five LED levels with an ordered dither.
-        for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { const i = (gy * gw + gx) * 4, lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255, v = clamp(lum + (B4[(gy % 4) * 4 + (gx % 4)] / 16 - 0.5) * 0.22, 0, 0.999); cells.push([gx, gy, Math.floor(v * 5)]); }
-        ready = true;
-      }
       const c = await card(m, w, h, function (b, l, t, x, y, age) {
-        const u = clamp(age / 1, 0, 1);
-        if (ready) for (const [gx, gy, v] of cells) { if ((B4[(gy % 4) * 4 + (gx % 4)] + 0.5) / 16 > u * 1.05) continue; b.fillStyle = LED[v]; b.fillRect(x + ix + gx * 3, y + 12 + gy * 3, 3, 3); }
-        else { b.fillStyle = 'rgba(14,92,96,0.25)'; b.fillRect(x + ix, y + 12, pw, ph); typed(b, 'no picture found', x + w / 2, y + 12 + ph / 2, SMALL, DIM, 1, { anchor: 'middle' }); }
+        const u = clamp(age / 0.8, 0, 1);
+        if (img) {
+          b.save();
+          const imgPath = roundRectPath(x + ix, y + 12, pw, ph, 8);
+          b.clip(imgPath);
+          b.globalAlpha = u;
+          b.drawImage(img, x + ix, y + 12, pw, ph);
+          b.restore();
+          b.save();
+          b.strokeStyle = 'rgba(120,255,226,0.3)';
+          b.lineWidth = 1;
+          b.stroke(roundRectPath(x + ix, y + 12, pw, ph, 8));
+          b.restore();
+        } else {
+          b.fillStyle = 'rgba(14,92,96,0.25)';
+          b.fill(roundRectPath(x + ix, y + 12, pw, ph, 8));
+          typed(b, 'no picture found', x + w / 2, y + 12 + ph / 2, SMALL, DIM, 1, { anchor: 'middle' });
+        }
         capRows.forEach((r, i) => typed(b, r, x + w / 2, y + capY + i * capLh, CAPF, TEXT, (age - 0.6 - i * 0.15) / 0.5, { anchor: 'middle' }));
         credRows.forEach((r, i) => typed(b, r, x + w / 2, y + credY + i * 14, `400 10px ${MONO}`, DIM, (age - 0.8) / 0.4, { anchor: 'middle' }));
         named.forEach((q, i) => {
           if (q.p <= 0) return;
           pen(b, l, this, placed(this, `n${i}`, q.line, x, y), q.p, this.color, { key: `n${i}`, w: 2.2 });
           q.rows.forEach((r, k) => typed(b, r, x + (q.side ? ix + pw + 10 : ix - 10), y + 12 + q.top + 10 + k * 13, SMALL, TEXT, (t - q.born) / 0.25, { anchor: q.side ? 'start' : 'end' }));
-          if (q.p >= 1) { const px = Math.round(x + q.to[0]), py = Math.round(y + q.to[1]); b.fillStyle = INKDARK; b.fillRect(px - 4, py - 4, 8, 8); l.fillStyle = HOT; l.fillRect(px - 2, py - 2, 4, 4); }
+          if (q.p >= 1) {
+            const px = Math.round(x + q.to[0]), py = Math.round(y + q.to[1]);
+            b.beginPath(); b.arc(px, py, 4, 0, Math.PI * 2); b.fillStyle = INKDARK; b.fill();
+            l.beginPath(); l.arc(px, py, 2.5, 0, Math.PI * 2); l.fillStyle = HOT; l.fill();
+          }
         });
       }, { title: 'photo' });
       sfx('scan');
@@ -907,19 +982,32 @@
       await card(m, w, h, function (b, l, t, x, y, age) {
         if (!view3d) { typed(b, '3D isn’t available here', x + w / 2, y + 100, SMALL, DIM, 1, { anchor: 'middle' }); return; }
         const u = clamp(age / 0.8, 0, 1), f = view3d.frame(reduced() ? 0 : t);
-        // Each coloured part's five shades, in its own colour; a planet's land in the land colour. A cell with no colour
-        // of its own keeps the app's LED palette, so an untinted model looks exactly as it did.
-        const shades = f.tints.map((q) => (q ? [rampOf(q.sea), q.land ? rampOf(q.land) : null] : null));
-        for (let i = 0; i < f.lv.length; i++) {
-          const v = f.lv[i]; if (!v) continue; const gx = i % f.gw, gy = (i / f.gw) | 0;
-          if ((B4[(gy % 4) * 4 + (gx % 4)] + 0.5) / 16 > u * 1.05) continue;
-          const tn = shades[f.pal[i]], land = f.st[i] && tn?.[1];
-          // Land stops at its second-brightest shade, so continents read as green on a blue world instead of white glare.
-          b.fillStyle = tn ? (land ? tn[1] : tn[0])[land ? Math.min(v, 2) : v] : LED[v];
-          b.fillRect(x + 12 + gx * 3, y + 6 + gy * 3, 3, 3);
+        if (f.canvas) {
+          b.save();
+          b.globalAlpha = u;
+          b.drawImage(f.canvas, x + 12, y + 6, w - 24, 210);
+          b.restore();
+        } else {
+          const shades = f.tints.map((q) => (q ? [rampOf(q.sea), q.land ? rampOf(q.land) : null] : null));
+          for (let i = 0; i < f.lv.length; i++) {
+            const v = f.lv[i]; if (!v) continue; const gx = i % f.gw, gy = (i / f.gw) | 0;
+            if ((B4[(gy % 4) * 4 + (gx % 4)] + 0.5) / 16 > u * 1.05) continue;
+            const tn = shades[f.pal[i]], land = f.st[i] && tn?.[1];
+            b.fillStyle = tn ? (land ? tn[1] : tn[0])[land ? Math.min(v, 2) : v] : LED[v];
+            b.fillRect(x + 12 + gx * 3, y + 6 + gy * 3, 3, 3);
+          }
         }
         // Labels follow their parts as it turns; one that would land on another this frame waits its turn.
-        if (u >= 1) { const took = []; for (const lab of f.labels) { const lx = x + 12 + lab.x, ly = y + 6 + lab.y, r = [lx - 2, ly - 14, textW(lab.text, `600 10px ${MONO}`) + 10, 16]; if (took.some((q) => overlap(q, r) > 0)) continue; took.push(r); b.fillStyle = ACC; b.fillRect(lx - 1.5, ly - 1.5, 3, 3); typed(b, lab.text, lx + 6, ly - 4, `600 10px ${MONO}`, TEXT, 1, { rim: 3 }); } }
+        if (u >= 1) {
+          const took = [];
+          for (const lab of f.labels) {
+            const lx = x + 12 + lab.x, ly = y + 6 + lab.y, r = [lx - 2, ly - 14, textW(lab.text, `600 11px ${MONO}`) + 10, 16];
+            if (took.some((q) => overlap(q, r) > 0)) continue;
+            took.push(r);
+            b.beginPath(); b.arc(lx, ly, 2.5, 0, Math.PI * 2); b.fillStyle = ACC; b.fill();
+            typed(b, lab.text, lx + 6, ly - 4, `600 11px ${MONO}`, TEXT, 1, { rim: 3 });
+          }
+        }
       }, { title: m.title || m.label || 'model', live: () => !!view3d && !reduced() });
       sfx('scan');
     },
@@ -1979,11 +2067,26 @@
     if (!this.ready) return;
     b.fillStyle = 'rgba(120,255,226,0.06)'; b.fillRect(x + 2, y + 2, w - 4, 24);
     b.fillStyle = DEEP; b.fillRect(x + 2, y + 26, w - 4, 1);
-    [0, 1].forEach((k) => { b.fillStyle = k ? DEEP : ACC; b.fillRect(x + 12 + k * 12, y + 11, 5, 5); });
-    typed(b, 'reminders', x + w / 2, y + 17, `500 10px ${MONO}`, DIM, (t - this.opened) / 0.4, { anchor: 'middle' });
+    [ACC, MID].forEach((col, k) => {
+      b.beginPath();
+      b.arc(x + 16 + k * 12, y + 13, 2.8, 0, Math.PI * 2);
+      b.fillStyle = col;
+      b.fill();
+    });
+    typed(b, 'reminders', x + w / 2, y + 17, `600 11px ${MONO}`, DIM, (t - this.opened) / 0.4, { anchor: 'middle' });
     pinIcon(b, x + w - 44, y + 13, this);
     const cx = x + w - 18, cyy = y + 13;
-    b.fillStyle = this.hoverClose ? HOT : DIM; for (let k = -3; k <= 3; k++) { b.fillRect(cx + k - 1, cyy + k - 1, 2, 2); b.fillRect(cx + k - 1, cyy - k - 1, 2, 2); }
+    b.save();
+    b.strokeStyle = this.hoverClose ? '#ff6b6b' : DIM;
+    b.lineWidth = 1.4;
+    b.lineCap = 'round';
+    b.beginPath();
+    b.moveTo(cx - 3.5, cyy - 3.5);
+    b.lineTo(cx + 3.5, cyy + 3.5);
+    b.moveTo(cx + 3.5, cyy - 3.5);
+    b.lineTo(cx - 3.5, cyy + 3.5);
+    b.stroke();
+    b.restore();
     for (const c of [b, l]) { c.save(); c.beginPath(); c.rect(x + 2, y + 27, w - 4, h - 29); c.clip(); }
     try {
       for (const r of this.rows) {
