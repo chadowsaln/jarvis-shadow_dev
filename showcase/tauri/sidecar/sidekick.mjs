@@ -793,7 +793,8 @@ function ensureModel() {
     if (geminiModels.status === 'ready') {
       const inCatalog = geminiModels.models.some((m) => m.id === config.model);
       if (inCatalog) return true;
-    } else if (signedIn.get('gemini')) {
+    }
+    if (signedIn.get('gemini')) {
       return true;
     }
   }
@@ -2231,6 +2232,7 @@ function panelState() {
         models: on ? openRouterCatalog(p).slice(0, 200).map((mm) => ({ id: mm.id, name: mm.name })) : [],
         ...(p === 'local' && on ? { note: !ollama.reachable ? "Ollama isn't running." : runnable(p).length ? '' : "None of Ollama's models can see images. Get one with: ollama pull qwen3.5:4b" } : {}),
         ...(p === 'openrouter' ? { openRouter: { status: openrouterModels.status, error: openrouterModels.error } } : {}),
+        ...(p === 'gemini' ? { gemini: { status: geminiModels.status, error: geminiModels.error } } : {}),
       };
     }),
     loggingIn,

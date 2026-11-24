@@ -80,6 +80,8 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     cmd.env("ROAMIES_EXE", std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
     #[cfg(target_os = "linux")]
     {
+        // Node comes from the system: without this, inside an AppImage it loads the bundled libraries and dies.
+        crate::linux::host_env(&mut cmd);
         cmd.env("ROAMIES_SESSION", crate::linux::session().name()).env("ROAMIES_LAUNCH", crate::linux::launch_command());
         for (k, v) in [("DBUS_SESSION_BUS_ADDRESS", std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()),
                        ("XDG_RUNTIME_DIR", std::env::var("XDG_RUNTIME_DIR").ok()),
@@ -110,6 +112,10 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(HANDSHAKE_TIMEOUT_MS));
         if QUITTING.load(Ordering::SeqCst) || GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        // Already ended (the reader clears stdin): that was reported as stopped, which is what really happened.
+        if app_timeout.state::<Sidecar>().0.lock().unwrap().is_none() {
             return;
         }
         if !SIDEKAR_READY.load(Ordering::SeqCst) {

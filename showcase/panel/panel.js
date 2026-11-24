@@ -16,7 +16,7 @@
   let state = null, tab = 'home', deferred = false;
   // What's open in the panel itself: a key field (provider id, 'fish' or 'gemini'), the row action waiting for its
   // Confirm, each long list's page (pg) and how many rows fit on one (per, measured), Memory's tab and its search.
-  const ui = { key: null, kind: {}, arm: null, pg: {}, per: {}, mtab: 'facts', q: '', qm: '', manual: '', recordTalk: false, bindShown: new Set(), editMem: null, newMem: false };
+  const ui = { key: null, kind: {}, arm: null, pg: {}, per: {}, mtab: 'facts', q: '', qg: '', qm: '', manual: '', geminiManual: '', recordTalk: false, bindShown: new Set(), editMem: null, newMem: false };
   let armTimer = 0;
   const disarm = () => { clearTimeout(armTimer); if (ui.arm) { ui.arm = null; return true; } return false; };
   // Waiting for a talk key: it must end as soon as this page or the panel stops being the thing in front. A cancel
@@ -654,6 +654,40 @@
       el('select', { 'aria-label': 'Model', 'data-k': 'model', on: { change: (e) => act(`model:${e.target.value}`) } },
         model ? null : el('option', { value: '', textContent: 'Pick a model', disabled: true, selected: true }),
         on.map((p) => el('optgroup', { label: p.label }, p.models.map((m) => el('option', { value: `${p.id}:${m.id}`, textContent: m.name, selected: `${p.id}:${m.id}` === model })))))) : null;
+    // Google AI Studio / Gemini: discover models from https://generativelanguage.googleapis.com/v1beta/models
+    const gemini = state.providers.find((p) => p.id === 'gemini');
+    const gemStatus = gemini?.gemini?.status ?? (gemini?.on ? 'ready' : 'idle');
+    const gemReady = gemStatus === 'ready' || (gemini?.on && (gemini?.models?.length ?? 0) > 0);
+    const gemFailed = gemStatus === 'failed';
+    const gemLoading = gemStatus === 'loading';
+    const gemModels = gemini?.models ?? [];
+    const geminiBox = gemini && gemini.on ? el('div', { className: 'reveal', 'data-anim': 'gemini' },
+      el('p', { className: 'sub', textContent: 'Gemini models (Google AI Studio)' }),
+      gemLoading ? el('p', { className: 'empty note', textContent: 'Discovering Gemini models…' }) : null,
+      gemFailed ? el('div', { className: 'setting' },
+        el('span', {}, geminiStatusError(gemini)),
+        el('span', { className: 'row-btns' },
+          link('Try again', () => send({ type: 'menu', id: 'gemini_retry' }), { k: 'gemini_retry', aria: 'Retry Gemini model discovery' }))) : null,
+      gemReady ? el('div', { className: 'setting' },
+        el('span', {}, 'Search Gemini models'),
+        el('span', { className: 'row-btns' },
+          el('span', { className: 'px field' },
+            el('input', { type: 'search', id: 'gemini-search', value: ui.qg, placeholder: 'Search models…', 'aria-label': 'Search Gemini models', autocomplete: 'off', spellcheck: false, 'data-k': 'gemini-search', on: { input: (e) => { ui.qg = e.target.value; render('gemini-search'); } } })))) : null,
+      gemReady ? el('span', { className: 'px field select' },
+        el('select', { 'aria-label': 'Gemini model', 'data-k': 'gemini-model', on: { change: (e) => { if (e.target.value) act(`model:gemini:${e.target.value}`); } } },
+          el('option', { value: '', textContent: 'Pick a Gemini model', disabled: true, selected: !model || !model.startsWith('gemini:') }),
+          gemModels.filter((m) => !ui.qg || m.name.toLowerCase().includes(ui.qg) || m.id.toLowerCase().includes(ui.qg)).slice(0, 200).map((m) => el('option', { value: m.id, textContent: `${m.name} · Google`, selected: model === `gemini:${m.id}` })))) : null,
+      el('div', { className: 'setting' },
+        el('span', {}, 'Or enter a model ID', el('small', { textContent: 'Any Gemini model ID, e.g. gemini-2.5-flash or gemini-2.5-pro' })),
+        el('span', { className: 'row-btns' },
+          el('span', { className: 'px field' },
+            el('input', { type: 'text', id: 'gemini-manual', value: ui.geminiManual ?? '', placeholder: 'model ID', 'aria-label': 'Gemini model ID', autocomplete: 'off', spellcheck: false, 'data-k': 'gemini-manual', on: { input: (e) => { ui.geminiManual = e.target.value; }, keydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = (ui.geminiManual ?? '').trim(); if (v) act(`model:gemini:${v}`); } } } })),
+          btn('Use', () => { const v = (ui.geminiManual ?? '').trim(); if (v) act(`model:gemini:${v}`); }, { k: 'gemini_use', aria: 'Use the entered Gemini model ID' })))) : null;
+    const geminiCard = !gemini?.on ? el('div', { className: 'setting' },
+      el('span', {}, 'Google AI Studio (Gemini)', el('small', { textContent: 'Add your Gemini API key to run Google models directly' })),
+      el('span', { className: 'row-btns' },
+        addKey(gemini || { id: 'gemini', label: 'Gemini', method: 'key' }))) : null;
+    const geminiKeyForm = !gemini?.on && ui.key === 'gemini' ? keyForm('gemini', 'Gemini', (key, kind) => send({ type: 'panel_key', provider: 'gemini', kind, key }), gemini?.kinds) : null;
     // OpenRouter: discover models from https://openrouter.ai/api/v1/models instead of a hardcoded list.
     const openRouter = state.providers.find((p) => p.id === 'openrouter');
     const orStatus = openRouter?.openRouter?.status ?? 'idle';
@@ -678,7 +712,7 @@
           el('option', { value: '', textContent: 'Pick an OpenRouter model', disabled: true, selected: !model || !model.startsWith('openrouter:') }),
           orModels.filter((m) => !ui.q || m.name.toLowerCase().includes(ui.q) || m.id.toLowerCase().includes(ui.q)).slice(0, 200).map((m) => el('option', { value: m.id, textContent: `${m.name} · OpenRouter`, selected: model === `openrouter:${m.id}` })))) : null,
       el('div', { className: 'setting' },
-        el('span', {}, 'Or enter a model ID', el('small', { textContent: 'Any OpenRouter model ID, e.g. openrouter/auto or qwen/qwen3-32b' })),
+        el('span', {}, 'Or enter a model ID', el('small', { textContent: 'Any OpenRouter model ID, e.g. google/gemini-2.5-flash or openrouter/auto' })),
         el('span', { className: 'row-btns' },
           el('span', { className: 'px field' },
             el('input', { type: 'text', id: 'openrouter-manual', value: ui.manual ?? '', placeholder: 'model ID', 'aria-label': 'OpenRouter model ID', autocomplete: 'off', spellcheck: false, 'data-k': 'openrouter-manual', on: { input: (e) => { ui.manual = e.target.value; }, keydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = (ui.manual ?? '').trim(); if (v) act(`model:openrouter:${v}`); } } } })),
@@ -704,10 +738,19 @@
     const pickHint = !on.length ? 'Sign in to an account below first.' : model ? null : 'Pick a model to answer you.';
     return [
       group('Model', 'Which AI answers you.', null,
-        select, orBox ?? (pickHint ? el('p', { className: 'empty', textContent: pickHint }) : null)),
+        select, geminiBox, orBox, geminiCard, geminiKeyForm,
+        (!on.length && !geminiCard && pickHint ? el('p', { className: 'empty', textContent: pickHint }) : null)),
       el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: 'Sign in to use their models.' })), box),
       foot(null, nav),
     ];
+  }
+  // A short error line for the Gemini discovery state.
+  function geminiStatusError(p) {
+    const e = p?.gemini?.error;
+    return e === 'gemini_invalid_key' ? "That Gemini key didn't work. Paste it again from aistudio.google.com."
+      : e === 'gemini_rate_limited' ? "Gemini rate limited. Wait a moment and try again."
+      : e === 'gemini_network' ? "Couldn't reach Google AI Studio. Check the connection and try again."
+      : "Google AI Studio didn't return any models.";
   }
   // A short error line for the OpenRouter discovery state.
   function orStatusError(p) {

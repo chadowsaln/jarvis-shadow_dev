@@ -615,9 +615,65 @@ pub(crate) fn managed_handoff(running: &str) -> Option<PathBuf> {
     (file.is_file() && newer(&version, running)).then_some(file)
 }
 
+/// What to change so a program from the system (Node running the sidecar, and everything it starts) doesn't run with
+/// the AppImage's environment. The AppImage launcher points LD_LIBRARY_PATH, PATH, GTK_*, GST_*, PYTHON* and more at
+/// its mount; the system Node then loads the bundled libcrypto, fails (`OPENSSL_3.4.0 not found`) before saying a
+/// word, and the shell waits out its handshake. Each variable that names a mount loses those entries, or goes when
+/// nothing else is left. Mounts are this copy's APPDIR and any `/.mount_` dir (an AppImage started from another one).
+fn host_env_changes(vars: impl Iterator<Item = (String, String)>, appdir: Option<&str>) -> Vec<(String, Option<String>)> {
+    let appdir = appdir.map(|d| d.trim_end_matches('/')).filter(|d| !d.is_empty());
+    let in_mount = |p: &str| p.contains("/.mount_") || appdir.is_some_and(|d| p == d || p.starts_with(&format!("{d}/")));
+    vars.filter(|(_, v)| v.split(':').any(in_mount))
+        .map(|(k, v)| {
+            let kept: Vec<&str> = v.split(':').filter(|p| !p.is_empty() && !in_mount(p)).collect();
+            (k, (!kept.is_empty()).then(|| kept.join(":")))
+        })
+        .collect()
+}
+
+pub(crate) fn host_env(cmd: &mut std::process::Command) {
+    let appdir = std::env::var("APPDIR").ok();
+    for (k, v) in host_env_changes(std::env::vars(), appdir.as_deref()) {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_programs_get_no_appimage_paths() {
+        let vars = [
+            ("LD_LIBRARY_PATH", "/tmp/.mount_jarvisA/usr/lib/:/tmp/.mount_jarvisA/lib64/:/tmp/.mount_jarvisB/usr/lib/:"),
+            ("PATH", "/tmp/.mount_jarvisA/usr/bin/:/home/kai/.local/bin:/usr/bin"),
+            ("XDG_DATA_DIRS", "/tmp/.mount_jarvisA/usr/share/:/usr/share:/usr/local/share/"),
+            ("PYTHONHOME", "/tmp/.mount_jarvisA/usr/"),
+            ("GTK_PATH", "/opt/app//usr/lib/gtk-3.0"),
+            ("APPDIR", "/opt/app"),
+            ("HOME", "/home/kai"),
+            ("APPIMAGE", "/home/kai/.local/share/jarvis-v2/jarvis.AppImage"),
+            ("GDK_BACKEND", "x11"),
+        ];
+        let mut got = host_env_changes(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())), Some("/opt/app/"));
+        got.sort();
+        let want = |k: &str, v: Option<&str>| (k.to_string(), v.map(str::to_string));
+        assert_eq!(got, vec![
+            want("APPDIR", None),
+            want("GTK_PATH", None),
+            want("LD_LIBRARY_PATH", None),
+            want("PATH", Some("/home/kai/.local/bin:/usr/bin")),
+            want("PYTHONHOME", None),
+            want("XDG_DATA_DIRS", Some("/usr/share:/usr/local/share/")),
+        ]);
+        // A path that merely shares the APPDIR's prefix is not inside it; nothing outside an AppImage changes.
+        let other = [("PATH".to_string(), "/opt/application/bin:/usr/bin".to_string())];
+        assert!(host_env_changes(other.into_iter(), Some("/opt/app")).is_empty());
+        assert!(host_env_changes([("HOME".to_string(), "/home/kai".to_string())].into_iter(), None).is_empty());
+    }
 
     #[test]
     fn global_shortcuts_are_x11_only() {
