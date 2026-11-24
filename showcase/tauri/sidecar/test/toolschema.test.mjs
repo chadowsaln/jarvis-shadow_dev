@@ -25,6 +25,19 @@ const walk = (name, node, at) => {
 };
 for (const t of tools) walk(t.name, resolveToolSchema(t), '');
 assert.deepEqual(formats, [], 'no tool uses a string format');
+
+// Regression: Gemini API rejects schemas with propertyNames (e.g. from z.record).
+const propertyNames = [];
+const walkPN = (name, node, at) => {
+  if (Array.isArray(node)) return node.forEach((n, i) => walkPN(name, n, `${at}/${i}`));
+  if (!node || typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'propertyNames') propertyNames.push(`${name}${at}`);
+    walkPN(name, v, `${at}/${k}`);
+  }
+};
+for (const t of tools) walkPN(t.name, resolveToolSchema(t), '');
+assert.deepEqual(propertyNames, [], 'no tool schema contains propertyNames (rejected by Gemini API)');
 // draw replaced point_at, on every platform (pixels from a screenshot work everywhere).
 assert.ok(tools.some((t) => t.name === 'draw') && !tools.some((t) => t.name === 'point_at'), 'draw, not point_at');
 const drawSchema = JSON.stringify(resolveToolSchema(tools.find((t) => t.name === 'draw')));

@@ -148,6 +148,9 @@ assert.equal(active[0].title ?? active[0].name, 'notes.txt - Editor');
 const byAttr = await d.findElements({ attributes: { tooltip: 'save' } });
 assert.equal(byAttr.length, 1);
 assert.equal(byAttr[0].name, 'Save');
+const byAttrArray = await d.findElements({ attributes: ['tooltip=save'] });
+assert.equal(byAttrArray.length, 1);
+assert.equal(byAttrArray[0].name, 'Save');
 
 // DoAction picks the named action and sends its index.
 const action = await d.doAction(button, 'click');

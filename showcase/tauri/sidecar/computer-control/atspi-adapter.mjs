@@ -390,8 +390,14 @@ class ATSPIDriver {
         const have = new Set((el.states || []).map((s) => String(s).replace(/^STATE_/, '')));
         if (!stateWanted.every((s) => have.has(s))) return false;
       }
-      if (criteria.attributes && typeof criteria.attributes === 'object') {
-        for (const [k, v] of Object.entries(criteria.attributes)) {
+      if (criteria.attributes) {
+        const attrs = Array.isArray(criteria.attributes)
+          ? Object.fromEntries(criteria.attributes.map((s) => {
+              const idx = String(s).indexOf('=');
+              return idx > -1 ? [String(s).slice(0, idx).trim(), String(s).slice(idx + 1).trim()] : [String(s).trim(), ''];
+            }))
+          : (typeof criteria.attributes === 'object' ? criteria.attributes : {});
+        for (const [k, v] of Object.entries(attrs)) {
           if (String(el.attributes?.[k] ?? '') !== String(v)) return false;
         }
       }
