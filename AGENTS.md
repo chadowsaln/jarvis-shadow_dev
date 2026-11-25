@@ -23,10 +23,11 @@ There is no linter configured yet.
 
 **Packaging notes (current):** Linux `.deb`/`.rpm` bundles can be produced (JARVIS V2 0.1.0 naming with current config); AppImage packaging may fail in some environments (`linuxdeploy`/tooling). Bundled Node runtime was removed from Linux/Windows/macOS external bins to avoid `/usr/bin/node` conflicts; a system Node.js (>=22) is required for the sidecar. Creating updater artifacts requires `TAURI_SIGNING_PRIVATE_KEY`.
 
-Releases: push a `v*` tag (or run `.github/workflows/release.yml` by hand). It builds a signed, notarized macOS DMG (Apple silicon and Intel), an unsigned Windows installer and Linux bundles (AppImage, .deb, .rpm) into a draft GitHub release per workflow/tooling availability. Keep `plugins.updater.pubkey` in `tauri.conf.json` matching the signing key.
+Releases: Releases and updates are built locally on this machine (`cd showcase/tauri && ./build.sh`) and uploaded directly (AppImage/bundle + `.sig` + `latest.json`) to GitHub Releases / the update feed so the app updates immediately without waiting for GitHub Actions. Pushing a `v*` tag tracks the version in git. Keep `plugins.updater.pubkey` in `tauri.conf.json` matching the signing key.
 
 ## Rules
 
+- **Build updates locally:** All application updates must be built locally on this machine (via `showcase/tauri/build.sh`) and uploaded directly (release bundle + signature + `latest.json`) to GitHub Releases / the update feed so the application updates directly from the local build, rather than waiting for or relying on GitHub Actions cloud runners.
 - Every tool that touches files, commands, URLs or other apps goes through `showcase/tauri/sidecar/safety.mjs`
   (tested in `test/safety.test.mjs`); the hands helpers also refuse to type or click in the apps in `HANDS_OFF`
   (by bundle id in `hands/main.swift`, by program name in `hands-win/src/logic.rs`).
@@ -40,3 +41,4 @@ Releases: push a `v*` tag (or run `.github/workflows/release.yml` by hand). It b
 - Never commit with `--no-verify`.
 - Never commit experiments (prototypes, test pages, design tools). They stay local and are listed in `.git/info/exclude`; check `git status` before every commit.
 - Never commit secrets (Apple ID passwords, certificates, `~/.gg/auth.json`); signing credentials go in GitHub Actions secrets.
+
