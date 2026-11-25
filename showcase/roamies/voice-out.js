@@ -3,8 +3,9 @@
 // level() is the live loudness, for the body to move with the voice.
 (() => {
   const R = window.Roamie;
+  const LINUX = !!window.ROAMIE_LINUX || (typeof navigator !== 'undefined' && (/Linux/.test(navigator.platform) || /Linux/.test(navigator.userAgent)));
   const LEAD = 0.12; // cushion before a reply's first chunk, so the next chunk is never late
-  let ac = null, out = null, meter = null, buf = null, id = null, endAt = 0, live = [], lv = 0;
+  let ac = null, out = null, meter = null, buf = null, id = null, endAt = 0, live = [], lv = 0, targetLv = 0;
   // How fast the voice talks (characters a second), learned from each whole reply: its audio length against how much
   // text it said. Drawings pace their marks to it (ink.js).
   let rate = 15, secs = 0;
@@ -67,7 +68,7 @@
 
   const stop = () => {
     if (id) isOver(id);
-    id = null; endAt = 0;
+    id = null; endAt = 0; targetLv = 0; lv = 0;
     if (!ac || !live.length) return;
     const t = ac.currentTime, old = live; live = [];
     out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t); out.gain.linearRampToValueAtTime(0, t + 0.04);
@@ -75,6 +76,23 @@
   };
 
   const play = (m) => {
+    if (LINUX) {
+      if (m.id !== id) { stop(); id = m.id; secs = 0; }
+      const raw = atob(m.pcm), n = raw.length >> 1;
+      const dur = n / (m.rate || 44100);
+      const now = performance.now() / 1000;
+      const at = Math.max(endAt, now + LEAD);
+      endAt = at + dur; secs += dur;
+      let sum = 0, step = Math.max(1, Math.floor(n / 64));
+      for (let i = 0; i < n; i += step) {
+        let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+        if (v > 32767) v -= 65536;
+        const f = v / 32768;
+        sum += f * f;
+      }
+      targetLv = Math.min(1, Math.sqrt(sum / Math.ceil(n / step)) * 4);
+      return;
+    }
     let a;
     try { a = ctx(); } catch (e) { return cannotPlay(e?.message || 'no audio context'); }
     if (m.id !== id) { stop(); id = m.id; secs = 0; }
@@ -101,13 +119,18 @@
       }
       if (m.pcm) play(m);
     },
-    playing: () => !!ac && live.length > 0 && ac.currentTime < endAt + 0.05,
+    playing: () => (LINUX ? performance.now() / 1000 < endAt : !!ac && live.length > 0 && ac.currentTime < endAt + 0.05),
     cps: () => rate,
     // That reply has nothing left to play: its end arrived (or it was stopped), and nothing is still sounding.
     finished(rid) { return !this.playing() && (!rid || over.has(rid)); },
     // Smoothed RMS, roughly 0 (quiet) to 1 (loud speech).
     level() {
       if (!this.playing()) return (lv = 0);
+      if (LINUX) {
+        lv += (targetLv - lv) * 0.35;
+        targetLv *= 0.88;
+        return lv;
+      }
       meter.getFloatTimeDomainData(buf);
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];

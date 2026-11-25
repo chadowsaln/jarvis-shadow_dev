@@ -42,6 +42,7 @@ import { createAgentCore, createAgentCoreRuntime, createApprovalChannel, isAgent
 import { QUESTIONS, openNote, answerTurn, wantsSkip, endsChat, splitTurn, plain, stripNote, tourBeats, goalFrom, showcaseBeats } from './intro.mjs';
 import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mjs';
 import { createSpeaker } from './speaker.mjs';
+import { createLinuxPlayer } from './player-linux.mjs';
 import { arabicSupport } from './lang.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { GEMINI_CHOICES, GEMINI_DEFAULT_VOICE, GEMINI_LIVE_MODEL, GEMINI_LOOK_VOICES, GEMINI_VOICES } from './gemini.mjs';
@@ -403,9 +404,18 @@ let voiceProblemAt = 0;
 // Beats made on this computer (a Gemini voice's, or a Fish voice the app doesn't ship) are kept, so each voice
 // and model's are only made once.
 const BEAT_DIR = path.join(path.dirname(CONFIG_PATH), 'sidekick', 'beats');
+const linuxPlayer = LINUX ? createLinuxPlayer({ log: (k, d) => logLine(k, d) }) : null;
+const onSpeech = (msg) => {
+  if (linuxPlayer && msg?.kind === 'speech') {
+    if (msg.stop) linuxPlayer.stop();
+    else if (msg.end) linuxPlayer.end(msg.id);
+    else if (msg.pcm) linuxPlayer.play(msg.id, msg.pcm, msg.rate);
+  }
+  ui(msg);
+};
 const speech = createSpeaker({
   beatStore: { read: (name) => readJson(path.join(BEAT_DIR, `${name}.json`)), write: (name, data) => writeJson(path.join(BEAT_DIR, `${name}.json`), data) },
-  emit: (m) => ui(m),
+  emit: onSpeech,
   log: (kind, data) => logLine(kind, data),
   // Once in a while, not on every reply: the text is there either way.
   onProblem: (what) => {
@@ -2491,7 +2501,7 @@ async function onMenu(id, via) {
     if (busy) logLine('stopped', { by: via === 'esc' ? 'esc' : 'stop' });
     agentCore?.stop(via === 'esc' ? 'esc' : 'stop');
     agentCoreApprovals?.denyAll('the request was stopped');
-    endIntro(); controller?.abort(); speech.stop(); ink.stop(cancelled);
+    endIntro(); controller?.abort(); speech.stop(); linuxPlayer?.stop(); ink.stop(cancelled);
   }
   else if (id === 'new') {
     endIntro();
