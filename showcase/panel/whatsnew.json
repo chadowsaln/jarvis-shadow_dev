@@ -1,6 +1,14 @@
 {
   "updates": [
     {
+      "version": "0.1.17",
+      "date": "2026-11-25",
+      "items": [
+        { "kind": "fixed", "title": "Overlay 3D Drawing Engine", "text": "Fixed overlay initialization so 3D earth and drawings render reliably." },
+        { "kind": "improved", "title": "Voice Output Stability", "text": "Enhanced speech synthesis reliability and prevented audio streaming dropouts." }
+      ]
+    },
+    {
       "version": "0.1.16",
       "date": "2026-11-25",
       "items": [

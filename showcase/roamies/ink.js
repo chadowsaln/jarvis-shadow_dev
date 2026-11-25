@@ -22,31 +22,9 @@
   // A mark's or a card piece's own colour first, then its tone, then that fallback tone.
   const hue = (o, fallback) => o?.color || tone(o?.tone || fallback);
 
-  function syncInkTheme() {
-    const pal = R.theme?.palette;
-    if (!pal) return;
-    ACC = pal.ACC || ACC;
-    HOT = pal.HOT || HOT;
-    MID = pal.MID || MID;
-    DEEP = pal.DEEP || DEEP;
-    EDGE = pal.EDGE || EDGE;
-    GLASS = pal.GLASS || GLASS;
-    TEXT = pal.TEXT || TEXT;
-    DIM = pal.DIM || DIM;
-    INKDARK = pal.INKDARK || INKDARK;
-    if (pal.LED) LED = [...pal.LED];
-    if (pal.TONES) TONES = { ...TONES, ...pal.TONES, accent: ACC, teal: ACC };
-    ramps?.clear?.();
-    if (typeof touch === 'function') touch(0.5);
-    if (typeof cap !== 'undefined' && cap) {
-      cap.style.borderColor = ACC;
-      cap.style.boxShadow = `0 0 12px ${rgba(ACC, 0.45)}`;
-      cap.style.color = TEXT;
-      cap.style.background = GLASS;
-    }
-  }
-  syncInkTheme();
-  R.theme?.on?.(syncInkTheme);
+  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const mixHex = (a, b, k) => '#' + hex(a).map((v, i) => Math.round(v + (hex(b)[i] - v) * k).toString(16).padStart(2, '0')).join('');
+  const rgba = (h, a) => `rgba(${hex(h).join(',')},${a})`;
   // Five shades of one colour, the same five steps as the LED palette (dark to bright), so a coloured thing reads both
   // as its own colour and as a lit shape. Kept per colour: a card is drawn every frame.
   const ramps = new Map();
@@ -61,9 +39,7 @@
   const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
   const back = (u) => 1 + 2.2 * (u - 1) ** 3 + 1.2 * (u - 1) ** 2;
   const rnd = (a, b) => a + Math.random() * (b - a);
-  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-  const mixHex = (a, b, k) => '#' + hex(a).map((v, i) => Math.round(v + (hex(b)[i] - v) * k).toString(16).padStart(2, '0')).join('');
-  const rgba = (h, a) => `rgba(${hex(h).join(',')},${a})`;
+
   const sfx = (n) => R.sfx?.play(n);
   const reducedMQ = matchMedia('(prefers-reduced-motion: reduce)');
   const reduced = () => reducedMQ.matches;
@@ -2292,6 +2268,32 @@
     }
     return out;
   };
+  function syncInkTheme() {
+    const pal = R.theme?.palette;
+    if (!pal) return;
+    ACC = pal.ACC || ACC;
+    HOT = pal.HOT || HOT;
+    MID = pal.MID || MID;
+    DEEP = pal.DEEP || DEEP;
+    EDGE = pal.EDGE || EDGE;
+    GLASS = pal.GLASS || GLASS;
+    TEXT = pal.TEXT || TEXT;
+    DIM = pal.DIM || DIM;
+    INKDARK = pal.INKDARK || INKDARK;
+    if (pal.LED) LED = [...pal.LED];
+    if (pal.TONES) TONES = { ...TONES, ...pal.TONES, accent: ACC, teal: ACC };
+    ramps.clear();
+    if (typeof touch === 'function') touch(0.5);
+    if (typeof cap !== 'undefined' && cap) {
+      cap.style.borderColor = ACC;
+      cap.style.boxShadow = `0 0 12px ${rgba(ACC, 0.45)}`;
+      cap.style.color = TEXT;
+      cap.style.background = GLASS;
+    }
+  }
+  syncInkTheme();
+  R.theme?.on?.(syncInkTheme);
+
   R.ink = {
     send: null, invoke: null,
     // A segment of a drawing from the sidecar: { id, seg, beats, edits, last, win, busy }.
