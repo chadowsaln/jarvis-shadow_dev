@@ -4,9 +4,9 @@
       "version": "0.1.16",
       "date": "2026-11-25",
       "items": [
-        { "kind": "improved", "title": "Ultra-Fast Semantic Memory", "text": "In-memory vector cache and projected SQLite queries make vector search over 100x faster (under 7ms for 10,000 memories)." },
-        { "kind": "improved", "title": "Fast Linux Desktop Control", "text": "AT-SPI accessibility walker optimized with early filtering and pooled D-Bus connections, speeding up element location by 51x." },
-        { "kind": "improved", "title": "Zero-Allocation 3D WebGL", "text": "Pre-allocated scratch typed buffers and unrolled matrix math eliminate frame drops and GC pauses during globe rendering." },
+        { "kind": "improved", "title": "Ultra-Fast Semantic Memory", "text": "In-memory vector cache makes 10k search under 7ms." },
+        { "kind": "improved", "title": "Fast Linux Desktop Control", "text": "Optimized desktop element finder with pooled D-Bus." },
+        { "kind": "improved", "title": "Zero-Allocation 3D WebGL", "text": "Zero-allocation 3D globe rendering prevents frame drops." },
         { "kind": "new", "title": "JARVIS V2", "text": "Rebranded to JARVIS V2 with Agent Core and Linux control." },
         { "kind": "new", "title": "Browser Automation", "text": "Automate browsers, click, fill forms, and run skills." }
       ]
