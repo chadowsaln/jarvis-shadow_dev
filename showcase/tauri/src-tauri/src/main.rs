@@ -1224,12 +1224,24 @@ fn over_fullscreen(w: &WebviewWindow) {
 /// plays by itself: the page only plays the audio the sidecar sends. A no-op where the setting isn't there.
 #[cfg(target_os = "linux")]
 fn allow_audio(w: &WebviewWindow) {
-    use webkit2gtk::{SettingsExt, WebViewExt};
+    use webkit2gtk::{AutoplayPolicy, PolicyDecisionExt, PolicyDecisionType, SettingsExt, WebViewExt, WebsitePolicies};
     let _ = w.with_webview(|wv| {
-        if let Some(settings) = wv.inner().settings() {
+        let view = wv.inner();
+        if let Some(settings) = view.settings() {
             settings.set_media_playback_requires_user_gesture(false);
             settings.set_enable_webaudio(true);
         }
+        view.connect_decide_policy(|_, decision, decision_type| {
+            if decision_type == PolicyDecisionType::NavigationAction
+                || decision_type == PolicyDecisionType::NewWindowAction
+                || decision_type == PolicyDecisionType::Response
+            {
+                let policies = WebsitePolicies::builder().autoplay(AutoplayPolicy::Allow).build();
+                decision.use_with_policies(&policies);
+                return true;
+            }
+            false
+        });
     });
 }
 

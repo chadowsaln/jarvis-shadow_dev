@@ -127,6 +127,10 @@ fn cancel_voice(app: &AppHandle) {
 /// Show/hide shortcut (default ⌃⌥S): brings the sidekick forward, or sends it away if it's out.
 /// Must run on the main thread.
 pub(crate) fn init_hotkeys(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    if !crate::linux::hotkeys_usable(crate::linux::session()) {
+        return;
+    }
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
     match GlobalHotKeyManager::new() {
         Ok(m) => HOTKEYS.with(|h| *h.borrow_mut() = Some((m, [None, None, None, None]))),
@@ -234,6 +238,13 @@ pub(crate) fn set_hotkey(slot: usize, accel: &str) -> Result<(), String> {
 /// Esc stops the Roamie's answer, or sends it away when it's idle (overlay host.js decides which). Global, so it
 /// works without clicking the Roamie first; that means other apps don't get Esc meanwhile, so it's held only
 /// while some overlay has the Roamie on screen. Must run on the main thread.
+#[cfg(target_os = "linux")]
+pub(crate) fn set_esc(_app: &AppHandle, _label: &str, _on: bool) {
+    // On Linux, global Esc grabbing intercepts Esc from all OS applications (Vim, terminals, etc.).
+    // Webview keydown events handle Esc directly when active without conflicting with other OS apps.
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn set_esc(app: &AppHandle, label: &str, on: bool) {
     use global_hotkey::hotkey::{Code, HotKey};
     let any = ESC_UP.with(|up| {

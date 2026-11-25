@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 /// Mono, any rate in, 16 kHz out. Each output sample averages the input it covers (a box filter),
 /// which is enough anti-aliasing for speech.
+#[derive(Clone)]
 pub struct Resampler {
     step: f64,
     next: f64,
@@ -47,6 +48,7 @@ impl Resampler {
 }
 
 /// Where captured audio goes: the take buffer (16 kHz mono) and level events.
+#[derive(Clone)]
 pub struct Sink {
     buf: Arc<Mutex<Vec<f32>>>,
     tx: Sender<Ev>,
@@ -231,10 +233,15 @@ pub mod pulse {
     /// out of range, unplugged) ends the stream and is reported as `lost`.
     pub fn open(name: &str, mut sink: Sink) -> Result<(Source, MicInfo), MicError> {
         let err_tx = sink.tx.clone();
-        let mut child = Command::new("pw-record")
-            // raw: bare samples on stdout (without it pw-record puts a container header there and the bytes are
-            // no longer 16-bit samples).
-            .args(["--target", name, "--rate", &RATE.to_string(), "--channels", "1", "--format", "s16", "--container", "raw", "-"])
+        let trimmed = name.trim();
+        let mut cmd = Command::new("pw-record");
+        if !trimmed.is_empty() {
+            cmd.args(["--target", trimmed]);
+        }
+        // raw: bare samples on stdout (without it pw-record puts a container header there and the bytes are
+        // no longer 16-bit samples).
+        cmd.args(["--rate", &RATE.to_string(), "--channels", "1", "--format", "s16", "--container", "raw", "-"]);
+        let mut child = cmd
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .spawn()
             .map_err(|e| MicError::new("failed", format!("pw-record: {e}")))?;
@@ -243,7 +250,11 @@ pub mod pulse {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
         sink.start(RATE, 1);
-        let label = sources().into_iter().find(|s| s.name == name).map(|s| s.description).unwrap_or_else(|| name.to_owned());
+        let label = if !trimmed.is_empty() {
+            sources().into_iter().find(|s| s.name == trimmed).map(|s| s.description).unwrap_or_else(|| trimmed.to_owned())
+        } else {
+            "default PipeWire source".to_owned()
+        };
         let said = label.clone();
         std::thread::spawn(move || {
             let mut bytes = vec![0u8; 3200]; // 100 ms of 16-bit mono
@@ -281,8 +292,19 @@ pub mod pulse {
             }).filter(|s| !s.is_empty()).unwrap_or_else(|| format!("{said} stopped"));
             let _ = err_tx.send(Ev::AudioFailed(MicError::new("lost", detail)));
         });
-        log(&format!("microphone on: {label} ({name})"));
-        Ok((Source { _stream: None, child: Some(child), stop }, MicInfo { wanted: Some(name.to_owned()), used: name.to_owned(), fallback: false }))
+        if !trimmed.is_empty() {
+            log(&format!("microphone on: {label} ({trimmed})"));
+        } else {
+            log(&format!("microphone on: {label}"));
+        }
+        Ok((
+            Source { _stream: None, child: Some(child), stop },
+            MicInfo {
+                wanted: if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) },
+                used: if trimmed.is_empty() { "default".to_owned() } else { trimmed.to_owned() },
+                fallback: false,
+            },
+        ))
     }
 
     /// The source a pick means: its node name (any case), else the only one whose name or description contains it.
@@ -432,17 +454,43 @@ pub fn open_mic(sink: Sink, wanted: Option<&str>) -> Result<(Source, MicInfo), M
     let sources = pulse::sources();
     if pulse::available() {
         if let Some(i) = pulse::pick(&sources, wanted_name) {
-            let mut res = pulse::open(&sources[i].name, sink)?;
-            res.1.wanted = wanted_name.map(str::to_owned);
-            return Ok(res);
-        } else if let Some(def) = sources.iter().find(|s| s.default && !s.monitor).or_else(|| sources.iter().find(|s| !s.monitor)) {
-            let mut res = pulse::open(&def.name, sink)?;
-            res.1.wanted = wanted_name.map(str::to_owned);
-            if wanted_name.is_some() {
-                res.1.fallback = true;
-                log(&format!("mic {:?} is not connected; using default PipeWire source ({})", wanted_name, def.description));
+            match pulse::open(&sources[i].name, sink.clone()) {
+                Ok(mut res) => {
+                    res.1.wanted = wanted_name.map(str::to_owned);
+                    return Ok(res);
+                }
+                Err(e) => {
+                    log(&format!("picked mic {:?} ({}) failed to open: {:?}; trying default", wanted_name, sources[i].name, e));
+                }
             }
-            return Ok(res);
+        }
+        if let Some(def) = sources.iter().find(|s| s.default && !s.monitor).or_else(|| sources.iter().find(|s| !s.monitor)) {
+            match pulse::open(&def.name, sink.clone()) {
+                Ok(mut res) => {
+                    res.1.wanted = wanted_name.map(str::to_owned);
+                    if wanted_name.is_some() {
+                        res.1.fallback = true;
+                        log(&format!("mic {:?} is not connected; using default PipeWire source ({})", wanted_name, def.description));
+                    }
+                    return Ok(res);
+                }
+                Err(e) => {
+                    log(&format!("default PipeWire source {} failed: {:?}; trying pw-record without target", def.name, e));
+                }
+            }
+        }
+        // If neither worked or sources was empty, but pw-record is available, record from default PipeWire source:
+        match pulse::open("", sink.clone()) {
+            Ok(mut res) => {
+                res.1.wanted = wanted_name.map(str::to_owned);
+                if wanted_name.is_some() {
+                    res.1.fallback = true;
+                }
+                return Ok(res);
+            }
+            Err(e) => {
+                log(&format!("pw-record default failed: {:?}; falling back to cpal", e));
+            }
         }
     }
     let mut out = open_cpal(sink, wanted_name)?;

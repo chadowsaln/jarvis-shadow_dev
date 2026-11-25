@@ -776,7 +776,16 @@ fn main() {
 
     emit(json!({ "type": "ready", "engine": "parakeet", "model": voice.engine.is_some() }));
     loop {
-        let quit = match rx.recv_timeout(Duration::from_millis(16)) {
+        let timeout = if voice.phase == Phase::Idle {
+            if keys::can_watch_keys() {
+                Duration::from_millis(35)
+            } else {
+                Duration::from_millis(250)
+            }
+        } else {
+            Duration::from_millis(16)
+        };
+        let quit = match rx.recv_timeout(timeout) {
             Ok(ev) => {
                 let mut quit = voice.handle(ev);
                 while let Ok(ev) = rx.try_recv() {

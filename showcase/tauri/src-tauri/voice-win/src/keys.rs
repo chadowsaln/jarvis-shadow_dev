@@ -83,6 +83,11 @@ mod imp {
         };
         !(denied(HKEY_LOCAL_MACHINE, KEY) || denied(HKEY_CURRENT_USER, KEY) || denied(HKEY_CURRENT_USER, &format!(r"{KEY}\NonPackaged")))
     }
+
+    /// Windows keys can always be watched.
+    pub fn can_watch_keys() -> bool {
+        true
+    }
 }
 
 /// X11's modifier state (Shift 1, Control 4, Mod1 = Alt 8, Mod4 = Super 64) as the chord's bits. Lock, Num Lock
@@ -158,6 +163,11 @@ mod imp {
     pub fn mic_allowed() -> bool {
         true
     }
+
+    /// Whether keys can be watched: true on X11, false on Wayland.
+    pub fn can_watch_keys() -> bool {
+        x().is_some()
+    }
 }
 
 // Elsewhere there's no hotkey (only {"cmd":"listen"} starts a take) and no privacy switch to read.
@@ -172,6 +182,9 @@ mod imp {
     }
     pub fn mic_allowed() -> bool {
         true
+    }
+    pub fn can_watch_keys() -> bool {
+        false
     }
 }
 

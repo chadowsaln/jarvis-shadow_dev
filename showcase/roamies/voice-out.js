@@ -22,6 +22,14 @@
   };
   const isOver = (x) => { over.add(x); if (over.size > 20) over.delete(over.values().next().value); };
 
+  const unlock = () => {
+    if (!ac) return;
+    if (ac.state !== 'running') {
+      try { ac.resume()?.then?.(() => { told = false; })?.catch?.(() => {}); } catch {}
+    }
+  };
+  ['pointerdown', 'keydown', 'focus', 'click'].forEach((ev) => addEventListener(ev, unlock, { capture: true, passive: true }));
+
   const ctx = () => {
     if (!ac) {
       // Fish sends 44.1 kHz; a context at the same rate avoids resampling every chunk (older WebKit can't set it).
@@ -31,12 +39,23 @@
       meter = ac.createAnalyser(); meter.fftSize = 512; buf = new Float32Array(meter.fftSize);
       out.connect(meter); meter.connect(ac.destination);
     }
-    if (ac.state !== 'running') { try { ac.resume()?.catch?.(() => {}); } catch {} }
+    if (ac.state !== 'running') {
+      try { ac.resume()?.then?.(() => { told = false; })?.catch?.(() => {}); } catch {}
+    } else {
+      told = false;
+    }
     return ac;
   };
 
-  // A context left suspended plays nothing and says nothing: report the state, once, with what it is.
-  const checkRunning = (a) => setTimeout(() => { if (a.state !== 'running') cannotPlay(a.state); }, 600);
+  // A context left suspended plays nothing and says nothing: retry once, then report state.
+  const checkRunning = (a) => setTimeout(() => {
+    if (a.state !== 'running') {
+      try { a.resume()?.catch?.(() => {}); } catch {}
+      setTimeout(() => { if (a.state !== 'running') cannotPlay(a.state); else told = false; }, 800);
+    } else {
+      told = false;
+    }
+  }, 600);
 
   const pcm = (b64, rate) => {
     const raw = atob(b64), n = raw.length >> 1, f = new Float32Array(n);

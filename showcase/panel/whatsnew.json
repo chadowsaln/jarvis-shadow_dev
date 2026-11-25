@@ -1,6 +1,15 @@
 {
   "updates": [
     {
+      "version": "0.1.18",
+      "date": "2026-11-25",
+      "items": [
+        { "kind": "fixed", "title": "Linux Audio Autoplay", "text": "Enabled WebAudio autoplay policy in WebKitGTK transparent desktop windows." },
+        { "kind": "fixed", "title": "System Shortcut Safety", "text": "Prevented global Escape interception and fixed high idle voice CPU usage." },
+        { "kind": "improved", "title": "PipeWire Audio Capture", "text": "Switched fallback audio capture to PipeWire to eliminate ALSA conflicts." }
+      ]
+    },
+    {
       "version": "0.1.17",
       "date": "2026-11-25",
       "items": [

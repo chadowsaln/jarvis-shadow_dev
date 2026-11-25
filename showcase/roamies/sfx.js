@@ -133,14 +133,16 @@
 
   const start = () => { if (!live) { const ac = new AudioContext(); live = rig(ac, ac.destination); } try { live.ac.resume()?.catch?.(() => {}); } catch {} unlocked = true; };
   if (window.ROAMIE_AUTOSOUND) start();
-  addEventListener('pointerdown', start, { capture: true });
-  addEventListener('keydown', start, { capture: true });
+  ['pointerdown', 'keydown', 'focus', 'click'].forEach((ev) => addEventListener(ev, start, { capture: true, passive: true }));
 
   R.sfx = {
     names: Object.keys(SOUNDS),
     play(name, arg) {
       const fn = SOUNDS[name];
-      if (!fn || !enabled || !unlocked || !live || live.ac.state !== 'running') return;
+      if (!fn || !enabled) return;
+      if (!live || !unlocked) start();
+      if (!live) return;
+      if (live.ac.state !== 'running') { try { live.ac.resume()?.catch?.(() => {}); } catch {} }
       const now = live.ac.currentTime;
       if (now - (last[name] ?? -1) < (GAP[name] ?? 0.09)) return;
       last[name] = now;
