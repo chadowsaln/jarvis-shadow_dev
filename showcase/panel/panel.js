@@ -759,15 +759,136 @@
       : e === 'network' ? "Couldn't reach OpenRouter. Check the connection and try again."
       : "OpenRouter didn't return any models.";
   }
+  const COLOR_PRESETS = [
+    ['#2bb8ff', 'JARVIS Blue', 'أزرق جارفيس'],
+    ['#00f5d4', 'Electric Cyan', 'سيان نيون'],
+    ['#10b981', 'Emerald Matrix', 'أخضر زمردي'],
+    ['#f59e0b', 'Solar Gold', 'ذهبي شمسي'],
+    ['#ef4444', 'Reactor Red', 'أحمر مفاعل'],
+    ['#a855f7', 'Cyber Violet', 'بنفسجي سايبر'],
+    ['#ec4899', 'Neon Pink', 'وردي نيون'],
+    ['#e2e8f0', 'Titanium Ice', 'تيتانيوم فضي'],
+  ];
+
   function appearancePage() {
-    const customPal = state.customColor ? paletteFromColor(state.customColor) : LED;
+    const T = themeKit();
+    const t = themeOf();
+    const currentColor = t?.customColor || state?.customColor || '#78ffe2';
+    const currentShade = Number(t?.colorShade ?? 0);
+    const currentSat = Number(t?.colorSaturation ?? 1.0);
+    const pal = T?.paletteFrom ? T.paletteFrom(currentColor, currentShade, currentSat) : {
+      LED: [currentColor, currentColor, currentColor, currentColor, currentColor],
+      ACC: currentColor,
+    };
+
+    const applyColorChange = (newColor, newShade = currentShade, newSat = currentSat) => {
+      ui.customColor = newColor;
+      const patch = { customColor: newColor, colorShade: newShade, colorSaturation: newSat };
+      if (T) {
+        const computed = T.paletteFrom(newColor, newShade, newSat);
+        patch.core = computed.HOT;
+        patch.reactor = computed.MID;
+        patch.neural = computed.ACC;
+        patch.glow = computed.ACC;
+      }
+      themePreview(patch);
+      themeCommit(patch);
+      act(`customcolor:${newColor}`);
+      render('appearance');
+    };
+
+    const shadeLabel = (n) => n < -15 ? `داكن / عميق (${n > 0 ? '+' : ''}${n})` : n > 15 ? `مضيء / ساطع (${n > 0 ? '+' : ''}${n})` : `متوازن (${n > 0 ? '+' : ''}${n})`;
+    const satLabel = (n) => `${Math.round(n * 100)}% ${n < 0.6 ? '(هادئ)' : n > 1.1 ? '(نيون)' : '(طبيعي)'}`;
+
+    const swatches = COLOR_PRESETS.map(([hex, enLabel, arLabel]) =>
+      el('button', {
+        className: `swatch-btn${currentColor.toLowerCase() === hex.toLowerCase() ? ' active' : ''}`,
+        type: 'button',
+        title: `${arLabel} (${enLabel})`,
+        'aria-label': `${arLabel} (${enLabel})`,
+        style: `background: ${hex}; color: ${hex};`,
+        on: { click: () => applyColorChange(hex) }
+      })
+    );
+
+    const strip = el('div', { className: 'palette-strip', title: 'Live Palette Tiers (قاعدة، هيكل، فرعي، توهج، إضاءة)' },
+      ...pal.LED.map((tierColor) => el('div', { className: 'palette-tier', style: `background: ${tierColor};` }))
+    );
+
     return [
-      group('Color', 'Pick a custom color to tint your look. The palette is generated from this color.', null,
+      group('Color & Tone (اللون ودرجته)', 'تحكم كامل في اللون الرئيسي ودرجته وسطوعه وتشبعه عبر كافة النوافذ والبطاقات والمجسمات.', null,
+        // Color Picker & Quick Swatches
         el('div', { className: 'setting' },
-          el('label', { className: 'px field' },
-            'Custom color',
-            el('input', { type: 'color', id: 'custom-color', value: state.customColor ?? '#7ff3ff', 'aria-label': 'Custom tint color', 'data-k': 'custom-color', on: { input: (e) => { ui.customColor = e.target.value; }, change: (e) => { const v = e.target.value; act(`customcolor:${v}`); ui.customColor = v; } } })),
-          state.customColor ? el('span', { className: 'row-btns' }, btn('Reset to default', () => { act('customcolor:'); ui.customColor = null; render('appearance'); }, { k: 'customcolor_reset', aria: 'Reset custom color to default' })) : null
+          el('span', {}, 'Main color (اللون الأساسي)', el('small', { textContent: 'اختر أي لون بحرية تامة، أو اختر من الألوان السريعة.' })),
+          el('div', { className: 'color-picker-row' },
+            el('input', {
+              type: 'color', id: 'custom-color', value: currentColor, 'aria-label': 'Custom tint color',
+              on: {
+                input: (e) => {
+                  ui.customColor = e.target.value;
+                  themePreview({ customColor: e.target.value, colorShade: currentShade, colorSaturation: currentSat });
+                },
+                change: (e) => applyColorChange(e.target.value),
+              }
+            }),
+            el('span', { className: 'color-hex-tag', textContent: currentColor.toUpperCase() })
+          )
+        ),
+        el('div', { className: 'color-swatches' }, ...swatches),
+
+        // Shade / Degree slider
+        el('div', { className: 'setting' },
+          el('span', { id: 'lbl-theme-shade' }, 'Color shade (درجة اللون والسطوع)',
+            el('small', { textContent: 'درجة عمق وسكون اللون: سالب للألوان الداكنة والعميقة، وموجب للألوان المضيئة والساطعة.' })),
+          el('span', { className: 'row-btns' },
+            el('span', { className: 'color-hex-tag', id: 'lbl-shade-val', textContent: shadeLabel(currentShade) }),
+            el('input', {
+              type: 'range', min: -50, max: 50, step: 1, value: currentShade, 'aria-labelledby': 'lbl-theme-shade',
+              on: {
+                input: (e) => {
+                  const val = Number(e.target.value);
+                  const lbl = $('lbl-shade-val');
+                  if (lbl) lbl.textContent = shadeLabel(val);
+                  themePreview({ customColor: currentColor, colorShade: val, colorSaturation: currentSat });
+                },
+                change: (e) => applyColorChange(currentColor, Number(e.target.value), currentSat),
+              }
+            })
+          )
+        ),
+
+        // Saturation / Intensity slider
+        el('div', { className: 'setting' },
+          el('span', { id: 'lbl-theme-sat' }, 'Vibrancy / Saturation (شدة التشبع والحدة)',
+            el('small', { textContent: 'من الألوان الهادئة والمعدنية إلى ألوان النيون الفاقعة والمشبعة.' })),
+          el('span', { className: 'row-btns' },
+            el('span', { className: 'color-hex-tag', id: 'lbl-sat-val', textContent: satLabel(currentSat) }),
+            el('input', {
+              type: 'range', min: 0.2, max: 1.5, step: 0.05, value: currentSat, 'aria-labelledby': 'lbl-theme-sat',
+              on: {
+                input: (e) => {
+                  const val = Number(e.target.value);
+                  const lbl = $('lbl-sat-val');
+                  if (lbl) lbl.textContent = satLabel(val);
+                  themePreview({ customColor: currentColor, colorShade: currentShade, colorSaturation: val });
+                },
+                change: (e) => applyColorChange(currentColor, currentShade, Number(e.target.value)),
+              }
+            })
+          )
+        ),
+
+        // Live Palette Preview Strip
+        el('div', { className: 'setting' },
+          el('span', {}, 'Palette harmony (تناغم طبقات النوافذ والزجاج)', el('small', { textContent: 'تدرج المستويات الخمسة للبطاقات، النصوص، الإطارات، والتوهج.' })),
+          strip
+        ),
+
+        // Reset button
+        el('div', { className: 'row-btns', style: 'margin-top: 6px;' },
+          btn('استعادة اللون الافتراضي (Reset to Default)', () => {
+            applyColorChange('#78ffe2', 0, 1.0);
+          }, { k: 'customcolor_reset', aria: 'Reset color and shade to default' })
         )
       ),
       group('Size', 'How big I am on your screen.', null, picks('Size', state.sizes, state.size, (x) => act(`size:${x}`), 'size')),

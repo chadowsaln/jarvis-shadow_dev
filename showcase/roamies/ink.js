@@ -12,15 +12,41 @@
   const SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Arabic", "Cairo", sans-serif';
   const MONO = SANS;
   const DOTO = SANS;
-  const ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
-  const GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', INKDARK = '#032722';
-  const TONES = { accent: ACC, teal: '#78ffe2', amber: '#ffcf5c', coral: '#ff8a7a', lilac: '#b9a4ff', sky: '#7cc8ff', lime: '#b6f36b', red: '#ff6b6b', white: '#e8fffa' };
-  const LED = ['#051214', '#0e5c60', '#28c4b8', '#78ffe2', '#e6fffa'];
+  let ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
+  let GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', INKDARK = '#032722';
+  let TONES = { accent: ACC, teal: '#78ffe2', amber: '#ffcf5c', coral: '#ff8a7a', lilac: '#b9a4ff', sky: '#7cc8ff', lime: '#b6f36b', red: '#ff6b6b', white: '#e8fffa' };
+  let LED = ['#051214', '#0e5c60', '#28c4b8', '#78ffe2', '#e6fffa'];
   const B4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
   // A tone's colour, or a hex colour as it is (the model may name any colour instead of a tone).
   const tone = (t) => TONES[t] || (typeof t === 'string' && t[0] === '#' ? t : ACC);
   // A mark's or a card piece's own colour first, then its tone, then that fallback tone.
   const hue = (o, fallback) => o?.color || tone(o?.tone || fallback);
+
+  function syncInkTheme() {
+    const pal = R.theme?.palette;
+    if (!pal) return;
+    ACC = pal.ACC || ACC;
+    HOT = pal.HOT || HOT;
+    MID = pal.MID || MID;
+    DEEP = pal.DEEP || DEEP;
+    EDGE = pal.EDGE || EDGE;
+    GLASS = pal.GLASS || GLASS;
+    TEXT = pal.TEXT || TEXT;
+    DIM = pal.DIM || DIM;
+    INKDARK = pal.INKDARK || INKDARK;
+    if (pal.LED) LED = [...pal.LED];
+    if (pal.TONES) TONES = { ...TONES, ...pal.TONES, accent: ACC, teal: ACC };
+    ramps?.clear?.();
+    if (typeof touch === 'function') touch(0.5);
+    if (typeof cap !== 'undefined' && cap) {
+      cap.style.borderColor = ACC;
+      cap.style.boxShadow = `0 0 12px ${rgba(ACC, 0.45)}`;
+      cap.style.color = TEXT;
+      cap.style.background = GLASS;
+    }
+  }
+  syncInkTheme();
+  R.theme?.on?.(syncInkTheme);
   // Five shades of one colour, the same five steps as the LED palette (dark to bright), so a coloured thing reads both
   // as its own colour and as a lit shape. Kept per colour: a card is drawn every frame.
   const ramps = new Map();
@@ -665,7 +691,7 @@
         chrome(b, x, y, this.cw, this.ch, { edge: o.edge ? colorOf(this, this.color) : ACC });
         if (this.p < 1) return;
         if (bar) {
-          b.fillStyle = 'rgba(120,255,226,0.06)'; b.fillRect(x + 2, y + 2, w - 4, bar - 2);
+          b.fillStyle = rgba(ACC, 0.06); b.fillRect(x + 2, y + 2, w - 4, bar - 2);
           b.fillStyle = DEEP; b.fillRect(x + 2, y + bar, w - 4, 1);
           [ACC, MID].forEach((col, k) => {
             b.beginPath();
@@ -874,12 +900,12 @@
           b.drawImage(img, x + ix, y + 12, pw, ph);
           b.restore();
           b.save();
-          b.strokeStyle = 'rgba(120,255,226,0.3)';
+          b.strokeStyle = rgba(ACC, 0.3);
           b.lineWidth = 1;
           b.stroke(roundRectPath(x + ix, y + 12, pw, ph, 8));
           b.restore();
         } else {
-          b.fillStyle = 'rgba(14,92,96,0.25)';
+          b.fillStyle = rgba(DEEP, 0.25);
           b.fill(roundRectPath(x + ix, y + 12, pw, ph, 8));
           typed(b, 'no picture found', x + w / 2, y + 12 + ph / 2, SMALL, DIM, 1, { anchor: 'middle' });
         }
@@ -2065,7 +2091,7 @@
     if (cw < 4) return;
     chrome(b, x, y, cw, ch);
     if (!this.ready) return;
-    b.fillStyle = 'rgba(120,255,226,0.06)'; b.fillRect(x + 2, y + 2, w - 4, 24);
+    b.fillStyle = rgba(ACC, 0.06); b.fillRect(x + 2, y + 2, w - 4, 24);
     b.fillStyle = DEEP; b.fillRect(x + 2, y + 26, w - 4, 1);
     [ACC, MID].forEach((col, k) => {
       b.beginPath();

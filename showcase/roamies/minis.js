@@ -23,8 +23,8 @@
     return (m && BY_EXT.get(m[1].toLowerCase())) || 'other';
   };
 
-  // ---------- pixel-art file icons: 12x12 grids in the teal family ----------
-  const INK = { k: '#051214', d: '#0e5c60', m: '#28c4b8', a: '#78ffe2', h: '#e6fffa' };
+  // ---------- pixel-art file icons: 12x12 grids in the theme family ----------
+  let INK = { k: '#051214', d: '#0e5c60', m: '#28c4b8', a: '#78ffe2', h: '#e6fffa' };
   const blank = () => Array.from({ length: 12 }, () => Array(12).fill('.'));
   const put = (g, cells, ch) => { for (const [r, c] of cells) if (g[r]?.[c] != null) g[r][c] = ch; };
   const row = (g, r, c0, c1, ch) => { for (let c = c0; c <= c1; c++) g[r][c] = ch; };
@@ -72,7 +72,22 @@
   };
 
   // ---------- the mini agent ----------
-  const PAL = [[4, 16, 18], [14, 92, 96], [40, 196, 184], [120, 255, 226], [230, 255, 250]].map((c) => `rgb(${c.join(',')})`);
+  let PAL = [[4, 16, 18], [14, 92, 96], [40, 196, 184], [120, 255, 226], [230, 255, 250]].map((c) => `rgb(${c.join(',')})`);
+
+  function syncMinisTheme() {
+    const pal = R.theme?.palette;
+    if (!pal) return;
+    INK = { k: pal.LED[0], d: pal.DEEP, m: pal.MID, a: pal.ACC, h: pal.HOT };
+    if (pal.LED) {
+      PAL = pal.LED.map((hex) => {
+        const [r, g, b] = R.theme?.toRgb?.(hex) ?? [120, 255, 226];
+        return `rgb(${r},${g},${b})`;
+      });
+    }
+    icons.clear();
+  }
+  syncMinisTheme();
+  R.theme?.on?.(syncMinisTheme);
   const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const ease = (u) => 1 - Math.pow(1 - clamp(u, 0, 1), 3);

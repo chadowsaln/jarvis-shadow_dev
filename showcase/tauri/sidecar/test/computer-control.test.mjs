@@ -261,7 +261,7 @@ await fs.rm(tmp, { recursive: true, force: true });
   const cap = await dbusClient.requestScreenshot(token, false);
   assert.equal(cap.ok, true, 'the portal answer is read back');
   assert.equal(cap.file, shotFile);
-  assert.equal(cap.dataUrl.startsWith('image/png;base64,'), true);
+  assert.equal(cap.dataUrl.startsWith('data:image/png;base64,'), true);
   assert.equal(Buffer.compare(cap.buffer, png), 0, 'the picture bytes are returned, not just the URI');
   assert.equal(seen.args.length, 2, 'Screenshot is called with (parent_window, options)');
   assert.equal(seen.args[0], '');

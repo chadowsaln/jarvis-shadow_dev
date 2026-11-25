@@ -77,7 +77,16 @@
   }
 
   // ---------------------------------------------------------------- 4×4 matrices (column-major, as GL wants)
-  const mul = (a, b) => { const o = new Array(16).fill(0); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k]; return o; };
+  const mul = (a, b, out = null) => {
+    const o = out || new Float32Array(16);
+    for (let c = 0; c < 4; c++) {
+      const c4 = c * 4;
+      for (let r = 0; r < 4; r++) {
+        o[c4 + r] = a[r] * b[c4] + a[4 + r] * b[c4 + 1] + a[8 + r] * b[c4 + 2] + a[12 + r] * b[c4 + 3];
+      }
+    }
+    return o;
+  };
   const T = (x, y, z) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
   const S = (x, y, z) => [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1];
   const RX = (a) => { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]; };
@@ -89,13 +98,13 @@
   const VS = `attribute vec3 p; attribute vec3 n; uniform mat4 mvp; uniform mat4 model; varying vec3 vn; varying vec3 vp; varying vec3 vo;
     void main(){ vec4 w = model * vec4(p, 1.0); vp = w.xyz; vn = (model * vec4(n, 0.0)).xyz; vo = n; gl_Position = mvp * vec4(p, 1.0); }`;
   const FS = `precision mediump float; varying vec3 vn; varying vec3 vp; varying vec3 vo; uniform float k; uniform vec3 eye; uniform float glass;
-    uniform float id; uniform float planet; uniform sampler2D land; uniform vec3 uColor; uniform vec3 uLandColor;
+    uniform float id; uniform float planet; uniform sampler2D land; uniform vec3 uColor; uniform vec3 uLandColor; uniform vec3 uRimColor;
     void main(){
       vec3 N = normalize(vn); vec3 L = normalize(vec3(-0.45, 0.75, 0.65)); vec3 Vd = normalize(eye - vp);
       float lam = max(dot(N, L), 0.0); vec3 H = normalize(L + Vd);
       float spec = pow(max(dot(N, H), 0.0), 16.0);
       float rim = pow(1.0 - max(dot(N, Vd), 0.0), 2.4);
-      vec3 rimCol = vec3(0.47, 1.0, 0.88);
+      vec3 rimCol = uRimColor;
       if (planet > 0.5) {
         vec3 o = normalize(vo);
         vec2 uv = vec2(atan(o.z, o.x) / 6.2831853 + 0.5, acos(clamp(o.y, -1.0, 1.0)) / 3.1415927);
@@ -106,7 +115,7 @@
         vec3 lit = surface * (0.24 + 0.82 * lam) + (1.0 - land1) * spec * 0.45 + rim * rimCol * 0.65;
         gl_FragColor = vec4(lit, 1.0);
       } else {
-        vec3 base = (id > 0.0) ? uColor : vec3(0.16, 0.77, 0.72);
+        vec3 base = (id > 0.0) ? uColor : uRimColor;
         vec3 lit = base * (0.25 + 0.80 * lam) + spec * 0.35 + rim * rimCol * 0.45;
         float alpha = glass > 0.5 ? 0.65 : 1.0;
         gl_FragColor = vec4(lit, alpha);
@@ -157,7 +166,8 @@
       k: gl.getUniformLocation(prog, 'k'), eye: gl.getUniformLocation(prog, 'eye'),
       glass: gl.getUniformLocation(prog, 'glass'), id: gl.getUniformLocation(prog, 'id'),
       planet: gl.getUniformLocation(prog, 'planet'), land: gl.getUniformLocation(prog, 'land'),
-      uColor: gl.getUniformLocation(prog, 'uColor'), uLandColor: gl.getUniformLocation(prog, 'uLandColor')
+      uColor: gl.getUniformLocation(prog, 'uColor'), uLandColor: gl.getUniformLocation(prog, 'uLandColor'),
+      uRimColor: gl.getUniformLocation(prog, 'uRimColor')
     };
     const cache = {};
     const buf = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW); return b; };
@@ -205,6 +215,12 @@
     const gw = Math.max(8, Math.floor(w / 3)), gh = Math.max(8, Math.floor(h / 3));
     const lv = new Uint8Array(gw * gh), pal = new Uint8Array(gw * gh), st = new Uint8Array(gw * gh);
     let lastT = -1, out = { gw, gh, lv, pal, st, tints, labels: [], canvas: cv };
+    const scratchModel = new Float32Array(16);
+    const scratchMvp = new Float32Array(16);
+    const scratchTemp = new Float32Array(16);
+    let cachedRimHex = null;
+    let cachedRimRgb = new Float32Array([120 / 255, 255 / 255, 226 / 255]);
+
     gl.enable(gl.DEPTH_TEST);
     return {
       frame(t) {
@@ -214,14 +230,23 @@
         gl.viewport(0, 0, rw, rh);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.uniform3fv(at.eye, [0, 0, 3.4]);
+        const curAcc = R.theme?.palette?.ACC || '#78ffe2';
+        if (curAcc !== cachedRimHex) {
+          cachedRimHex = curAcc;
+          const rgb = (R.theme?.toRgb?.(curAcc) || [120, 255, 226]).map((x) => x / 255);
+          cachedRimRgb = new Float32Array(rgb);
+        }
+        gl.uniform3fv(at.uRimColor, cachedRimRgb);
         gl.activeTexture(gl.TEXTURE0);
         gl.uniform1i(at.land, 0);
         if (landTex) gl.bindTexture(gl.TEXTURE_2D, landTex);
         const now = items.map((it) => moved(it, t));
         for (const [n, it] of items.entries()) {
-          const model = mul(view, mul(fit, now[n].local));
-          gl.uniformMatrix4fv(at.model, false, new Float32Array(model));
-          gl.uniformMatrix4fv(at.mvp, false, new Float32Array(mul(proj, model)));
+          mul(fit, now[n].local, scratchTemp);
+          mul(view, scratchTemp, scratchModel);
+          mul(proj, scratchModel, scratchMvp);
+          gl.uniformMatrix4fv(at.model, false, scratchModel);
+          gl.uniformMatrix4fv(at.mvp, false, scratchMvp);
           gl.uniform1f(at.k, it.k); gl.uniform1f(at.glass, it.glass ? 1 : 0);
           gl.uniform1f(at.id, it.pal); gl.uniform1f(at.planet, it.planet && landTex ? 1 : 0);
           gl.uniform3fv(at.uColor, it.colorRgb);

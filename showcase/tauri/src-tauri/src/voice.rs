@@ -57,6 +57,8 @@ pub(crate) fn start_voice(app: &AppHandle) {
     if let Some(wav) = std::env::var_os("ROAMIES_TEST_AUDIO") {
         cmd.arg("--test-audio").arg(wav);
     }
+    #[cfg(target_os = "linux")]
+    crate::linux::host_env(&mut cmd);
     let mut child = match hide_console(&mut cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log_stdio("sidekick-voice.log")).spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -144,7 +146,6 @@ pub(crate) fn init_hotkeys(app: &AppHandle) {
                     let app2 = app.clone();
                     let _ = app.run_on_main_thread(move || to_voice(&app2, &json!({ "cmd": "end" })));
                 }
-                _ => {}
             }
             return;
         }

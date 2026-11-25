@@ -1,11 +1,21 @@
 {
   "updates": [
     {
-      "version": null,
-      "date": "2026-11-15",
+      "version": "0.1.16",
+      "date": "2026-11-25",
       "items": [
-        { "kind": "improved", "title": "Works over fullscreen apps", "text": "On a Mac, your Little Boy now shows up over fullscreen apps and games instead of hiding." },
-        { "kind": "new", "title": "Stays out of your games", "text": "In a fullscreen game, I move your Little Boy aside and every click goes to the game." }
+        { "kind": "improved", "title": "Ultra-Fast Semantic Memory", "text": "In-memory vector cache and projected SQLite queries make vector search over 100x faster (under 7ms for 10,000 memories)." },
+        { "kind": "improved", "title": "Fast Linux Desktop Control", "text": "AT-SPI accessibility walker optimized with early filtering and pooled D-Bus connections, speeding up element location by 51x." },
+        { "kind": "improved", "title": "Zero-Allocation 3D WebGL", "text": "Pre-allocated scratch typed buffers and unrolled matrix math eliminate frame drops and GC pauses during globe rendering." },
+        { "kind": "new", "title": "JARVIS V2", "text": "Rebranded to JARVIS V2 with Agent Core and Linux control." },
+        { "kind": "new", "title": "Browser Automation", "text": "Automate browsers, click, fill forms, and run skills." }
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-11-25",
+      "items": [
+        { "kind": "new", "title": "Desktop Operator", "text": "Autonomous planning, execution, and verification loops." }
       ]
     },
     {

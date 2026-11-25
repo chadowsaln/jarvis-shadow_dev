@@ -432,7 +432,17 @@ pub fn open_mic(sink: Sink, wanted: Option<&str>) -> Result<(Source, MicInfo), M
     let sources = pulse::sources();
     if pulse::available() {
         if let Some(i) = pulse::pick(&sources, wanted_name) {
-            return pulse::open(&sources[i].name, sink);
+            let mut res = pulse::open(&sources[i].name, sink)?;
+            res.1.wanted = wanted_name.map(str::to_owned);
+            return Ok(res);
+        } else if let Some(def) = sources.iter().find(|s| s.default && !s.monitor).or_else(|| sources.iter().find(|s| !s.monitor)) {
+            let mut res = pulse::open(&def.name, sink)?;
+            res.1.wanted = wanted_name.map(str::to_owned);
+            if wanted_name.is_some() {
+                res.1.fallback = true;
+                log(&format!("mic {:?} is not connected; using default PipeWire source ({})", wanted_name, def.description));
+            }
+            return Ok(res);
         }
     }
     let mut out = open_cpal(sink, wanted_name)?;

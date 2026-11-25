@@ -59,6 +59,9 @@
     preset: 'jarvis-blue',
     style: 'hybrid',
     styleMode: 'auto',
+    customColor: '#78ffe2',
+    colorShade: 0, // -50 to +50: darker/deep to lighter/glowing
+    colorSaturation: 1.0, // 0.1 to 2.0: saturation factor
     core: '#7ff3ff', reactor: '#2bb8ff', neural: '#9fd8ff', glow: '#7ff3ff',
     glowIntensity: 0.85, // 0–2: how far the bloom reaches
     particleOpacity: 0.75, // 0–1
@@ -97,9 +100,94 @@
   /** Blended toward black or white: used for the dimmer of two LED levels. */
   const shade = (hex, k) => toHex(toRgb(hex).map((c) => (k >= 0 ? c + (255 - c) * k : c * (1 + k))));
 
+  function rgbToHsl(r, g, b) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0, l = (max + min) / 510;
+    const d = max - min;
+    if (d !== 0) {
+      s = l > 0.5 ? d / (510 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+
+  function hslToRgb(h, s, l) {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hue2rgb = (t) => {
+      let v = t;
+      if (v < 0) v += 1;
+      if (v > 1) v -= 1;
+      if (v < 1 / 6) return p + (q - p) * 6 * v;
+      if (v < 1 / 2) return q;
+      if (v < 2 / 3) return p + (q - p) * (2 / 3 - v) * 6;
+      return p;
+    };
+    return [
+      clamp(Math.round(hue2rgb(h + 1 / 3) * 255), 0, 255),
+      clamp(Math.round(hue2rgb(h) * 255), 0, 255),
+      clamp(Math.round(hue2rgb(h - 1 / 3) * 255), 0, 255)
+    ];
+  }
+
+  /**
+   * Generates a complete harmonious 5-tier LED & glass palette from any base color and shade/saturation degree.
+   * Controls both the color and its degree (depth/brightness and vibrancy).
+   */
+  function paletteFrom(baseColor, shadeOffset = 0, satMult = 1.0) {
+    const [r, g, b] = toRgb(baseColor || DEFAULTS.customColor);
+    const [h, baseS, baseL] = rgbToHsl(r, g, b);
+    const s = clamp(baseS * (Number(satMult) || 1.0), 0.1, 1.0);
+    const sh = clamp((Number(shadeOffset) || 0) / 100, -0.4, 0.4);
+
+    const c0 = hslToRgb(h, clamp(s * 0.4, 0.05, 0.8), clamp(0.04 + sh * 0.03, 0.015, 0.12));
+    const c1 = hslToRgb(h, clamp(s * 0.8, 0.15, 0.95), clamp(0.22 + sh * 0.1, 0.1, 0.38));
+    const c2 = hslToRgb(h, clamp(s * 0.9, 0.2, 1.0), clamp(0.48 + sh * 0.14, 0.28, 0.65));
+    const c3 = hslToRgb(h, s, clamp(baseL + sh * 0.2, 0.45, 0.88));
+    const c4 = hslToRgb(h, clamp(s * 0.25, 0.05, 0.4), clamp(0.95 + sh * 0.04, 0.88, 0.99));
+
+    const hex0 = toHex(c0), hex1 = toHex(c1), hex2_ = toHex(c2), hex3 = toHex(c3), hex4 = toHex(c4);
+    const [r0, g0, b0] = c0;
+    const [r1, g1, b1] = c1;
+
+    const textRgb = hslToRgb(h, clamp(s * 0.2, 0.02, 0.3), clamp(0.93 + sh * 0.04, 0.85, 0.98));
+    const dimRgb = hslToRgb(h, clamp(s * 0.35, 0.05, 0.5), clamp(0.68 + sh * 0.08, 0.5, 0.8));
+    const inkdarkRgb = hslToRgb(h, clamp(s * 0.5, 0.1, 0.7), 0.08);
+
+    return {
+      ACC: hex3,
+      HOT: hex4,
+      MID: hex2_,
+      DEEP: hex1,
+      EDGE: `rgba(${r1},${g1},${b1},0.6)`,
+      GLASS: `rgba(${r0},${g0},${b0},0.94)`,
+      TEXT: toHex(textRgb),
+      DIM: toHex(dimRgb),
+      INKDARK: toHex(inkdarkRgb),
+      LED: [hex0, hex1, hex2_, hex3, hex4],
+      TONES: {
+        accent: hex3,
+        teal: hex3,
+        amber: '#ffcf5c',
+        coral: '#ff8a7a',
+        lilac: '#b9a4ff',
+        sky: '#7cc8ff',
+        lime: '#b6f36b',
+        red: '#ff6b6b',
+        white: hex4,
+      },
+    };
+  }
+
   // ---- validation ----
   const NUM = {
     glowIntensity: [0, 2], particleOpacity: [0, 1], particles: [8, MAX_PARTICLES], transparency: [0, 1],
+    colorShade: [-50, 50], colorSaturation: [0.1, 2.0],
   };
   const BOOL = ['audioReactive', 'animate'];
   const QUALITY = ['auto', 'high', 'low'];
@@ -120,6 +208,14 @@
       const rgb = parseColor(input[part]);
       if (rgb) out[part] = toHex(rgb);
       else problems.push(`${part}: not a color`);
+    }
+    if (input.customColor !== undefined) {
+      if (input.customColor === null || input.customColor === '') out.customColor = null;
+      else {
+        const rgb = parseColor(input.customColor);
+        if (rgb) out.customColor = toHex(rgb);
+        else problems.push('customColor: not a color');
+      }
     }
     for (const [key, [lo, hi]] of Object.entries(NUM)) {
       if (input[key] === undefined) continue;
@@ -162,7 +258,8 @@
   /** A fresh theme from a preset's id (or the defaults for an unknown one). */
   function fromPreset(id) {
     const p = PRESETS.find(([pid]) => pid === id);
-    return normalize({ ...DEFAULTS, ...(p ? p[2] : {}), preset: p ? p[0] : null }, DEFAULTS).theme;
+    const baseColor = p ? p[2].glow || p[2].core : DEFAULTS.customColor;
+    return normalize({ ...DEFAULTS, ...(p ? p[2] : {}), customColor: baseColor, colorShade: 0, colorSaturation: 1.0, preset: p ? p[0] : null }, DEFAULTS).theme;
   }
 
   /**
@@ -193,7 +290,10 @@
 
   // ---- the live theme ----
   const listeners = new Set();
-  const state = { current: { ...DEFAULTS } };
+  const state = {
+    current: { ...DEFAULTS },
+    palette: paletteFrom(DEFAULTS.customColor, DEFAULTS.colorShade, DEFAULTS.colorSaturation),
+  };
   const notify = () => { for (const fn of listeners) { try { fn(state.current) } catch { /* a bad listener must not blank the entity */ } } };
 
   /** Applies a partial theme (or a whole one) at once: validated, saved by the caller, live before the next frame. */
@@ -201,16 +301,25 @@
     const { theme, problems } = normalize(patch, state.current);
     const changed = JSON.stringify(theme) !== JSON.stringify(state.current);
     state.current = theme;
+    state.palette = paletteFrom(theme.customColor || theme.glow || theme.core, theme.colorShade, theme.colorSaturation);
     if (changed && !silent) notify();
     return { theme, problems, changed };
   }
-  function reset() { const t = fromPreset('jarvis-blue'); state.current = t; notify(); return t; }
+  function reset() {
+    const t = fromPreset('jarvis-blue');
+    state.current = t;
+    state.palette = paletteFrom(t.customColor || t.glow || t.core, t.colorShade, t.colorSaturation);
+    notify();
+    return t;
+  }
 
   R.theme = {
     VERSION, PRESETS, STYLES, STYLE_IDS, STYLE_MODES, STATE_STYLE, DEFAULTS, PARTS, MAX_PARTICLES, QUALITY,
     get current() { return state.current; },
+    get palette() { return state.palette; },
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     apply, reset, normalize, fromPreset, withStyle, stylePalette, styleFor, parse, serialize,
     parseColor, toHex, toRgb, css, shade, isTheme, matchesPreset,
+    paletteFrom, hslToRgb, rgbToHsl,
   };
 })();

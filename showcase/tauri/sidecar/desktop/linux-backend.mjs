@@ -125,18 +125,70 @@ export async function createLinuxWindowsBackend() {
     },
     async move(target, x, y) {
       const r = await runCmd('wmctrl', ['-r', String(target), '-e', `0,${x},${y},-1,-1`]);
-      if (!r.ok) throw new Error(r.error || 'move unsupported');
-      return { ok: true };
+      if (r.ok) return { ok: true };
+      const { createATSPIDriver } = await import('../computer-control/atspi-adapter.mjs');
+      const driver = await createATSPIDriver();
+      try {
+        const ok = await driver.setWindowPosition(target, x, y);
+        if (ok) return { ok: true };
+      } finally { await driver.disconnect(); }
+      throw new Error(r.error || 'move unsupported');
     },
     async resize(target, w, h) {
       const r = await runCmd('wmctrl', ['-r', String(target), '-e', `0,-1,-1,${w},${h}`]);
-      if (!r.ok) throw new Error(r.error || 'resize unsupported');
-      return { ok: true };
+      if (r.ok) return { ok: true };
+      const { createATSPIDriver } = await import('../computer-control/atspi-adapter.mjs');
+      const driver = await createATSPIDriver();
+      try {
+        const ok = await driver.setWindowSize(target, w, h);
+        if (ok) return { ok: true };
+      } finally { await driver.disconnect(); }
+      throw new Error(r.error || 'resize unsupported');
     },
     async monitors() {
       const r = await runCmd('xrandr', ['--listmonitors']);
-      if (!r.ok) throw new Error(r.error || 'monitors unavailable');
-      return r.stdout;
+      if (r.ok && r.stdout?.trim()) return r.stdout;
+      // Fallback: Query GNOME Mutter DisplayConfig via D-Bus on Wayland
+      try {
+        const dbus = (await import('dbus-next')).default;
+        const bus = dbus.sessionBus();
+        const obj = await bus.getProxyObject('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig');
+        const iface = obj.getInterface('org.gnome.Mutter.DisplayConfig');
+        const state = await iface.GetCurrentState();
+        try { bus.disconnect(); } catch {}
+        if (state && Array.isArray(state)) {
+          const physList = state[1] || [];
+          const logical = state[2] || [];
+          const lines = [`Monitors: ${logical.length || physList.length}`];
+          for (let i = 0; i < logical.length; i++) {
+            const [x, y, scale, , primary, monList] = logical[i];
+            const name = Array.isArray(monList) && monList[0] ? monList[0][0] : `display-${i}`;
+            const phys = physList.find(p => p[0]?.[0] === name) || physList[i];
+            const curMode = phys?.[1]?.find(m => m[6]?.['is-current']?.value);
+            const w = curMode ? curMode[1] : 1920;
+            const h = curMode ? curMode[2] : 1080;
+            lines.push(` ${i}: +*${name} ${w}x${h}+${x}+${y} (scale ${scale}${primary ? ', primary' : ''})`);
+          }
+          if (lines.length > 1) return lines.join('\n');
+        }
+      } catch {}
+      // Fallback: /sys/class/drm
+      try {
+        const fs = await import('node:fs/promises');
+        const entries = await fs.readdir('/sys/class/drm');
+        const connected = [];
+        for (const e of entries) {
+          if (!e.includes('-')) continue;
+          const status = await fs.readFile(`/sys/class/drm/${e}/status`, 'utf8').catch(() => '');
+          if (status.trim() === 'connected') {
+            const modes = await fs.readFile(`/sys/class/drm/${e}/modes`, 'utf8').catch(() => '');
+            const mode = modes.split('\n')[0]?.trim() || 'unknown';
+            connected.push(`${connected.length}: +*${e} ${mode} (connected)`);
+          }
+        }
+        if (connected.length) return [`Monitors: ${connected.length}`, ...connected].join('\n');
+      } catch {}
+      throw new Error(r.error || 'monitors unavailable');
     },
     async isWindowFocused(target) {
       const { createATSPIDriver } = await import('../computer-control/atspi-adapter.mjs');
@@ -184,12 +236,27 @@ export function createLinuxAppsBackend() {
       } finally { await driver.disconnect(); }
     },
     async launch(name) {
+      const { checkAppTarget, BLOCK } = await import('../safety.mjs');
+      const v = checkAppTarget(name);
+      if (v.level === BLOCK) throw new Error(v.reason);
       const { spawn } = await import('node:child_process');
       spawn(String(name), [], { detached: true, stdio: 'ignore' }).unref();
       return { ok: true };
     },
     async quit(name, opts = {}) {
-      await runCmd('pkill', ['-f', String(name)]);
+      const target = String(name ?? '').trim();
+      if (!target) throw new Error('No application name was given to quit.');
+      const { checkLinuxInputTarget, BLOCK } = await import('../safety.mjs');
+      const verdict = checkLinuxInputTarget(target);
+      if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+      const SYSTEM_CRITICAL = new Set(['systemd', 'init', 'dbus', 'dbus-daemon', 'xorg', 'xwayland', 'gnome-shell', 'kwin', 'wayfire', 'sway', 'labwc', 'jarvis_v2', 'node', 'sidekick', 'bash', 'zsh', 'sh']);
+      if (SYSTEM_CRITICAL.has(target.toLowerCase())) {
+        throw new Error(`Refusing to terminate critical process "${target}".`);
+      }
+      if (/[:*?^$[\](){}\\]/.test(target)) {
+        throw new Error(`Invalid application name pattern: "${target}".`);
+      }
+      await runCmd('pkill', ['-x', target]);
       return { ok: true };
     },
     async front() {

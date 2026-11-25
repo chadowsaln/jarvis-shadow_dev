@@ -376,7 +376,7 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const apps = process.platform === 'linux';
   const readOnlyBrowser = ['browser_discover', 'browser_navigate', 'browser_open', 'browser_read_page', 'browser_respan_bridge_status', 'exa_find_similar', 'exa_get_contents', 'exa_search', 'exa_search_status'];
   const readOnlyApps = apps ? ['find_app', 'list_apps', 'running_apps', 'system_status'] : [];
-  const readOnlyMemory = ['memory_list', 'memory_search'];
+  const readOnlyMemory = ['memory_list', 'memory_search', 'memory_semantic_search'];
   const mutatingApps = apps ? ['launch_app'] : [];
   const mutatingMemory = ['memory_delete', 'memory_save', 'memory_update'];
   // Exa research spends money per run, so it is observe-level but asks before every run.
@@ -384,17 +384,18 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const readOnly = [...readOnlyFile, ...readOnlyApps, ...readOnlyBrowser, ...readOnlyMemory], mutating = [...mutatingFile, ...mutatingApps, ...mutatingMemory];
   // Batch 1: the reviewed set is the whole tool list. Every tool here declares its level, so nothing is dropped -
   // a tool the chat can see must be one the executor can authorise, and a missing line here is a regression.
-  const desktop = ['draw', 'morse_practice', 'open', 'plan_steps', 'pomodoro', 'see_photo', 'show_list', 'take_screenshot', 'web_fetch', 'web_search'];
+  const desktop = ['draw', 'make_plan', 'morse_practice', 'open', 'plan_steps', 'pomodoro', 'see_photo', 'set_appearance', 'show_list', 'skill_list', 'take_screenshot', 'web_fetch', 'web_search'];
   const memoryWrites = ['remember_commitment', 'update_commitment', 'forget_fact'];
   const shell = ['run_command', 'run_diagnostic', 'list_commitments'];
   const nativeHands = process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['act_in_app', 'list_windows', 'read_window'] : [];
   const linuxNative = process.platform === 'linux' ? ['linux_capture_screen', 'linux_click_element', 'linux_find_element', 'linux_focus_window', 'linux_list_apps', 'linux_list_windows', 'linux_move_mouse', 'linux_ocr', 'linux_press_key', 'linux_type_text'] : [];
-  // Batch 2: the desktop adapter tools. Reading windows/monitors/clipboard observes; clicking, typing, dragging,
-  // scrolling and window control are actions within the default grant; quitting an app is sensitive and asks.
-  const readOnlyDesktop = ['clipboard_read', 'monitors', 'window_list'];
-  const trustedDesktop = ['clipboard_write', 'desktop_click', 'desktop_drag', 'desktop_key', 'desktop_type', 'window_control'];
+  // Batch 2-5: the desktop adapter tools. Reading windows/monitors/clipboard observes; clicking, typing, dragging,
+  // scrolling and window control are actions within the default grant; quitting an app, deleting files, killing processes
+  // or running skills are sensitive and ask.
+  const readOnlyDesktop = ['clipboard_read', 'monitors', 'process_list', 'scheduled_tasks_list', 'screen_look', 'window_list'];
+  const trustedDesktop = ['browser_interact', 'cancel_scheduled_task', 'clipboard_write', 'desktop_click', 'desktop_drag', 'desktop_key', 'desktop_type', 'execute_plan', 'schedule_task', 'volume_control', 'window_control'];
   const assistDesktop = ['desktop_scroll'];
-  const sensitiveDesktop = ['app_quit'];
+  const sensitiveDesktop = ['app_quit', 'delete_file', 'process_kill', 'skill_run'];
   const expected = [...desktop, ...memoryWrites, ...shell, ...nativeHands, ...linuxNative, ...readOnly, ...observeAsk, ...mutating, ...readOnlyDesktop, ...trustedDesktop, ...assistDesktop, ...sensitiveDesktop].sort();
   assert.deepEqual(names, expected, 'every tool is offered, and only the reviewed ones');
   // The desktop operator's own verbs are reachable at the default grant (trusted).
@@ -451,13 +452,18 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
     assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} requires explicit approval`);
   }
   // A tool that does not exist is not routable, whatever the level.
-  for (const n of ['delete_file', 'nope']) {
+  for (const n of ['delete_everything', 'nope']) {
     const r = rt.core.router.route(n, {}, { phase: 'initial' });
     assert.equal(r.allowed, false, `${n} is not reachable`);
     assert.match(r.reason, /unknown tool/, `${n} was never offered`);
   }
-  // No destructive file/system delete tool exists (persistent memory deletion is an approved managed action).
-  assert.equal(names.some((n) => n !== 'memory_delete' && /delete|remove|unlink|rm/i.test(n)), false, 'no destructive delete/remove tool offered');
+  // Destructive delete operations must always be gated under sensitive level with approval.
+  for (const n of ['delete_file', 'process_kill']) {
+    const t = rt.tools.find((x) => x.name === n);
+    assert.ok(t, `${n} offered`);
+    assert.equal(defaultToolPermission(t).level, 'sensitive', `${n} is sensitive`);
+    assert.equal(defaultToolPermission(t).requiresApproval, true, `${n} requires approval`);
+  }
   // A tool whose metadata asks for more than the host grants is refused, approval or not.
   const higher = { name: 'delete_everything', parameters: { shape: {} }, permission: { level: PERMISSION_LEVEL.administrative }, execute: async () => 'nope' };
   const low = live({ granted: 'observe', ask: [], extra: [higher] });

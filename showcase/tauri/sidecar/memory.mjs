@@ -14,6 +14,7 @@ export const MEMORY_DB_PATH = () => process.env.ROAMIES_DATA_DIR
   : path.join(os.homedir(), '.gg', 'sidecar', 'memory.sqlite');
 
 let db = null;
+const embeddingCache = new Map();
 
 function ensureDir(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -31,8 +32,10 @@ function open() {
     title TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    embedding TEXT
   )`);
+  try { db.exec('ALTER TABLE memories ADD COLUMN embedding TEXT'); } catch {}
   db.exec('CREATE INDEX IF NOT EXISTS memories_category_idx ON memories(category)');
   db.exec('CREATE INDEX IF NOT EXISTS memories_updated_idx ON memories(updated_at DESC)');
   return db;
@@ -79,10 +82,28 @@ function assertNoSecrets(fields) {
 
 function rowToMemory(r) {
   if (!r) return null;
-  return { id: r.id, category: r.category, title: r.title || '', content: r.content, createdAt: r.created_at, updatedAt: r.updated_at };
+  let emb = null;
+  if (r.embedding) {
+    try { emb = JSON.parse(r.embedding); } catch {}
+  }
+  return { id: r.id, category: r.category, title: r.title || '', content: r.content, createdAt: r.created_at, updatedAt: r.updated_at, embedding: emb };
 }
 
-export function memorySave({ category, title = '', content }) {
+export function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const mag = Math.sqrt(normA) * Math.sqrt(normB);
+  return mag ? dot / mag : 0;
+}
+
+export function memorySave({ category, title = '', content, embedding = null }) {
   const cat = normalizeCategory(category);
   const body = cleanText(content, 'content', 8000);
   const head = cleanOptionalText(title, 200);
@@ -90,7 +111,14 @@ export function memorySave({ category, title = '', content }) {
   const d = open();
   const id = `m${randomBytes(4).toString('hex')}`;
   const now = Date.now();
-  d.prepare('INSERT INTO memories (id, category, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, cat, head, body, now, now);
+  const embText = Array.isArray(embedding) ? JSON.stringify(embedding) : null;
+  d.prepare('INSERT INTO memories (id, category, title, content, created_at, updated_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, cat, head, body, now, now, embText);
+  if (Array.isArray(embedding) && embedding.length > 0) {
+    const vec = new Float32Array(embedding);
+    let norm = 0;
+    for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+    embeddingCache.set(id, { vec, mag: Math.sqrt(norm), category: cat });
+  }
   return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(id));
 }
 
@@ -118,6 +146,72 @@ export function memorySearch({ query, category = null, limit = 20 } = {}) {
     ORDER BY updated_at DESC, created_at DESC LIMIT ?`).all(like, like, like, lim).map(rowToMemory);
 }
 
+export async function memorySemanticSearch({ query = '', embedding = null, category = null, limit = 20, threshold = 0.2, embedFn = null } = {}) {
+  let targetVec = Array.isArray(embedding) ? embedding : null;
+  if (!targetVec && typeof embedFn === 'function' && query) {
+    try { targetVec = await embedFn(query); } catch {}
+  }
+
+  // If no target vector can be created or provided, fall back gracefully to text search
+  if (!targetVec) {
+    const results = memorySearch({ query: query || '', category, limit });
+    return results.map((r) => ({ ...r, score: 1.0 }));
+  }
+
+  const d = open();
+  const lim = Math.max(1, Math.min(100, Number(limit) || 20));
+  const cat = category != null && String(category).trim() !== '' ? normalizeCategory(category) : null;
+
+  // Pre-calculate target vector magnitude
+  let targetNorm = 0;
+  for (let i = 0; i < targetVec.length; i++) targetNorm += targetVec[i] * targetVec[i];
+  const targetMag = Math.sqrt(targetNorm);
+  if (!targetMag) return [];
+
+  // Populate cache from SQLite if cold
+  if (embeddingCache.size === 0) {
+    const rows = d.prepare('SELECT id, category, embedding FROM memories WHERE embedding IS NOT NULL').all();
+    for (const row of rows) {
+      try {
+        const arr = JSON.parse(row.embedding);
+        if (Array.isArray(arr) && arr.length > 0) {
+          const vec = new Float32Array(arr);
+          let norm = 0;
+          for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+          embeddingCache.set(row.id, { vec, mag: Math.sqrt(norm), category: row.category });
+        }
+      } catch {}
+    }
+  }
+
+  const scored = [];
+  for (const [id, entry] of embeddingCache.entries()) {
+    if (cat && entry.category !== cat) continue;
+    if (entry.vec.length !== targetVec.length || !entry.mag) continue;
+    let dot = 0;
+    const v = entry.vec;
+    for (let i = 0; i < targetVec.length; i++) {
+      dot += targetVec[i] * v[i];
+    }
+    const sim = dot / (targetMag * entry.mag);
+    if (sim >= threshold) {
+      scored.push({ id, score: Number(sim.toFixed(4)) });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, lim);
+  if (!top.length) return [];
+
+  // Fetch full details only for the matched top slice
+  const getStmt = d.prepare('SELECT * FROM memories WHERE id = ?');
+  return top.map((s) => {
+    const row = getStmt.get(s.id);
+    const mem = rowToMemory(row);
+    return mem ? { ...mem, score: s.score } : null;
+  }).filter((m) => m != null);
+}
+
 export function memoryGet({ id }) {
   const key = String(id ?? '').trim();
   if (!key) throw new Error('id is required.');
@@ -125,7 +219,7 @@ export function memoryGet({ id }) {
   return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(key));
 }
 
-export function memoryUpdate({ id, category = null, title = null, content = null }) {
+export function memoryUpdate({ id, category = null, title = null, content = null, embedding = null }) {
   const key = String(id ?? '').trim();
   if (!key) throw new Error('id is required.');
   const d = open();
@@ -136,7 +230,18 @@ export function memoryUpdate({ id, category = null, title = null, content = null
   const body = content != null ? cleanText(content, 'content', 8000) : cur.content;
   assertNoSecrets({ title: head, content: body });
   const now = Date.now();
-  d.prepare('UPDATE memories SET category = ?, title = ?, content = ?, updated_at = ? WHERE id = ?').run(cat, head, body, now, key);
+  const embText = embedding !== null ? (Array.isArray(embedding) ? JSON.stringify(embedding) : null) : cur.embedding;
+  d.prepare('UPDATE memories SET category = ?, title = ?, content = ?, updated_at = ?, embedding = ? WHERE id = ?').run(cat, head, body, now, embText, key);
+  if (embedding !== null) {
+    if (Array.isArray(embedding) && embedding.length > 0) {
+      const vec = new Float32Array(embedding);
+      let norm = 0;
+      for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+      embeddingCache.set(key, { vec, mag: Math.sqrt(norm), category: cat });
+    } else {
+      embeddingCache.delete(key);
+    }
+  }
   return rowToMemory(d.prepare('SELECT * FROM memories WHERE id = ?').get(key));
 }
 
@@ -147,6 +252,7 @@ export function memoryDelete({ id }) {
   const cur = d.prepare('SELECT * FROM memories WHERE id = ?').get(key);
   if (!cur) throw new Error(`No memory with id ${key}.`);
   d.prepare('DELETE FROM memories WHERE id = ?').run(key);
+  embeddingCache.delete(key);
   return { ok: true, id: key };
 }
 
@@ -165,4 +271,5 @@ export function formatMemories(list) {
 export function closeMemoryDb() {
   try { db?.close(); } catch {}
   db = null;
+  embeddingCache.clear();
 }

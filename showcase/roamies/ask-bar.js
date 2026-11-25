@@ -96,7 +96,19 @@
     inner.append(mark, ta);
     el.append(inner);
     document.body.append(el);
+    syncAskTheme();
   };
+
+  const syncAskTheme = () => {
+    const pal = R.theme?.palette;
+    if (!pal || !el) return;
+    el.style.setProperty('--accent', pal.ACC);
+    el.style.setProperty('--line-hot', pal.ACC);
+    el.style.setProperty('--line-hi', pal.MID);
+    el.style.setProperty('--ink', pal.TEXT);
+    el.style.setProperty('--ink-3', pal.DIM);
+  };
+  R.theme?.on?.(syncAskTheme);
 
   const api = {
     get isOpen() { return on; },

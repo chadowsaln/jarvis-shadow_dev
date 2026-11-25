@@ -12,12 +12,16 @@ import { BROWSER_ACTIONS, browserDiscover, browserOpenUrl, browserStatusText, de
 import { EXA_SEARCH_TYPES, exaStatus, exaSearch, exaGetContents, exaFindSimilar, exaResearch } from './exa.mjs';
 import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
-import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkLinuxInputTarget, checkDrawAction, checkFetch, checkFileCreate, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
+import { ASK, BLOCK, checkAppTarget, checkDiagnosticCommand, checkLinuxInputTarget, checkDrawAction, checkFetch, checkFileCreate, checkFileDelete, checkFileDest, checkFileRead, checkFileSource, checkOpen, checkRead, checkWrite, classifyCommand, DIAGNOSTIC_NAMES, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
 import { addCommitment, forgetFact, parseDue, parseRepeat, repeatLabel, updateCommitment } from './store.mjs';
-import { CATEGORIES, formatMemories, memoryDelete, memoryList, memorySave, memorySearch, memoryUpdate } from './memory.mjs';
+import { CATEGORIES, formatMemories, memoryDelete, memoryList, memorySave, memorySearch, memorySemanticSearch, memoryUpdate } from './memory.mjs';
+import { createPlan, validatePlan, updateStep, refreshPlan } from './agentcore/planner.mjs';
+import { getSkillRegistry } from './skills/registry.mjs';
+import { getBrowserAutomation } from './browser-intelligence/automation.mjs';
+import { getTaskScheduler } from './proactive/scheduler.mjs';
 
 const HOME = os.homedir();
 export const expand = (p) => path.resolve(String(p).replace(/^~(?=$|\/|\\)/, HOME));
@@ -330,17 +334,35 @@ const getDesktopLayer = async () => {
   }
   return desktopLayer;
 };
+let _sharedAtspiDriver = null;
+let _sharedAtspiTimer = null;
+async function getSharedATSPIDriver() {
+  if (_sharedAtspiTimer) {
+    clearTimeout(_sharedAtspiTimer);
+    _sharedAtspiTimer = null;
+  }
+  if (!_sharedAtspiDriver) {
+    const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+    _sharedAtspiDriver = createATSPIDriver({ cacheTtlMs: 2000 });
+  }
+  _sharedAtspiTimer = setTimeout(async () => {
+    if (_sharedAtspiDriver) {
+      const d = _sharedAtspiDriver;
+      _sharedAtspiDriver = null;
+      await d.disconnect().catch(() => {});
+    }
+  }, 2000);
+  return _sharedAtspiDriver;
+}
+
 // On Linux, typing and clicking go to whichever app is in front; refuse the off-limits ones first.
 const guardDesktopInput = async () => {
   if (!LINUX) return;
-  const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
-  const driver = await createATSPIDriver();
-  try {
-    const focused = await driver.getFocusedApplication();
-    const verdict = checkLinuxInputTarget(focused?.name);
+  const driver = await getSharedATSPIDriver();
+  const focused = await driver.getFocusedApplication();
+  if (focused?.name) {
+    const verdict = checkLinuxInputTarget(focused.name);
     if (verdict?.level === BLOCK) throw new Error(verdict.reason);
-  } finally {
-    await driver.disconnect();
   }
 };
 const STALE_ID = 'The page changed since read_window, so that id is out of date. Call read_window again and use the new ids.';
@@ -441,7 +463,7 @@ export function sideSearchFor(route) {
 // Every request and redirect hop of web_fetch goes through safety.mjs, by name and by the addresses it resolves to.
 export const guardFetch = async (url) => { const v = await checkFetch(url); return v.level === BLOCK ? `Blocked for safety: ${v.reason}` : null; };
 
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: "JARVIS V2 isn't running." }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {}, respanBridgeUrl = '' }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, showSystem = () => {}, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: "JARVIS V2 isn't running." }), workdir = HOME, own = null, sideSearch = async () => null, onMemories = () => {}, respanBridgeUrl = '', onTheme = null, getTheme = () => null }) {
   // Relative paths (and run_command) start in workdir: the home folder for the chat, its own folder for an agent.
   const at = (p) => { const s = String(p ?? ''); return /^~(?=$|\/|\\)/.test(s) || path.isAbsolute(s) || /^[a-z]:[\\/]/i.test(s) ? s : path.join(workdir, s); };
   const where = workdir === HOME ? "the user's home folder" : `its working folder (${workdir})`;
@@ -452,6 +474,7 @@ export function createTools({ allowActions, ui, ask, openUrl, onCommitments, sho
   let turn = 0;
   // Risky clicks the user allowed this request, as "app|kind": one Allow covers that kind in that app until the next request.
   let allowedClicks = { turn: -1, keys: new Set() };
+  let activePlan = null;
   async function shotPoint(x, y) {
     const problem = shotProblem(lastShot, turn);
     if (problem) throw new Error(problem);
@@ -1296,16 +1319,11 @@ A drawing stays until the user clears it or the window changes; your next drawin
         parameters: z.object({}),
         permission: { level: 'observe', requiresApproval: false, description: 'List accessible applications on Linux' },
         execute: async () => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const apps = await driver.getApplicationList();
-            return apps.length
-              ? apps.map(a => `${a.name} (pid ${a.pid}) [${a.toolkitName}] ${a.path}`).join('\n')
-              : 'No accessible applications found.';
-          } finally {
-            await driver.disconnect();
-          }
+          const driver = await getSharedATSPIDriver();
+          const apps = await driver.getApplicationList();
+          return apps.length
+            ? apps.map(a => `${a.name} (pid ${a.pid}) [${a.toolkitName}] ${a.path}`).join('\n')
+            : 'No accessible applications found.';
         },
       },
       {
@@ -1314,16 +1332,11 @@ A drawing stays until the user clears it or the window changes; your next drawin
         parameters: z.object({}),
         permission: { level: 'observe', requiresApproval: false, description: 'List open windows on Linux' },
         execute: async () => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const windows = await driver.getWindowList();
-            return windows.length
-              ? windows.map(w => `${w.appName}: ${w.title} @ ${w.bounds.x},${w.bounds.y} ${w.bounds.width}x${w.bounds.height} [${w.states.join(', ')}]`).join('\n')
-              : 'No windows found.';
-          } finally {
-            await driver.disconnect();
-          }
+          const driver = await getSharedATSPIDriver();
+          const windows = await driver.getWindowList();
+          return windows.length
+            ? windows.map(w => `${w.appName}: ${w.title} @ ${w.bounds.x},${w.bounds.y} ${w.bounds.width}x${w.bounds.height} [${w.states.join(', ')}]`).join('\n')
+            : 'No windows found.';
         },
       },
       {
@@ -1340,17 +1353,12 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'observe', requiresApproval: false, description: 'Find accessible UI element on Linux' },
         execute: async (criteria) => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const elements = await driver.findElements(criteria);
-            if (!elements.length) return 'No matching elements found.';
-            return elements.map((el, i) => 
-              `${i}. ${el.role}: "${el.name}" @ ${el.coordinates ? `${el.coordinates.x},${el.coordinates.y} ${el.coordinates.width}x${el.coordinates.height}` : 'no bounds'} actions: [${el.actions.join(', ')}] path: ${el.path}`
-            ).join('\n');
-          } finally {
-            await driver.disconnect();
-          }
+          const driver = await getSharedATSPIDriver();
+          const elements = await driver.findElements(criteria);
+          if (!elements.length) return 'No matching elements found.';
+          return elements.map((el, i) => 
+            `${i}. ${el.role}: "${el.name}" @ ${el.coordinates ? `${el.coordinates.x},${el.coordinates.y} ${el.coordinates.width}x${el.coordinates.height}` : 'no bounds'} actions: [${el.actions.join(', ')}] path: ${el.path}`
+          ).join('\n');
         },
       },
       {
@@ -1369,39 +1377,36 @@ A drawing stays until the user clears it or the window changes; your next drawin
         // Same level as act_in_app (the same act on another platform); a risky label still asks here.
         permission: { level: 'trusted', requiresApproval: false, description: 'Click a UI element on Linux desktop' },
         execute: async (criteria, ctx) => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await getSharedATSPIDriver();
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
-          const driver = await createATSPIDriver();
           const input = await getInputSimulator();
-          try {
-            const focused = await driver.getFocusedApplication();
-            const fverdict = checkLinuxInputTarget(focused?.name);
+          const focused = await driver.getFocusedApplication();
+          if (focused?.name) {
+            const fverdict = checkLinuxInputTarget(focused.name);
             if (fverdict?.level === BLOCK) throw new Error(fverdict.reason);
-            const element = await driver.findElement(criteria);
-            if (element?.applicationName) {
-              const everdict = checkLinuxInputTarget(element.applicationName);
-              if (everdict?.level === BLOCK) throw new Error(everdict.reason);
-            }
-            if (!element) throw new Error('Element not found');
-            if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {
-              throw new Error(`${userName} said no, so I didn't click "${element.name}".`);
-            }
-            // Wayland gives apps no screen offsets: every element reports 0,0, so a synthesized click
-            // would land at the window's corner. Ask the element to activate itself instead.
-            const noOffsets = !!process.env.WAYLAND_DISPLAY || /wayland/i.test(process.env.XDG_SESSION_TYPE || '');
-            const own = element.actions?.find((a) => /^(click|press|activate|do[-_]default)$/i.test(a));
-            if ((criteria.button || 'left') === 'left' && own && (noOffsets || !element.coordinates)) {
-              const done = await driver.doAction(element, own);
-              return `Clicked ${element.role} "${element.name}" through its own accessibility action (${done.action}); the pointer was not moved.`;
-            }
-            if (!element.coordinates) throw new Error('Element has no coordinates');
-            const centerX = element.coordinates.x + element.coordinates.width / 2;
-            const centerY = element.coordinates.y + element.coordinates.height / 2;
-            await input.click(centerX, centerY, criteria.button || 'left');
-            return `Clicked ${element.role} "${element.name}" at ${centerX},${centerY}`;
-          } finally {
-            await driver.disconnect();
           }
+          const element = await driver.findElement(criteria);
+          if (element?.applicationName) {
+            const everdict = checkLinuxInputTarget(element.applicationName);
+            if (everdict?.level === BLOCK) throw new Error(everdict.reason);
+          }
+          if (!element) throw new Error('Element not found');
+          if (isRiskyClick(element.name) && !(await confirm(`Click "${element.name}"? It could delete, pay, send or sign out.`, ctx))) {
+            throw new Error(`${userName} said no, so I didn't click "${element.name}".`);
+          }
+          // Wayland gives apps no screen offsets: every element reports 0,0, so a synthesized click
+          // would land at the window's corner. Ask the element to activate itself instead.
+          const noOffsets = !!process.env.WAYLAND_DISPLAY || /wayland/i.test(process.env.XDG_SESSION_TYPE || '');
+          const own = element.actions?.find((a) => /^(click|press|activate|do[-_]default)$/i.test(a));
+          if ((criteria.button || 'left') === 'left' && own && (noOffsets || !element.coordinates)) {
+            const done = await driver.doAction(element, own);
+            return `Clicked ${element.role} "${element.name}" through its own accessibility action (${done.action}); the pointer was not moved.`;
+          }
+          if (!element.coordinates) throw new Error('Element has no coordinates');
+          const centerX = element.coordinates.x + element.coordinates.width / 2;
+          const centerY = element.coordinates.y + element.coordinates.height / 2;
+          await input.click(centerX, centerY, criteria.button || 'left');
+          return `Clicked ${element.role} "${element.name}" at ${centerX},${centerY}`;
         },
       },
       {
@@ -1413,15 +1418,12 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'trusted', requiresApproval: false, description: 'Type text on Linux desktop' },
         execute: async ({ text, delayMs = 10 }) => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await getSharedATSPIDriver();
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const focused = await driver.getFocusedApplication();
-            const verdict = checkLinuxInputTarget(focused?.name);
+          const focused = await driver.getFocusedApplication();
+          if (focused?.name) {
+            const verdict = checkLinuxInputTarget(focused.name);
             if (verdict?.level === BLOCK) throw new Error(verdict.reason);
-          } finally {
-            await driver.disconnect();
           }
           const input = await getInputSimulator();
           await input.type(text, delayMs);
@@ -1437,15 +1439,12 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'trusted', requiresApproval: false, description: 'Press a key on Linux desktop' },
         execute: async ({ key, modifiers = [] }) => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await getSharedATSPIDriver();
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const focused = await driver.getFocusedApplication();
-            const verdict = checkLinuxInputTarget(focused?.name);
+          const focused = await driver.getFocusedApplication();
+          if (focused?.name) {
+            const verdict = checkLinuxInputTarget(focused.name);
             if (verdict?.level === BLOCK) throw new Error(verdict.reason);
-          } finally {
-            await driver.disconnect();
           }
           const input = await getInputSimulator();
           if (modifiers.length) {
@@ -1466,15 +1465,12 @@ A drawing stays until the user clears it or the window changes; your next drawin
         }),
         permission: { level: 'assist', requiresApproval: false, description: 'Move the mouse cursor on Linux desktop' },
         execute: async ({ x, y, durationMs }) => {
-          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const driver = await getSharedATSPIDriver();
           const { getInputSimulator } = await import('./computer-control/input-simulation.mjs');
-          const driver = await createATSPIDriver();
-          try {
-            const focused = await driver.getFocusedApplication();
-            const verdict = checkLinuxInputTarget(focused?.name);
+          const focused = await driver.getFocusedApplication();
+          if (focused?.name) {
+            const verdict = checkLinuxInputTarget(focused.name);
             if (verdict?.level === BLOCK) throw new Error(verdict.reason);
-          } finally {
-            await driver.disconnect();
           }
           const input = await getInputSimulator();
           await input.move(x, y, durationMs);
@@ -1492,10 +1488,14 @@ A drawing stays until the user clears it or the window changes; your next drawin
           const cap = await captureViaPortal({ askShell, interactive: interactive !== false });
           if (!cap.ok) throw new Error(cap.error || 'Screen capture failed.');
           let dataUrl = null;
-          try { dataUrl = await readImageDataUrl(cap.file, 'image/jpeg'); } finally { await removeTemp(cap.file); }
+          let base64 = null;
+          try {
+            dataUrl = await readImageDataUrl(cap.file, 'image/jpeg');
+            base64 = (await fs.readFile(cap.file)).toString('base64');
+          } finally { await removeTemp(cap.file); }
           const text = ['Captured the screen; the image is attached below. Do not save it.', cap.pixels ? `Pixels: ${cap.pixels[0]}x${cap.pixels[1]}.` : null].filter(Boolean).join('\n');
           const content = [{ type: 'text', text }];
-          if (dataUrl) content.push({ type: 'image', url: dataUrl });
+          if (dataUrl || base64) content.push({ type: 'image', mediaType: 'image/jpeg', data: base64, url: dataUrl });
           return { content };
         },
       },
@@ -1714,6 +1714,134 @@ A drawing stays until the user clears it or the window changes; your next drawin
           return `Copied ${text.length} characters to the clipboard`;
         },
       },
+      {
+        name: 'volume_control',
+        description: 'Check or adjust system audio volume and mute state. action: "get" (inspect volume and mute status), "set" (set volume 0-100%), "mute", "unmute", or "toggle" (mute state).',
+        parameters: z.object({
+          action: z.enum(['get', 'set', 'mute', 'unmute', 'toggle']).describe('Action to perform'),
+          volume: z.number().int().min(0).max(100).optional().describe('Volume level 0-100 (for "set")'),
+        }),
+        permission: { level: 'trusted', requiresApproval: false, description: 'Inspect or adjust system audio volume' },
+        execute: async ({ action, volume }) => {
+          if (process.platform === 'linux') {
+            if (action === 'get') {
+              const v = await run('pactl', ['get-sink-volume', '@DEFAULT_SINK@']);
+              const m = await run('pactl', ['get-sink-mute', '@DEFAULT_SINK@']);
+              const volMatch = /(\d+)%/.exec(v.stdout || '');
+              const isMute = /yes/i.test(m.stdout || '');
+              return `System volume: ${volMatch ? volMatch[1] : 'unknown'}% (Muted: ${isMute ? 'yes' : 'no'})`;
+            }
+            if (action === 'set') {
+              if (volume == null) throw new Error('volume (0-100) is required for "set" action.');
+              const r = await run('pactl', ['set-sink-volume', '@DEFAULT_SINK@', `${volume}%`]);
+              if (r.err) throw new Error(r.stderr || 'Failed to set volume.');
+              return `Volume set to ${volume}%.`;
+            }
+            if (action === 'mute') {
+              await run('pactl', ['set-sink-mute', '@DEFAULT_SINK@', '1']);
+              return 'Audio muted.';
+            }
+            if (action === 'unmute') {
+              await run('pactl', ['set-sink-mute', '@DEFAULT_SINK@', '0']);
+              return 'Audio unmuted.';
+            }
+            if (action === 'toggle') {
+              await run('pactl', ['set-sink-mute', '@DEFAULT_SINK@', 'toggle']);
+              return 'Toggled audio mute.';
+            }
+          }
+          return `Volume control is supported on Linux via pactl; platform is ${process.platform}.`;
+        },
+      },
+      {
+        name: 'process_list',
+        description: 'List active user processes with PID, user, CPU usage, memory usage, and command name. Optionally filter by name.',
+        parameters: z.object({
+          filter: z.string().optional().describe('Filter processes by name (partial match)'),
+          limit: z.number().int().min(1).max(100).optional().default(30),
+        }),
+        permission: { level: 'observe', requiresApproval: false, description: 'List running processes' },
+        execute: async ({ filter = '', limit = 30 }) => {
+          if (process.platform === 'linux' || process.platform === 'darwin') {
+            const r = await run('ps', ['-eo', 'pid,user,%cpu,%mem,comm', '--sort=-%mem']);
+            if (r.err) throw new Error(r.stderr || 'Failed to list processes.');
+            const lines = r.stdout.split('\n');
+            const header = lines[0];
+            let rows = lines.slice(1).map(l => l.trim()).filter(Boolean);
+            if (filter) {
+              const f = filter.toLowerCase();
+              rows = rows.filter(row => row.toLowerCase().includes(f));
+            }
+            const out = [header, ...rows.slice(0, limit)];
+            return out.join('\n');
+          }
+          return 'Process list is available on Linux and macOS.';
+        },
+      },
+      {
+        name: 'process_kill',
+        description: 'Terminate a running process by PID or process name. System, kernel, and self processes cannot be killed. Sensitive action requiring approval.',
+        parameters: z.object({
+          pid: z.number().int().optional().describe('The PID of the process to terminate'),
+          name: z.string().optional().describe('The process name to terminate (if PID is not provided)'),
+          force: z.boolean().optional().default(false).describe('If true, sends SIGKILL instead of SIGTERM'),
+        }),
+        permission: { level: 'sensitive', requiresApproval: true, description: 'Terminate a running process' },
+        execute: async ({ pid, name, force = false }, ctx) => {
+          if (pid == null && !name) throw new Error('Provide either pid or name to terminate a process.');
+          let targetPid = pid;
+          if (targetPid == null && name) {
+            const r = await run('pgrep', ['-f', name]);
+            if (r.err || !r.stdout.trim()) throw new Error(`No process found matching "${name}".`);
+            const pids = r.stdout.trim().split('\n').map(s => Number(s.trim())).filter(Number.isInteger);
+            if (pids.length > 1) throw new Error(`Multiple processes found matching "${name}" (${pids.join(', ')}). Specify exact PID.`);
+            targetPid = pids[0];
+          }
+          if (targetPid <= 1 || targetPid === process.pid || targetPid === process.ppid) {
+            throw new Error(`Cannot kill protected or self process (PID ${targetPid}).`);
+          }
+          if (!ctx?.approved && !(await confirm(`Terminate process PID ${targetPid}${name ? ` (${name})` : ''}?`, ctx))) {
+            throw new Error(`${userName} denied terminating process PID ${targetPid}.`);
+          }
+          const sig = force ? 'SIGKILL' : 'SIGTERM';
+          try {
+            process.kill(targetPid, sig);
+            return `Sent ${sig} to process ${targetPid}.`;
+          } catch (e) {
+            throw new Error(`Failed to kill PID ${targetPid}: ${String(e?.message || e)}`);
+          }
+        },
+      },
+      {
+        name: 'screen_look',
+        description: 'Look at the screen or active window, detect visual changes against the previous shot, and search for target UI elements or text hierarchy-first (AT-SPI accessibility first, then local OCR). Returns element details and click coordinates.',
+        parameters: z.object({
+          query: z.string().optional().describe('Target element name, label, or text to locate (e.g. "Save", "Submit", "Settings")'),
+          forceFresh: z.boolean().optional().default(false).describe('Force a fresh screenshot even if recent shot is cached'),
+        }),
+        permission: { level: 'observe', requiresApproval: false, description: 'Look at the screen and find elements' },
+        execute: async ({ query, forceFresh = false }) => {
+          const { createScreenLook } = await import('./computer-control/screen-look.mjs');
+          const { createATSPIDriver } = await import('./computer-control/atspi-adapter.mjs');
+          const looker = createScreenLook({ askShell, createATSPIDriver });
+          const res = await looker.look({ query, forceFresh });
+          if (!res.ok) throw new Error(res.error || 'Could not inspect screen.');
+          const parts = [
+            `Screen inspection: ${res.cached ? 'cached' : 'fresh'} shot.`,
+            `Visual change: ${res.changed ? 'Screen changed since last look' : 'No visual change'}.`,
+          ];
+          if (res.queryMatch) {
+            if (res.queryMatch.found) {
+              parts.push(`Found target "${query}" via ${res.queryMatch.source.toUpperCase()}:`);
+              if (res.queryMatch.center) parts.push(`  Coordinates (center): ${res.queryMatch.center[0]}, ${res.queryMatch.center[1]}`);
+              if (res.queryMatch.element) parts.push(`  Details: ${JSON.stringify(res.queryMatch.element)}`);
+            } else {
+              parts.push(`Target "${query}" was not found in accessibility tree or OCR text.`);
+            }
+          }
+          return parts.join('\n');
+        },
+      },
     ] : []),
     // GG Coder's own web tools (observe): search with a side search or keyless engines, pages as Markdown.
     // Wrapped to surface browser/web activity in JARVIS V2. No tokens, no CAPTCHA/login bypass.
@@ -1848,6 +1976,56 @@ A drawing stays until the user clears it or the window changes; your next drawin
         const note = `Cannot perform ${act} without browser session control and no URL was provided. Ask the user for the URL or to use their browser controls.`;
         ui({ kind: 'browser', action: 'navigate', nav: act, url: url || null, note, at: Date.now() });
         return { ok: false, action: act, url: url || null, note };
+      },
+    },
+    {
+      name: 'browser_interact',
+      description: `Perform active browser automation via Chrome DevTools Protocol on system Chromium/Brave (trusted). Supports navigate, click, fill inputs, extract text, evaluate script, take screenshots, and close browser. Does not bypass logins or security protections.`,
+      parameters: z.object({
+        action: z.enum(['navigate', 'click', 'fill', 'screenshot', 'evaluate', 'text', 'close']).describe('The browser automation action to perform.'),
+        url: z.string().optional().describe('URL to navigate to (required for action: navigate).'),
+        selector: z.string().optional().describe('CSS selector of the target element (for click, fill, text).'),
+        value: z.string().optional().describe('Text value to fill into the input (for action: fill).'),
+        expression: z.string().optional().describe('JavaScript expression to evaluate (for action: evaluate).'),
+      }),
+      permission: { level: 'trusted', requiresApproval: false, description: 'Interact with automated browser page' },
+      execute: async ({ action, url, selector, value, expression }) => {
+        const automation = getBrowserAutomation();
+        if (action === 'navigate') {
+          if (!url) throw new Error('url is required for navigate action.');
+          const v = checkFetch(String(url));
+          if (v.level === 'block') throw new Error(v.reason || 'That URL cannot be opened.');
+          const res = await automation.navigate(v.url);
+          return { ok: true, action, url: v.url, frameId: res.frameId };
+        }
+        if (action === 'click') {
+          if (!selector) throw new Error('selector is required for click action.');
+          const res = await automation.click(selector);
+          return { ok: true, action, selector, clicked: res };
+        }
+        if (action === 'fill') {
+          if (!selector) throw new Error('selector is required for fill action.');
+          const res = await automation.fill(selector, value ?? '');
+          return { ok: true, action, selector, filled: res };
+        }
+        if (action === 'text') {
+          const text = await automation.getText(selector || 'body');
+          return { ok: true, action, selector: selector || 'body', text: text.slice(0, 5000) };
+        }
+        if (action === 'screenshot') {
+          const res = await automation.captureScreenshot();
+          return { ok: true, action, format: 'png', base64: res.base64.slice(0, 100) + '...' };
+        }
+        if (action === 'evaluate') {
+          if (!expression) throw new Error('expression is required for evaluate action.');
+          const res = await automation.evaluate(expression);
+          return { ok: true, action, result: res };
+        }
+        if (action === 'close') {
+          await automation.close();
+          return { ok: true, action, closed: true };
+        }
+        throw new Error(`Unsupported browser action: ${action}`);
       },
     },
     {
@@ -1999,6 +2177,39 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
     },
     {
+      name: 'delete_file',
+      description: 'Delete a file or folder inside your allowed folders. By default, safely moves it to the system trash (recoverable). Set permanent to true only if explicitly requested to permanently destroy the file/folder. Requires explicit user approval.',
+      parameters: z.object({
+        path: z.string().describe('The file or folder path to delete (inside allowed folders)'),
+        permanent: z.boolean().optional().default(false).describe('If true, permanently remove instead of moving to trash (default false).'),
+      }),
+      executionMode: 'sequential',
+      permission: { level: 'sensitive', requiresApproval: true, description: 'Delete or trash a file or folder' },
+      execute: async ({ path: p, permanent = false }, ctx) => {
+        if (!allowActions()) throw new Error(actionsOff);
+        p = at(p);
+        const target = allowed(checkFileDelete(p, HOME));
+        if (!ctx?.approved && !(await confirm(`Delete ${p}${permanent ? ' permanently' : ' (move to trash)'}?`, ctx))) {
+          throw new Error(`${userName} said no, so ${p} was not deleted.`);
+        }
+        if (!permanent) {
+          try {
+            if (process.platform === 'linux') {
+              const r = await run('gio', ['trash', target]);
+              if (!r.err) return `Moved ${target} to trash.`;
+            } else if (process.platform === 'darwin') {
+              const r = await run('osascript', ['-e', `tell application "Finder" to delete POSIX file "${target}"`]);
+              if (!r.err) return `Moved ${target} to trash.`;
+            }
+          } catch {}
+        }
+        const st = await fs.lstat(target);
+        if (st.isDirectory()) await fs.rm(target, { recursive: true, force: true });
+        else await fs.unlink(target);
+        return `Deleted ${target}${permanent ? ' permanently' : '.'}`;
+      },
+    },
+    {
       name: 'remember_commitment',
       description: `Save something ${userName} has committed to doing, or anything they ask to be reminded about, so you can remind them at the right moment. Use it whenever they say they will do something or say "remind me". kind: 'reminder' for a plain "remind me to X at/in …" (it clears itself once the nudge is given), 'commitment' (default) for something they say they'll do or finish ("I'll finish the slides by Friday"), which stays open until they say it's done. due: a relative time like "in 90s", "in 5m", "in 1h30m" or "in 2 days" (best for short timers), or a local time YYYY-MM-DDTHH:mm:ss, YYYY-MM-DDTHH:mm, or YYYY-MM-DD if only the day is known; omit if there's no time at all. Resolve words like "Thursday", "at 2" or "tonight" from the timestamp on their message. repeat: only when they ask for it again and again ("every morning", "every weekday at 9", "every 2 hours", "on Mondays and Thursdays"): one of daily, weekdays, weekends, weekly, monthly, yearly, "every N minutes|hours|days|weeks|months" (at least 5 minutes), or days like "mon,wed,fri". It needs due, set to the first time (e.g. tomorrow 09:00 for "every morning at 9"). A repeating 'reminder' moves to its next time each time it fires; a repeating 'commitment' (a habit they want held to, like the gym) moves on when they mark it done. One saved item covers the whole series: never save one per day.`,
       parameters: z.object({ text: z.string().min(2).max(200), due: z.string().optional(), kind: z.enum(['reminder', 'commitment']).optional(), repeat: z.string().max(60).optional() }),
@@ -2051,6 +2262,175 @@ A drawing stays until the user clears it or the window changes; your next drawin
       execute: async (args) => { onPlan(args); return 'ok'; },
     },
     {
+      name: 'make_plan',
+      description: 'Create an autonomous multi-step execution plan for complex tasks (Batch 6). Validates dependency ordering and prepares steps for execution.',
+      parameters: z.object({
+        goal: z.string().min(3).describe('The overall objective or goal of the plan'),
+        steps: z.array(z.object({
+          id: z.string().optional().describe('Unique step id, e.g. "step1"'),
+          title: z.string().min(1).describe('Short summary of what this step does'),
+          tool: z.string().min(1).describe('The tool to execute, e.g. "write_file", "desktop_click"'),
+          args: z.string().optional().describe('Arguments for the tool as a JSON string or plain text'),
+          dependsOn: z.array(z.string()).optional().describe('Step IDs this step depends on'),
+          verify: z.string().optional().describe('Optional post-condition verification as a JSON string (e.g. "{\\"type\\":\\"file_exists\\",\\"target\\":\\"~/doc.txt\\"}")'),
+        })).min(1).max(20).describe('List of steps to execute in order'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Create an execution plan' },
+      execute: async ({ goal, steps }) => {
+        const parsedSteps = steps.map(s => {
+          let a = s.args;
+          if (typeof a === 'string') { try { a = JSON.parse(a); } catch {} }
+          let v = s.verify;
+          if (typeof v === 'string') { try { v = JSON.parse(v); } catch {} }
+          return { ...s, args: a, verify: v };
+        });
+        const plan = createPlan({ goal, steps: parsedSteps });
+        const v = validatePlan(plan);
+        if (!v.ok) throw new Error(`Invalid plan: ${v.errors.join(', ')}`);
+        activePlan = plan;
+        onPlan({ steps: plan.steps.map(s => s.title) });
+        return {
+          ok: true,
+          planId: plan.id,
+          goal: plan.goal,
+          stepCount: plan.steps.length,
+          steps: plan.steps.map(s => ({ id: s.id, title: s.title, tool: s.tool, status: s.status, dependsOn: s.dependsOn })),
+        };
+      },
+    },
+    {
+      name: 'execute_plan',
+      description: 'Execute the steps in an active or provided plan (Batch 6). Executes ready steps sequentially, evaluates post-condition verifications, and reports execution progress.',
+      parameters: z.object({
+        planId: z.string().optional().describe('ID of the plan to execute (defaults to active plan)'),
+        maxSteps: z.number().int().min(1).max(30).optional().default(10),
+      }),
+      permission: { level: 'trusted', requiresApproval: false, description: 'Execute plan steps autonomously' },
+      execute: async ({ planId, maxSteps = 10 }, ctx) => {
+        if (!activePlan || (planId && activePlan.id !== planId)) {
+          throw new Error('No active plan found. Call make_plan first.');
+        }
+        const plan = activePlan;
+        const results = [];
+        let executed = 0;
+
+        while (executed < maxSteps) {
+          refreshPlan(plan);
+          const readyStep = plan.steps.find(s => (s.status === 'ready' || s.status === 'pending') && (!s.dependsOn?.length || s.dependsOn.every(d => plan.steps.find(x => x.id === d)?.status === 'completed')));
+          if (!readyStep) break;
+
+          updateStep(plan, readyStep.id, { status: 'running' });
+          const stepIndex = plan.steps.indexOf(readyStep);
+          onPlan({ now: [stepIndex + 1] });
+
+          const toolDef = tools.find(t => t.name === readyStep.tool);
+          if (!toolDef) {
+            updateStep(plan, readyStep.id, { status: 'failed', error: `Tool ${readyStep.tool} not found` });
+            results.push({ stepId: readyStep.id, title: readyStep.title, status: 'failed', error: `Tool ${readyStep.tool} not found` });
+            break;
+          }
+
+          try {
+            const out = await toolDef.execute(readyStep.args || {}, ctx);
+            let verified = true;
+            let verifyErr = null;
+
+            if (readyStep.meta?.verify || readyStep.verify) {
+              const cond = readyStep.meta?.verify || readyStep.verify;
+              const { createVerify } = await import('./desktop/verify.mjs');
+              const desk = await getDesktopLayer().catch(() => null);
+              const verifier = createVerify({
+                isWindowFocused: desk ? (t) => desk.windows.isWindowFocused(t) : null,
+                readClipboard: desk ? () => desk.clipboard.read() : null,
+              });
+              const vRes = await verifier.verify(Array.isArray(cond) ? cond : [cond]);
+              if (vRes.some(r => !r.ok)) {
+                verified = false;
+                verifyErr = vRes.find(r => !r.ok)?.error || 'Verification check failed';
+              }
+            }
+
+            if (verified) {
+              updateStep(plan, readyStep.id, { status: 'completed', result: typeof out === 'string' ? out : JSON.stringify(out) });
+              results.push({ stepId: readyStep.id, title: readyStep.title, status: 'completed', result: out });
+            } else {
+              updateStep(plan, readyStep.id, { status: 'failed', error: verifyErr });
+              results.push({ stepId: readyStep.id, title: readyStep.title, status: 'failed', error: verifyErr });
+              break;
+            }
+          } catch (e) {
+            const errStr = String(e?.message || e);
+            updateStep(plan, readyStep.id, { status: 'failed', error: errStr });
+            results.push({ stepId: readyStep.id, title: readyStep.title, status: 'failed', error: errStr });
+            break;
+          }
+          executed++;
+        }
+
+        refreshPlan(plan);
+        return {
+          planId: plan.id,
+          goal: plan.goal,
+          status: plan.status,
+          stepsCompleted: plan.steps.filter(s => s.status === 'completed').length,
+          totalSteps: plan.steps.length,
+          executedSteps: results,
+        };
+      },
+    },
+    {
+      name: 'skill_list',
+      description: 'List all registered skills/macros in the skill registry (V2.4). Returns skill names, IDs, triggers, and descriptions.',
+      parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'List registered skills' },
+      execute: async () => {
+        const reg = getSkillRegistry();
+        await reg.init();
+        const skills = reg.list();
+        if (!skills.length) return 'No registered skills found in registry.';
+        return skills.map(s => `${s.id}: ${s.name} - ${s.description} (triggers: ${(s.triggers || []).join(', ')})`).join('\n');
+      },
+    },
+    {
+      name: 'skill_run',
+      description: 'Run a predefined skill from the skill registry by ID (V2.4), passing parameters as needed.',
+      parameters: z.object({
+        id: z.string().describe('The ID of the skill to execute'),
+        params: z.string().optional().describe('Parameters for the skill as a JSON string, e.g. "{\\"topic\\":\\"images\\"}"'),
+      }),
+      permission: { level: 'sensitive', requiresApproval: true, description: 'Run a workflow skill' },
+      execute: async ({ id, params = {} }, ctx) => {
+        let p = params;
+        if (typeof p === 'string') {
+          try { p = JSON.parse(p); } catch {}
+        }
+        const reg = getSkillRegistry();
+        await reg.init();
+        const skill = reg.get(id);
+        if (!skill) throw new Error(`Skill "${id}" not found.`);
+        if (!ctx?.approved && !(await confirm(`Run skill "${skill.name}"?`, ctx))) {
+          throw new Error(`${userName} denied running skill "${skill.name}".`);
+        }
+        const runTool = async ({ tool, args }) => {
+          const t = tools.find(x => x.name === tool);
+          if (!t) throw new Error(`Tool ${tool} not found`);
+          return t.execute(args || {}, ctx);
+        };
+        const verifyCondition = async (cond) => {
+          const { createVerify } = await import('./desktop/verify.mjs');
+          const desk = await getDesktopLayer().catch(() => null);
+          const verifier = createVerify({
+            isWindowFocused: desk ? (t) => desk.windows.isWindowFocused(t) : null,
+            readClipboard: desk ? () => desk.clipboard.read() : null,
+          });
+          const res = await verifier.verify(Array.isArray(cond) ? cond : [cond]);
+          const failed = res.find(r => !r.ok);
+          return failed ? { ok: false, error: failed.error } : { ok: true };
+        };
+        return reg.executeSkill(id, p || {}, { runTool, verifyCondition });
+      },
+    },
+    {
       name: 'show_list', description: "Show the user their list on screen (reminders and commitments, Today and Later). Use when they ask to see their list, to-dos or reminders; then answer in a few words, don't read it all out.",
       parameters: z.object({}),
       permission: { level: 'observe', requiresApproval: false, description: 'Show the list on screen' },
@@ -2074,6 +2454,21 @@ A drawing stays until the user clears it or the window changes; your next drawin
       parameters: z.object({ query: z.string().min(1).max(200), category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional(), limit: z.number().int().min(1).max(100).optional() }),
       permission: { level: 'observe', requiresApproval: false, description: 'Search local persistent memory' },
       execute: async ({ query, category, limit }) => formatMemories(memorySearch({ query, category, limit })),
+    },
+    {
+      name: 'memory_semantic_search',
+      description: 'Search JARVIS V2\'s local persistent memory using semantic vector similarity and cosine ranking. Returns best-matching memories ranked by relevance.',
+      parameters: z.object({
+        query: z.string().min(1).max(200).describe('Search query for semantic matching'),
+        category: z.enum(['preferences', 'projects', 'conversations', 'tasks']).optional().describe('Optional category filter'),
+        limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return'),
+        threshold: z.number().min(0).max(1).optional().describe('Minimum cosine similarity threshold (0.0 to 1.0)'),
+      }),
+      permission: { level: 'observe', requiresApproval: false, description: 'Semantic search of local persistent memory' },
+      execute: async ({ query, category, limit, threshold }) => {
+        const results = await memorySemanticSearch({ query, category, limit, threshold });
+        return formatMemories(results);
+      },
     },
     {
       name: 'memory_list',
@@ -2231,6 +2626,119 @@ A drawing stays until the user clears it or the window changes; your next drawin
         const morse = text.toLowerCase().split('').map(c => (c === ' ' ? '/' : (map[c] || '?'))).join(' ');
         try { speak(morse.replace(/\./g, 'dit ').replace(/-/g, 'dah ')); ui({ kind: 'say', text: morse }); } catch {}
         return morse;
+      },
+    },
+    {
+      name: 'set_appearance',
+      description: 'Change or tune the visual color theme, shade (brightness/depth), and vibrancy across all desktop floating cards, windows, glass, and 3D orb. Supports hex color codes (e.g. #78ffe2, #22d3ee, #a855f7, #ef4444, #10b981, #f59e0b, #ec4899) and common color names in English or Arabic (blue, cyan, green, emerald, red, purple, violet, gold, pink, ice, default/reset). shade adjusts depth from -50 (darker/deeper) to +50 (lighter/brighter). saturation adjusts richness from 0.2 to 1.5.',
+      parameters: z.object({
+        color: z.string().optional().describe('Color name or hex code (e.g. "emerald", "blue", "purple", "red", "gold", "pink", "سماوي", "أخضر", "أحمر", "بنفسجي", "#78ffe2"). Use "reset" or "default" to restore defaults.'),
+        shade: z.number().min(-50).max(50).optional().describe('Shade level offset from -50 (deepest / darkest) to +50 (brightest / lightest). 0 is balanced default.'),
+        saturation: z.number().min(0.2).max(1.5).optional().describe('Color vibrancy/saturation multiplier from 0.2 (muted) to 1.5 (rich). 1.0 is default.'),
+      }),
+      permission: { level: 'assist', requiresApproval: false, description: 'Adjust appearance and color theme' },
+      execute: async ({ color, shade, saturation }) => {
+        let hex = undefined;
+        let shadeVal = shade != null ? Number(shade) : undefined;
+        let satVal = saturation != null ? Number(saturation) : undefined;
+
+        if (color) {
+          const raw = String(color).trim().toLowerCase();
+          const clean = raw.replace(/^#/, '');
+          const PRESET_NAMES = {
+            'blue': '#38bdf8', 'sky': '#38bdf8', 'azraq': '#38bdf8', 'أزرق': '#38bdf8', 'ازرق': '#38bdf8',
+            'cyan': '#22d3ee', 'samawi': '#22d3ee', 'سماوي': '#22d3ee', 'teal': '#28c4b8',
+            'jarvis': '#78ffe2', 'default': '#78ffe2', 'reset': '#78ffe2', 'افتراضي': '#78ffe2',
+            'green': '#10b981', 'emerald': '#10b981', 'akhdar': '#10b981', 'أخضر': '#10b981', 'اخضر': '#10b981', 'زمردي': '#10b981', 'matrix': '#00ff88',
+            'red': '#ef4444', 'ahmar': '#ef4444', 'أحمر': '#ef4444', 'احمر': '#ef4444', 'ruby': '#e11d48', 'reactor': '#ef4444',
+            'purple': '#a855f7', 'violet': '#8b5cf6', 'banafsaji': '#a855f7', 'بنفسجي': '#a855f7', 'ارجواني': '#a855f7', 'أرجواني': '#a855f7',
+            'gold': '#f59e0b', 'amber': '#f59e0b', 'yellow': '#eab308', 'zahabi': '#f59e0b', 'ذهبي': '#f59e0b', 'أصفر': '#eab308', 'اصفر': '#eab308',
+            'pink': '#ec4899', 'rose': '#f43f5e', 'wardi': '#ec4899', 'وردي': '#ec4899', 'زهري': '#ec4899',
+            'ice': '#e2e8f0', 'white': '#ffffff', 'silver': '#cbd5e1', 'faddi': '#cbd5e1', 'فضي': '#cbd5e1', 'جليدي': '#e2e8f0',
+          };
+          if (raw === 'reset' || raw === 'default' || raw === 'افتراضي') {
+            hex = '#78ffe2';
+            if (shadeVal === undefined) shadeVal = 0;
+            if (satVal === undefined) satVal = 1.0;
+          } else if (PRESET_NAMES[raw]) {
+            hex = PRESET_NAMES[raw];
+          } else if (/^[0-9a-fA-F]{6}$/.test(clean)) {
+            hex = '#' + clean.toLowerCase();
+          } else {
+            return `Unrecognized color "${color}". Choose a color name (blue, cyan, emerald, red, purple, gold, pink, ice) or a hex code like #78ffe2.`;
+          }
+        }
+
+        const patch = {};
+        if (hex) { patch.customColor = hex; patch.glow = hex; }
+        if (shadeVal !== undefined) patch.colorShade = shadeVal;
+        if (satVal !== undefined) patch.colorSaturation = satVal;
+
+        if (Object.keys(patch).length === 0) {
+          return 'No appearance changes specified. Provide color, shade (-50 to +50), or saturation (0.2 to 1.5).';
+        }
+
+        if (typeof onTheme === 'function') {
+          onTheme(patch);
+        } else {
+          ui({ kind: 'theme', theme: patch });
+        }
+
+        const parts = [];
+        if (hex) parts.push(`color: ${hex}`);
+        if (shadeVal !== undefined) parts.push(`shade: ${shadeVal > 0 ? '+' : ''}${shadeVal}`);
+        if (satVal !== undefined) parts.push(`vibrancy: ${satVal}x`);
+
+        return `Appearance updated (${parts.join(', ')}). Applied across all desktop floating cards, windows, and 3D orb.`;
+      },
+    },
+    {
+      name: 'schedule_task',
+      description: 'Schedule a recurring or one-shot background task (V2.6 proactive assistance). Requires description and intervalSeconds or runOnceAt timestamp.',
+      parameters: z.object({
+        description: z.string().min(1).describe('Description of the background task'),
+        intervalSeconds: z.number().int().min(5).optional().describe('Interval in seconds for recurring execution'),
+        runOnceAt: z.number().optional().describe('Epoch millisecond timestamp for a one-shot execution'),
+      }),
+      permission: { level: 'trusted', requiresApproval: false, description: 'Schedule a background assistant task' },
+      execute: async ({ description, intervalSeconds, runOnceAt }) => {
+        const scheduler = getTaskScheduler();
+        const res = scheduler.scheduleTask({
+          description,
+          intervalSeconds,
+          runOnceAt,
+          action: async () => {
+            ui({ kind: 'proactive', message: `Scheduled task fired: ${description}`, at: Date.now() });
+            return { executed: true, description };
+          },
+        });
+        return `Task scheduled successfully [${res.taskId}], next run: ${res.nextRun}`;
+      },
+    },
+    {
+      name: 'scheduled_tasks_list',
+      description: 'List all currently active and scheduled background tasks and their next run times.',
+      parameters: z.object({}),
+      permission: { level: 'observe', requiresApproval: false, description: 'List scheduled tasks' },
+      execute: async () => {
+        const scheduler = getTaskScheduler();
+        const tasks = scheduler.listTasks();
+        if (!tasks.length) return 'No scheduled tasks.';
+        return tasks.map((t) => `[${t.id}] ${t.description} (status: ${t.status}, runs: ${t.runsCount}, next: ${t.nextRun || 'none'})`).join('\n');
+      },
+    },
+    {
+      name: 'cancel_scheduled_task',
+      description: 'Cancel an active scheduled background task by its id.',
+      parameters: z.object({
+        taskId: z.string().min(1).describe('The ID of the scheduled task to cancel'),
+      }),
+      permission: { level: 'trusted', requiresApproval: false, description: 'Cancel a scheduled task' },
+      execute: async ({ taskId }) => {
+        const scheduler = getTaskScheduler();
+        const res = scheduler.cancelTask(taskId);
+        if (!res.ok) return `Could not cancel task: ${res.error}`;
+        return `Cancelled scheduled task ${taskId}.`;
       },
     },
   ];

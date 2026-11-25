@@ -434,8 +434,18 @@ html, body { height: 100%; background: transparent; font-family: "Tajawal", syst
 .theme-col { display: inline-grid; gap: 4px; justify-items: center; }
 .theme-col > span { font-size: var(--t-small); color: var(--ink-3); }
 .theme-col input[type="color"] { width: 44px; height: 26px; padding: 0; border: 0; background: none; cursor: pointer; }
-.setting input[type="range"] { width: 116px; accent-color: var(--ink); }
 .theme-cols { display: flex; flex-wrap: wrap; gap: 14px; }
+
+/* Color swatches and live palette preview */
+.color-swatches { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.swatch-btn { width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid rgba(255,255,255,0.2); cursor: pointer; transition: transform 0.1s, border-color 0.1s; }
+.swatch-btn:hover { transform: scale(1.15); border-color: #fff; }
+.swatch-btn.active { border-color: #fff; box-shadow: 0 0 10px currentColor; transform: scale(1.1); }
+.palette-strip { display: flex; width: 140px; height: 22px; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.2); }
+.palette-tier { flex: 1; height: 100%; transition: background-color 0.15s; }
+.color-picker-row { display: flex; align-items: center; gap: 10px; }
+.color-picker-row input[type="color"] { width: 44px; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
+.color-hex-tag { font-family: var(--mono); font-size: var(--t-small); color: var(--ink-2); background: rgba(0,0,0,0.3); padding: 3px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); }
 
 html[dir='rtl'], body[dir='rtl'] { direction: rtl; }
 /* Counts, dates and times keep their own direction inside a right-to-left panel, so "2 open · 1 overdue" is not

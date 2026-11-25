@@ -4,12 +4,27 @@
   const R = window.Roamie;
   if (!R || typeof document === 'undefined') return;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
-  const GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', CORAL = '#ff8a7a', NOTE = '#e9a196';
+  let ACC = '#78ffe2', HOT = '#e6fffa', MID = '#28c4b8', DEEP = '#0e5c60', EDGE = 'rgba(3,39,34,0.6)';
+  let GLASS = 'rgba(6,22,24,0.94)', TEXT = '#dcfff6', DIM = '#8ab8b0', CORAL = '#ff8a7a', NOTE = '#e9a196';
   const SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Arabic", "Cairo", sans-serif';
   const MONO = SANS;
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const rgba = (h, a) => `rgba(${hex(h).join(',')},${a})`;
+
+  function syncTheme() {
+    const pal = R.theme?.palette;
+    if (!pal) return;
+    ACC = pal.ACC || ACC;
+    HOT = pal.HOT || HOT;
+    MID = pal.MID || MID;
+    DEEP = pal.DEEP || DEEP;
+    EDGE = pal.EDGE || EDGE;
+    GLASS = pal.GLASS || GLASS;
+    TEXT = pal.TEXT || TEXT;
+    DIM = pal.DIM || DIM;
+  }
+  syncTheme();
+  R.theme?.on?.(syncTheme);
 
   // Smooth rounded rectangle with optional speech bubble pointer tail
   function stepped(x, y, w, h, c = 10, tail = null) {
@@ -98,7 +113,17 @@
   }
 
   const meas = document.createElement('canvas').getContext('2d');
-  const textW = (s, font) => { meas.font = font; return meas.measureText(String(s ?? '')).width; };
+  const textWCache = new Map();
+  const textW = (s, font) => {
+    const key = `${font}|${s}`;
+    const hit = textWCache.get(key);
+    if (hit !== undefined) return hit;
+    if (textWCache.size > 2000) textWCache.clear();
+    meas.font = font;
+    const width = meas.measureText(String(s ?? '')).width;
+    textWCache.set(key, width);
+    return width;
+  };
   // Words typing themselves in; the last couple land white. Returns the full width.
   function typed(c, str, x, y, font, color, u = 1, o = {}) {
     str = String(str ?? '');
@@ -176,5 +201,16 @@
     c.restore();
   }
 
-  R.glass = { ACC, HOT, MID, DEEP, EDGE, GLASS, TEXT, DIM, CORAL, NOTE, MONO, SANS, rgba, stepped, steppedPath, chrome, textW, typed, wrapRows, ringPts, pen, chip, chipW, CHIP_H: 23 };
+  R.glass = {
+    get ACC() { return ACC; },
+    get HOT() { return HOT; },
+    get MID() { return MID; },
+    get DEEP() { return DEEP; },
+    get EDGE() { return EDGE; },
+    get GLASS() { return GLASS; },
+    get TEXT() { return TEXT; },
+    get DIM() { return DIM; },
+    CORAL, NOTE, MONO, SANS, rgba, stepped, steppedPath, chrome, textW, typed, wrapRows, ringPts, pen, chip, chipW, CHIP_H: 23,
+    syncTheme,
+  };
 })();

@@ -132,7 +132,7 @@ class DBusIntegration {
 
     try {
       const buffer = await fs.readFile(file);
-      return { ok: true, uri, file, buffer, dataUrl: `image/png;base64,${buffer.toString('base64')}` };
+      return { ok: true, uri, file, buffer, dataUrl: `data:image/png;base64,${buffer.toString('base64')}` };
     } catch (e) {
       return { ok: false, error: `The portal's picture could not be read (${String(e?.message || e)}).` };
     }

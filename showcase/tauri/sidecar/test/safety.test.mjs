@@ -43,6 +43,7 @@ cases('command', cmd, [
   ['tccutil reset All', BLOCK], ['csrutil disable', BLOCK], ['echo "x" >> ~/.zshrc', BLOCK], ['echo x > ~/Library/LaunchAgents/a.plist', BLOCK],
   ['chmod -R 777 ~', BLOCK], ['chown -R nobody /', BLOCK], ['killall Finder', BLOCK], ['kill -9 -1', BLOCK], ['env sudo ls', BLOCK],
   ['nohup sudo reboot', BLOCK], ['X=1 sudo ls', BLOCK], ['mv ~ /tmp/home', BLOCK], ['bash -c "rm -rf ~"', BLOCK], ['zsh -c "sudo ls"', BLOCK],
+  ['modprobe dummy', BLOCK], ['insmod rootkit.ko', BLOCK], ['iptables -F', BLOCK], ['useradd eviluser', BLOCK], ['chroot /jail', BLOCK],
   ['cat ~/Library/Keychains/login.keychain-db', BLOCK], ['cat ~/.zsh_history', BLOCK],
   // Regression: this walked the whole home folder and set off the Music, iCloud and "data from other apps" prompts.
   ['find ~ /tmp -iname "*sidekick*" 2>/dev/null | head -50', BLOCK], ['find / -name x', BLOCK], ['grep -r password ~', BLOCK],
@@ -56,6 +57,7 @@ cases('read', (p) => checkRead(p, HOME), [
   ['~/projects/app/.env.local', BLOCK], ['~/.aws/credentials', BLOCK], ['~/certs/server.key', BLOCK], ['~/.config/gh/hosts.yml', BLOCK],
   ['~/Library/Containers/com.apple.mail/Data', BLOCK], ['~/Library/Messages/chat.db', BLOCK], ['~/../ken/.ssh/id_rsa', BLOCK],
   ['/Users/ken/.ssh/id_rsa', BLOCK], ['~/Library/Application Support/Google/Chrome/Default/Cookies', BLOCK], ['~/.tauri/roamies-updater.key', BLOCK],
+  ['~/.git/config', BLOCK], ['~/.gitconfig', BLOCK], ['~/.config/git/credentials', BLOCK], ['~/.yarnrc', BLOCK], ['~/.python_history', BLOCK],
   ['~/.env.example.md', SAFE], ['~/environment.txt', SAFE],
 ]);
 assert.equal(checkRead('~', HOME, { recursive: true }).level, BLOCK, 'searching all of home is blocked');
@@ -68,8 +70,10 @@ cases('write', (p) => checkWrite(p, HOME), [
   ['~/.zshrc', BLOCK], ['~/.bash_profile', BLOCK], ['~/Library/LaunchAgents/evil.plist', BLOCK], ['~/.ssh/authorized_keys', BLOCK],
   ['~/.gg/auth.json', BLOCK], ['/etc/hosts', BLOCK], ['/Applications/Roamies.app/Contents/x', BLOCK], ['/usr/local/bin/x', BLOCK],
   ['~/.gitconfig', BLOCK], ['~/projects/app/.env', BLOCK], ['~/../../etc/passwd', BLOCK], ['~/Library/Preferences/com.apple.x.plist', BLOCK],
+  ['~/.bash_aliases', BLOCK], ['~/.zsh_aliases', BLOCK],
 ]);
 assert.equal(checkWrite('~/notes.txt', HOME, { exists: true }).level, ASK, 'overwriting an existing file asks first');
+assert.equal(checkWrite('/etc/evil').level, BLOCK, 'writing outside home without home arg is blocked');
 
 cases('open', (t) => checkOpen(t, HOME), [
   ['https://skool.com', SAFE], ['http://example.com', SAFE], ['mailto:me@x.com', SAFE], ['Safari', SAFE], ['Final Cut Pro', SAFE],
@@ -412,14 +416,18 @@ console.log('safety loophole tests: passed');
   console.log('checkFetch tests: passed');
 }
 
-// Linux hands-off input targets.
 assert.equal(checkLinuxInputTarget(null).level, BLOCK);
 assert.equal(checkLinuxInputTarget('').level, BLOCK);
 assert.equal(checkLinuxInputTarget(undefined).level, BLOCK);
 assert.equal(checkLinuxInputTarget('gnome-terminal').level, BLOCK);
 assert.equal(checkLinuxInputTarget('ptyxis').level, BLOCK);
 assert.equal(checkLinuxInputTarget('kgx').level, BLOCK);
+assert.equal(checkLinuxInputTarget('ghostty').level, BLOCK);
+assert.equal(checkLinuxInputTarget('xfce4-terminal').level, BLOCK);
 assert.equal(checkLinuxInputTarget('1password').level, BLOCK);
+assert.equal(checkLinuxInputTarget('seahorse').level, BLOCK);
+assert.equal(checkLinuxInputTarget('kleopatra').level, BLOCK);
+assert.equal(checkLinuxInputTarget('authenticator').level, BLOCK);
 assert.equal(checkLinuxInputTarget('footage').level, SAFE);
 assert.equal(checkLinuxInputTarget('gedit').level, SAFE);
 console.log('linux hands-off tests: passed');

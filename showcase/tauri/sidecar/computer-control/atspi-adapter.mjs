@@ -251,11 +251,13 @@ class ATSPIDriver {
       const n = Number(unwrap(await this._prop(busName, path, ACTION_IFACE, 'NActions')) ?? 0);
       if (!n) return [];
       const act = await this._iface(busName, path, ACTION_IFACE);
-      const names = [];
-      for (let i = 0; i < Math.min(n, 24); i++) {
-        try { names.push(String(await act.GetName(i))); } catch { /* an action with no name */ }
+      const limit = Math.min(n, 24);
+      const promises = [];
+      for (let i = 0; i < limit; i++) {
+        promises.push(act.GetName(i).then((s) => String(s)).catch(() => ''));
       }
-      return names;
+      const names = await Promise.all(promises);
+      return names.filter(Boolean);
     } catch {
       return [];
     }
@@ -356,19 +358,48 @@ class ATSPIDriver {
     return null;
   }
 
-  async _collectElements(busName, path, out, depth, appName, seen) {
+  async _collectElements(busName, path, out, depth, appName, seen, criteria = null) {
     if (depth > this.maxDepth || out.length >= this.maxElements) return;
     const key = `${busName}|${path}`;
     if (seen.has(key)) return;
     seen.add(key);
-    const el = await this._describe(busName, path, appName);
+
+    const roleWanted = criteria?.role ? String(criteria.role).toLowerCase() : null;
+    const nameWanted = criteria?.name ? String(criteria.name).toLowerCase() : null;
+
+    let el = null;
+    if (roleWanted || nameWanted) {
+      try {
+        const acc = await this._iface(busName, path, ACCESSIBLE_IFACE);
+        const [role, name] = await Promise.all([
+          this._role(busName, path, acc),
+          this._prop(busName, path, ACCESSIBLE_IFACE, 'Name').then((v) => String(unwrap(v) ?? '')),
+        ]);
+        let matches = true;
+        if (roleWanted && !String(role).toLowerCase().includes(roleWanted)) matches = false;
+        if (nameWanted && !String(name).toLowerCase().includes(nameWanted)) matches = false;
+
+        if (matches) {
+          el = await this._describe(busName, path, appName);
+        }
+      } catch {
+        return;
+      }
+    } else {
+      el = await this._describe(busName, path, appName);
+    }
+
     if (el) out.push(el);
     if (out.length >= this.maxElements) return;
-    for (const [cBus, cPath] of await this._children(busName, path)) {
-      try {
-        await this._collectElements(cBus, cPath, out, depth + 1, appName, seen);
-      } catch { /* a control that went away */ }
-      if (out.length >= this.maxElements) return;
+
+    const children = await this._children(busName, path);
+    const BATCH = 4;
+    for (let i = 0; i < children.length; i += BATCH) {
+      if (out.length >= this.maxElements) break;
+      const slice = children.slice(i, i + BATCH);
+      await Promise.all(slice.map(([cBus, cPath]) =>
+        this._collectElements(cBus, cPath, out, depth + 1, appName, seen, criteria).catch(() => {})
+      ));
     }
   }
 
@@ -378,8 +409,10 @@ class ATSPIDriver {
     const apps = await this.getApplicationList();
     const wanted = criteria.applicationName ? String(criteria.applicationName).toLowerCase() : '';
     const targets = wanted ? apps.filter((a) => (a.name || '').toLowerCase().includes(wanted) || (a.toolkitName || '').toLowerCase().includes(wanted)) : apps;
+    const seen = new Set();
     for (const app of targets) {
-      await this._collectElements(app.busName, app.path, all, 0, app.name, new Set());
+      if (all.length >= this.maxElements) break;
+      await this._collectElements(app.busName, app.path, all, 0, app.name, seen, criteria);
     }
     const stateWanted = Array.isArray(criteria.states) ? criteria.states.map((s) => String(s).toUpperCase().replace(/^STATE_/, '')) : null;
     let filtered = all.filter((el) => {
@@ -439,6 +472,34 @@ class ATSPIDriver {
     if (!w) throw new Error(`Window not found: ${title}`);
     const focused = await this.setFocus(w.path, w.busName).catch(() => false);
     return { ...w, focused };
+  }
+
+  async setWindowPosition(title, x, y) {
+    const windows = await this.getWindowList();
+    const needle = String(title).toLowerCase();
+    const w = windows.find((n) => (n.title || '').toLowerCase().includes(needle) || (n.appName || '').toLowerCase().includes(needle));
+    if (!w) throw new Error(`Window not found: ${title}`);
+    try {
+      const comp = await this._iface(w.busName, w.path, COMPONENT_IFACE);
+      const ok = await comp.SetPosition(Math.round(x), Math.round(y));
+      return ok !== false;
+    } catch {
+      return false;
+    }
+  }
+
+  async setWindowSize(title, width, height) {
+    const windows = await this.getWindowList();
+    const needle = String(title).toLowerCase();
+    const w = windows.find((n) => (n.title || '').toLowerCase().includes(needle) || (n.appName || '').toLowerCase().includes(needle));
+    if (!w) throw new Error(`Window not found: ${title}`);
+    try {
+      const comp = await this._iface(w.busName, w.path, COMPONENT_IFACE);
+      const ok = await comp.SetSize(Math.round(width), Math.round(height));
+      return ok !== false;
+    } catch {
+      return false;
+    }
   }
 }
 

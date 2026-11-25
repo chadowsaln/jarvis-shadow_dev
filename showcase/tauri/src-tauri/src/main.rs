@@ -723,6 +723,7 @@ fn intro_at_tray(app: &AppHandle, tray: Option<tauri::Rect>, text: &str) {
 // ---------- menu bar icon ----------
 
 /// The "Wave" icon: the Sidekick waving a floating mitt, as a 12×12 LED grid.
+#[cfg(target_os = "macos")]
 const TRAY_ART: [&str; 12] = [
     "............",
     "..........#.",
@@ -740,6 +741,7 @@ const TRAY_ART: [&str; 12] = [
 
 /// Renders the grid as LED dots (2 px on a 3 px pitch, 36 px = 18 pt at 2x). Black on transparent, used
 /// as a template image so macOS tints it for light, dark and highlighted menu bars.
+#[cfg(target_os = "macos")]
 fn tray_image() -> tauri::image::Image<'static> {
     const PITCH: usize = 3;
     const DOT: usize = 2;
@@ -979,7 +981,7 @@ fn open_onboarding(app: &AppHandle, mode: Option<&str>) {
         return;
     }
     let url = if chat { "onboarding/index.html?mode=chat" } else { "onboarding/index.html" };
-    let mut b = WebviewWindowBuilder::new(app, ONBOARDING_LABEL, WebviewUrl::App(url.into()))
+    let b = WebviewWindowBuilder::new(app, ONBOARDING_LABEL, WebviewUrl::App(url.into()))
         .title(if chat { "Get to know you" } else { "Welcome to JARVIS V2" })
         .inner_size(780.0, 540.0)
         .resizable(false)

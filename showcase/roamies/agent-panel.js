@@ -166,7 +166,19 @@
     el.addEventListener('pointerenter', () => { hovered = true; });
     el.addEventListener('pointerleave', () => { hovered = false; });
     document.body.append(el);
+    syncPanelTheme();
   };
+
+  const syncPanelTheme = () => {
+    const pal = R.theme?.palette;
+    if (!pal || !el) return;
+    el.style.setProperty('--accent', pal.ACC);
+    el.style.setProperty('--line-hot', pal.ACC);
+    el.style.setProperty('--line-hi', pal.MID);
+    el.style.setProperty('--ink', pal.TEXT);
+    el.style.setProperty('--ink-3', pal.DIM);
+  };
+  R.theme?.on?.(syncPanelTheme);
   const paint = () => {
     raf = 0;
     if (!el) return;

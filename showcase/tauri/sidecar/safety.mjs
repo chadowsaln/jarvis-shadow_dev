@@ -14,11 +14,12 @@ const verdict = (level, reason = '') => ({ level, reason });
 // Secrets: keys, tokens, passwords, browser cookies and the keychain. Never read, never sent anywhere.
 const SECRET = [
   /(^|\/)\.ssh(\/|$)/, /(^|\/)\.gnupg(\/|$)/, /(^|\/)\.aws(\/|$)/, /(^|\/)\.azure(\/|$)/, /(^|\/)\.kube\/config$/,
-  /(^|\/)\.docker\/config\.json$/, /(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.pypirc$/, /(^|\/)\.git-credentials$/,
+  /(^|\/)\.docker\/config\.json$/, /(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.yarnrc(\.ya?ml)?$/, /(^|\/)\.pypirc$/, /(^|\/)\.git-credentials$/,
+  /(^|\/)\.git\/config$/, /(^|\/)\.gitconfig$/, /(^|\/)\.config\/git\/credentials$/,
   /(^|\/)\.config\/gh(\/|$)/, /(^|\/)\.config\/gcloud(\/|$)/, /(^|\/)\.gg\/auth\.json$/, /(^|\/)\.tauri(\/|$)/,
   /(^|\/)Library\/Keychains(\/|$)/, /(^|\/)Library\/Cookies(\/|$)/, /\/(Cookies|Login Data|Web Data)(-journal)?$/,
   /(^|\/)\.env(\.[\w-]+)?$/, /\.(pem|p12|pfx|key|keystore|jks)$/i, /(^|\/)id_(rsa|ed25519|ecdsa|dsa)(\.pub)?$/,
-  /(^|\/)\.(bash|zsh|fish)_history$/, /(^|\/)\.zsh_sessions(\/|$)/,
+  /(^|\/)\.(bash|zsh|fish|python|node_repl|mysql|psql|sqlite)_history$/, /(^|\/)\.zsh_sessions(\/|$)/,
   /(^|\/)AppData\/(Roaming\/Microsoft\/(Credentials|Protect|Crypto)|Local\/Microsoft\/Credentials)(\/|$)/i, /\/(User Data|Profiles)\/.*\/(Cookies|Login Data|logins\.json|key4\.db)$/i,
   // Linux: GNOME's keyring and KDE's wallet, pass, the NSS certificate store and Firefox's saved logins and cookies.
   /(^|\/)\.local\/share\/(keyrings|kwalletd)(\/|$)/, /(^|\/)\.password-store(\/|$)/, /(^|\/)\.pki(\/|$)/,
@@ -33,6 +34,7 @@ const PRIVATE = [
 // Writing here could let something run on its own later, or break the Mac.
 const NO_WRITE = [
   /(^|\/)\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|profile|login|inputrc)$/, /(^|\/)\.config\/fish(\/|$)/,
+  /(^|\/)\.(bash|zsh)_aliases$/, /(^|\/)\.(bashrc|zshrc)\.d(\/|$)/,
   /(^|\/)Library\/(LaunchAgents|LaunchDaemons|StartupItems|Preferences|Keychains|Application Support\/com\.apple)(\/|$)/,
   /(^|\/)\.gitconfig$/, /(^|\/)\.ssh(\/|$)/, /(^|\/)\.gg(\/|$)/, /(^|\/)\.tauri(\/|$)/, /\.app(\/|$)/, /(^|\/)crontab$/,
   /\/Start Menu\/Programs\/Startup(\/|$)/i, /(^|\/)Documents\/(Windows)?PowerShell\/.*profile\.ps1$/i, /^[a-z]:\/(Windows|Program Files( \(x86\))?|ProgramData)(\/|$)/i,
@@ -110,12 +112,12 @@ export function checkRead(p, home, { recursive = false } = {}) {
 /** write_file. Existing files need a yes; secrets, startup files and system folders never. `own`: a folder that is
  *  the writer's own (an agent's folder), where overwriting needs no yes; only where the path really leads counts. */
 export function checkWrite(p, home, { exists = false, own = null } = {}) {
-  home = slash(home);
+  home = slash(home || process.env.HOME || process.env.USERPROFILE || '');
   const abs = norm(p, home), r = rel(abs, home), all = bothOf(abs);
   if (all.some((a) => [...SECRET, ...NO_WRITE].some((re) => re.test(rel(a, home)) || re.test(a)))) {
     return { ...verdict(BLOCK, `${p} is a protected file (keys, settings, startup scripts or an app), so I won't write to it.`), path: abs };
   }
-  const realHome = realOf(home), inside = (a) => [home, realHome].some((h) => a.startsWith(h + '/')) || /^\/(private\/)?tmp\//.test(a);
+  const realHome = home ? realOf(home) : '', inside = (a) => (Boolean(home) && [home, realHome].some((h) => Boolean(h) && a.startsWith(h + '/'))) || /^\/(private\/)?tmp\//.test(a);
   if (!all.every(inside)) {
     return { ...verdict(BLOCK, `I only write files inside your home folder, not ${p}.`), path: abs };
   }
@@ -203,6 +205,10 @@ const BLOCKED_PROGRAMS = {
   // Linux
   pkexec: 'needs admin rights', 'systemd-run': 'starts programs as background services', at: 'schedules commands to run on their own',
   batch: 'schedules commands to run on their own', 'kwallet-query': 'reads your saved passwords',
+  modprobe: 'loads kernel code', insmod: 'loads kernel code', rmmod: 'unloads kernel code',
+  iptables: 'changes firewall settings', nft: 'changes firewall settings', ufw: 'changes firewall settings', 'firewall-cmd': 'changes firewall settings',
+  useradd: 'edits user accounts', userdel: 'edits user accounts', usermod: 'edits user accounts',
+  groupadd: 'edits user groups', groupdel: 'edits user groups', chroot: 'changes root directory',
 };
 const SHELLS = new Set(['powershell', 'pwsh', 'cmd', 'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'python', 'python3', 'node', 'perl', 'ruby', 'php', 'osascript', 'swift', 'deno', 'bun', 'lua']);
 // Read-only programs that are fine to run without asking (paths still checked).
@@ -437,7 +443,7 @@ export function checkDiagnosticCommand(command, args = []) {
 // ---------- apps: start one that is installed, by name, and nothing else ----------
 // An app is named the way the menus name it ("Firefox", "org.gnome.Nautilus"). A path, a file, a shell string or a
 // system tool is never an app: the installed-app list in tools.mjs is the only thing this can ever start.
-const NOT_AN_APP = /^(?:sudo|su|doas|pkexec|bash|sh|zsh|dash|fish|ksh|csh|python|python2|python3|perl|ruby|node|deno|bun|npm|npx|yarn|pnpm|apt|apt-get|aptitude|dpkg|dnf|yum|rpm|pacman|zypper|snap|flatpak|pip|pip3|gem|cargo|go|make|gcc|cc|g\+\+|clang|curl|wget|ssh|scp|sftp|rsync|systemctl|service|journalctl|mount|umount|chmod|chown|kill|killall|pkill|shutdown|reboot|poweroff|halt|dd|mkfs|fdisk|parted|rm|rmdir|mv|cp|ln|tee|xargs|eval|exec|env|source|install|uninstall|update|xterm|konsole|gnome-terminal|alacritty|kitty|tmux|screen|gdb|strace|ltrace)$/i;
+const NOT_AN_APP = /^(?:sudo|su|doas|pkexec|bash|sh|zsh|dash|fish|ksh|csh|python|python2|python3|perl|ruby|node|deno|bun|npm|npx|yarn|pnpm|apt|apt-get|aptitude|dpkg|dnf|yum|rpm|pacman|zypper|snap|flatpak|pip|pip3|gem|cargo|go|make|gcc|cc|g\+\+|clang|curl|wget|ssh|scp|sftp|rsync|systemctl|service|journalctl|mount|umount|chmod|chown|kill|killall|pkill|shutdown|reboot|poweroff|halt|dd|mkfs|fdisk|parted|rm|rmdir|mv|cp|ln|tee|xargs|eval|exec|env|source|install|uninstall|update|xterm|konsole|gnome-terminal|alacritty|kitty|ghostty|xfce4-terminal|mate-terminal|lxterminal|foot|tilix|wezterm|ptyxis|urxvt|rxvt|seahorse|kleopatra|tmux|screen|gdb|strace|ltrace)$/i;
 const APP_FILE = /\.(sh|bash|zsh|fish|py|pyc|pl|rb|js|mjs|cjs|ts|exe|bat|cmd|ps1|vbs|jar|appimage|run|bin|deb|rpm|pkg|dmg|msi|desktop|service|timer|socket|conf|so|dylib|dll|iso|img|tar|gz|xz|zip|7z)$/i;
 
 /** launch_app: one installed app, named the way the menus name it. BLOCK for a path, an executable file, a shell
@@ -459,9 +465,12 @@ export function checkAppTarget(target) {
 const LINUX_HANDS_OFF = new Map([
   ['gnome-terminal', 'GNOME Terminal'], ['kgx', 'Console'], ['konsole', 'Konsole'], ['alacritty', 'Alacritty'],
   ['kitty', 'kitty'], ['wezterm', 'WezTerm'], ['xterm', 'xterm'], ['tilix', 'Tilix'], ['terminator', 'Terminator'],
-  ['ptyxis', 'Ptyxis'], ['foot', 'foot'],
+  ['ptyxis', 'Ptyxis'], ['foot', 'foot'], ['ghostty', 'Ghostty'], ['xfce4-terminal', 'Xfce Terminal'],
+  ['mate-terminal', 'MATE Terminal'], ['lxterminal', 'LXTerminal'], ['urxvt', 'urxvt'], ['rxvt', 'rxvt'],
   ['gnome-control-center', 'Settings'], ['systemsettings', 'System Settings'],
   ['1password', '1Password'], ['bitwarden', 'Bitwarden'], ['keepassxc', 'KeePassXC'], ['keepass', 'KeePass'],
+  ['seahorse', 'Passwords and Keys'], ['kleopatra', 'Kleopatra'], ['authenticator', 'Authenticator'],
+  ['gnome-authenticator', 'Authenticator'],
 ]);
 export function linuxHandsOff(name) {
   const n = String(name ?? '').trim().toLowerCase();
@@ -673,6 +682,27 @@ export function checkFileDest(p, home, { allowReplace = false } = {}) {
   const parent = path.dirname(abs);
   if (!inHome(realOf(parent), home)) return { ...verdict(BLOCK, `${p} would be placed outside your allowed folders.`), path: abs };
   return { ...verdict(SAFE), path: abs };
+}
+
+/** Deleting a file or folder (Batch 5): must be inside allowed user folders or tmp, never root/home directly, never protected files. */
+export function checkFileDelete(p, home) {
+  home = slash(home || process.env.HOME || process.env.USERPROFILE || '');
+  const abs = norm(p, home);
+  const r = rel(abs, home);
+  const all = bothOf(abs);
+  if (abs === home || abs === '/' || /^[a-z]:\\?$/i.test(abs)) {
+    return { ...verdict(BLOCK, `Cannot delete root or home folder ${p}.`), path: abs };
+  }
+  if (all.some((a) => [...SECRET, ...NO_WRITE].some((re) => re.test(rel(a, home)) || re.test(a)))) {
+    return { ...verdict(BLOCK, `${p} is a protected file or folder, so I won't delete it.`), path: abs };
+  }
+  const realHome = home ? realOf(home) : '';
+  const inside = (a) => (Boolean(home) && [home, realHome].some((h) => Boolean(h) && (a === h || a.startsWith(h + '/')))) || /^\/(private\/)?tmp\//.test(a);
+  if (!all.every(inside)) {
+    return { ...verdict(BLOCK, `I only delete files inside your allowed folders, not ${p}.`), path: abs };
+  }
+  if (!existsSyncSafe(abs)) return { ...verdict(BLOCK, `${p} does not exist.`), path: abs };
+  return { ...verdict(ASK, `Delete ${r || abs}?`), path: abs };
 }
 
 
