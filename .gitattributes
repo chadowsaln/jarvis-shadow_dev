@@ -1,0 +1,14 @@
+# Source files are checked out with LF on every platform, Windows included: Git for Windows turns them into CRLF
+# by default, and the sidecar's tests read these files as text and match them line by line (respan-trace.test.mjs
+# looks for `});` immediately followed by a newline), so a CRLF checkout failed on the Windows runner only.
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.rs text eol=lf
+*.swift text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
