@@ -10,6 +10,14 @@ import { createDesktopVerification } from '../computer-control/verification.mjs'
 import { detectCapabilities } from '../computer-control/index.mjs';
 import { DBusIntegration } from '../computer-control/dbus-integration.mjs';
 
+// The input backends under test are Linux-only (xdotool, ydotool, the desktop portal) and the fakes below
+// are shell scripts on PATH, so there is nothing to check where the module itself refuses to run. The AT-SPI
+// driver keeps its own test (atspi-adapter.test.mjs), which runs everywhere.
+if (process.platform !== 'linux') {
+  console.log('computer-control: skipped (Linux only)');
+  process.exit(0);
+}
+
 // --- AT-SPI: the real bus may or may not be reachable here; the call must never throw or lie.
 const d = createATSPIDriver({ cacheTtlMs: 0 });
 const apps = await d.getApplicationList().catch(() => []);

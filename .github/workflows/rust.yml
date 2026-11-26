@@ -20,6 +20,17 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+    # tauri.conf.json lists the voice and Linux input helpers as external binaries, so the shell's build
+    # script refuses to run until they exist. Build them here the way build.sh names them.
+    - name: Build the helpers the shell bundles
+      run: |
+        TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+        mkdir -p showcase/tauri/src-tauri/binaries
+        for crate in voice-win input-linux; do
+          cargo build --release --locked --manifest-path "showcase/tauri/src-tauri/$crate/Cargo.toml" --target "$TRIPLE"
+        done
+        cp "showcase/tauri/src-tauri/voice-win/target/$TRIPLE/release/roamies-voice" "showcase/tauri/src-tauri/binaries/roamies-voice-$TRIPLE"
+        cp "showcase/tauri/src-tauri/input-linux/target/$TRIPLE/release/roamies-input" "showcase/tauri/src-tauri/binaries/roamies-input-$TRIPLE"
     - name: Build
       run: cargo check --verbose --manifest-path showcase/tauri/src-tauri/Cargo.toml
     - name: Run tests

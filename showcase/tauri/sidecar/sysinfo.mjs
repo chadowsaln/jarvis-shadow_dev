@@ -5,6 +5,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const LINUX = process.platform === 'linux';
+// /proc and /sys always speak POSIX: joining them with node:path would turn them into C:\\proc\\... on a
+// Windows build, where the files cannot exist and the parsing code would never be reached (nor tested).
+const join = path.posix.join;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -73,22 +76,22 @@ async function cpuTemperature({ fsApi = fs } = {}) {
   const zones = await fsApi.readdir('/sys/class/thermal').catch(() => []);
   for (const z of zones) {
     if (!/^thermal_zone\d+$/.test(z)) continue;
-    const base = path.join('/sys/class/thermal', z);
-    const t = Number(String(await readText(path.join(base, 'temp'), { fsApi }) ?? '').trim());
+    const base = join('/sys/class/thermal', z);
+    const t = Number(String(await readText(join(base, 'temp'), { fsApi }) ?? '').trim());
     if (!Number.isFinite(t)) continue;
-    const type = String(await readText(path.join(base, 'type'), { fsApi }) ?? '').trim() || z;
+    const type = String(await readText(join(base, 'type'), { fsApi }) ?? '').trim() || z;
     consider(t > 1000 ? t / 1000 : t, type);
   }
   if (!best) {
     const hwmons = await fsApi.readdir('/sys/class/hwmon').catch(() => []);
     for (const h of hwmons) {
-      const base = path.join('/sys/class/hwmon', h);
+      const base = join('/sys/class/hwmon', h);
       const files = await fsApi.readdir(base).catch(() => []);
       for (const f of files) {
         if (!/^temp\d+_input$/.test(f)) continue;
-        const t = Number(String(await readText(path.join(base, f), { fsApi }) ?? '').trim());
-        const label = String(await readText(path.join(base, f.replace('_input', '_label')), { fsApi }) ?? '').trim();
-        const name = String(await readText(path.join(base, 'name'), { fsApi }) ?? '').trim();
+        const t = Number(String(await readText(join(base, f), { fsApi }) ?? '').trim());
+        const label = String(await readText(join(base, f.replace('_input', '_label')), { fsApi }) ?? '').trim();
+        const name = String(await readText(join(base, 'name'), { fsApi }) ?? '').trim();
         consider(t > 1000 ? t / 1000 : t, label || name || h);
       }
     }
@@ -169,11 +172,11 @@ export async function batteryStatus({ fsApi = fs } = {}) {
   const base = '/sys/class/power_supply';
   const entries = await fsApi.readdir(base).catch(() => []);
   for (const name of entries) {
-    const dir = path.join(base, name);
-    const type = String(await readText(path.join(dir, 'type'), { fsApi }) ?? '').trim();
+    const dir = join(base, name);
+    const type = String(await readText(join(dir, 'type'), { fsApi }) ?? '').trim();
     if (type.toLowerCase() !== 'battery') continue;
-    const cap = Number(String(await readText(path.join(dir, 'capacity'), { fsApi }) ?? '').trim());
-    const status = String(await readText(path.join(dir, 'status'), { fsApi }) ?? '').trim() || 'Unknown';
+    const cap = Number(String(await readText(join(dir, 'capacity'), { fsApi }) ?? '').trim());
+    const status = String(await readText(join(dir, 'status'), { fsApi }) ?? '').trim() || 'Unknown';
     return { name, percent: Number.isFinite(cap) ? clamp(cap, 0, 100) : null, status };
   }
   return null;
@@ -222,9 +225,9 @@ export async function topProcesses({ fsApi = fs, wait = sleep, sampleMs = 250, l
     for (const pid of entries) {
       if (!/^\d+$/.test(pid)) continue;
       const [stat, status, cmdline] = await Promise.all([
-        readText(path.join('/proc', pid, 'stat'), { fsApi }),
-        readText(path.join('/proc', pid, 'status'), { fsApi }),
-        readText(path.join('/proc', pid, 'cmdline'), { fsApi }),
+        readText(join('/proc', pid, 'stat'), { fsApi }),
+        readText(join('/proc', pid, 'status'), { fsApi }),
+        readText(join('/proc', pid, 'cmdline'), { fsApi }),
       ]);
       if (!stat) continue;
       const ticks = procTotal(stat);
