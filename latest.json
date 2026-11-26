@@ -1,0 +1,11 @@
+{
+  "version": "0.1.20",
+  "notes": "JARVIS V2 0.1.20",
+  "pub_date": "2026-11-26T05:00:13.771Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSTA4Nm5Na3VhTWJWamhjR29vOVRzSk1adEtsVFlOTnpIQmc5VmZ0b0w4RDdiSzZxaTNVRkhUaGhlbWRYcTZ5ZVZQeTI3VXJJWm0wcjlFWkJ6TktERzBPRENYTVpCb3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjY5MTI2CWZpbGU6amFydmlzXzAuMS4yMF9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMS4yMApwcFBmZE1UZEtTa1IrSzcxcmFZbWZ5S0hkOWNPMDFMMFFqWm9KTG9HZVVNeWt4QW5Cck1SLzgwVVJ1aENjVEhZWndHdXZTd2wrMENhd2hEUXhzWmNEdz09Cg==",
+      "url": "https://api.github.com/repos/chadowsaln/jarvis-shadow_dev/releases/assets/794388986"
+    }
+  }
+}
