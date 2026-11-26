@@ -26,7 +26,7 @@ objc2-service-management = { version = "=0.3.2", default-features = false, featu
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "=0.18.2"
 x11rb = "=0.13.2"
-zbus = "=5.19.0"
+zbus = "=6.5.0"
 # The same WebKitGTK Tauri uses, for one setting: replies speak with WebAudio, and WebKitGTK blocks audio
 # until the user has clicked the page (the overlay is click-through, so it never is).
 webkit2gtk = { version = "=2.0.2", features = ["v2_30"] }
