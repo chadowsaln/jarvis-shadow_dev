@@ -1720,6 +1720,11 @@ fn log_stdio(name: &str) -> Stdio {
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|h| PathBuf::from(h).join(".gg").join(name))
         .and_then(|p| {
+            // On a fresh machine ~/.gg may not exist yet (a new CI runner, say): the log is the only record of why
+            // the sidecar would not start, so create it rather than falling back to a discarded stderr.
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
             rotate_log(&p);
             OpenOptions::new().create(true).append(true).open(p).ok()
         })

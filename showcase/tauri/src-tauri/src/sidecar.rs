@@ -51,16 +51,21 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     if GENERATION.load(Ordering::SeqCst) != 0 && app.state::<Sidecar>().0.lock().unwrap().is_some() {
         return;
     }
+    eprintln!("spawn_sidecar: find_node() start");
     let Some(node) = find_node() else {
+        eprintln!("spawn_sidecar: find_node() returned None; PATH={:?}", std::env::var_os("PATH"));
         crate::set_lifecycle_error(app, "JARVIS V2 is missing Node.js; install Node.js and restart");
         fallback_menu(app, "JARVIS V2 is missing Node.js; install Node.js and restart");
         return;
     };
+    eprintln!("spawn_sidecar: node = {}", node.display());
     let Some(script) = sidecar_script(app) else {
+        eprintln!("spawn_sidecar: sidecar_script() returned None");
         crate::set_lifecycle_error(app, "JARVIS V2 sidecar is missing; reinstall it");
         fallback_menu(app, "JARVIS V2 sidecar is missing; reinstall it");
         return;
     };
+    eprintln!("spawn_sidecar: script = {}", script.display());
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     SIDEKAR_READY.store(false, Ordering::SeqCst);
     SIDEKAR_TALKED.store(false, Ordering::SeqCst);
@@ -102,6 +107,7 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            eprintln!("spawn_sidecar: cmd.spawn() failed: {e}");
             crate::set_lifecycle_error(app, &format!("JARVIS V2 sidecar failed to start: {e}"));
             fallback_menu(app, &format!("JARVIS V2 sidecar failed to start: {e}"));
             return;

@@ -182,6 +182,8 @@ jobs:
         run: |
           $data = Join-Path $env:RUNNER_TEMP 'roamies-data'
           $env:ROAMIES_DATA_DIR = $data
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          '{"onboarded":true,"setupVersion":2,"voice":false}' | Set-Content (Join-Path $data 'sidekick.json')
           $out = Join-Path $env:RUNNER_TEMP 'app.out.log'
           $err = Join-Path $env:RUNNER_TEMP 'app.err.log'
           $p = Start-Process -FilePath src-tauri/target/debug/jarvis_v2.exe -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
@@ -200,6 +202,10 @@ jobs:
             # ROAMIES_DATA_DIR moves the sidecar's structured logs; its stderr (and a failed spawn) go to ~/.gg.
             "--- sidecar logs"; Get-ChildItem $logs -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_ | Select-Object -Last 40 }
             "--- sidecar stderr"; Get-Content (Join-Path $env:USERPROFILE '.gg/sidekick.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
+            # What the shell found to run: the app looks for node next to itself, then on PATH.
+            "--- node"; Get-Command node -ErrorAction SilentlyContinue | Format-List Name, Source
+            "--- next to the app"; Get-ChildItem src-tauri/target/debug -Filter 'node*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            "--- data dir"; Get-ChildItem $data -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
             throw "Roamies didn't start its sidecar (started: $started, still running: $alive)"
           }
           "Roamies started its sidecar (pid $($p.Id))"
