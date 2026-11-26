@@ -83,6 +83,10 @@ pub(crate) fn spawn_sidecar(app: &AppHandle) {
         // Node comes from the system: without this, inside an AppImage it loads the bundled libraries and dies.
         crate::linux::host_env(&mut cmd);
         cmd.env("ROAMIES_SESSION", crate::linux::session().name()).env("ROAMIES_LAUNCH", crate::linux::launch_command());
+        // Input through the desktop portal (libei): the helper that needs no root and no ydotoold.
+        if let Some(input) = helper_binary("roamies-input") {
+            cmd.env("ROAMIES_INPUT", input);
+        }
         for (k, v) in [("DBUS_SESSION_BUS_ADDRESS", std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()),
                        ("XDG_RUNTIME_DIR", std::env::var("XDG_RUNTIME_DIR").ok()),
                        ("YDOTOOL_SOCKET", std::env::var("YDOTOOL_SOCKET").ok()),

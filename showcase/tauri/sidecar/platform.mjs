@@ -62,9 +62,9 @@ export const needsVoiceModel = (platform) => platform === 'win32' || platform ==
 export const hasHands = (platform, hands) => platform === 'darwin' || !!hands;
 
 /** Whether JARVIS can work other apps here: the hands helper on macOS and Windows, and on Linux the
- *  computer-control module (AT-SPI to find and click a control, ydotool for keys and the pointer), which is
- *  built in and needs no helper. `hasHands` stays about the helper, because its window reads and area
- *  picking have no Linux twin yet. */
+ *  computer-control module (AT-SPI to find and click a control, the desktop portal's libei for keys and the
+ *  pointer, ydotool where that is missing), which is built in. `hasHands` stays about the hands helper,
+ *  because its window reads and area picking have no Linux twin yet. */
 export const hasDesktopControl = (platform, hands) => hasHands(platform, hands) || platform === 'linux';
 
 /** Ask About an Area (the snap shortcut and menu item): the helper's area selection, on macOS and Windows.

@@ -1411,7 +1411,7 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
       {
         name: 'linux_type_text',
-        description: 'Type text at the current cursor position or into a focused element on Linux. Uses the available input backend (xdotool on X11, ydotool when its daemon socket answers).',
+        description: 'Type text at the current cursor position or into a focused element on Linux. Types through the desktop portal (libei, one permission prompt) on Wayland, or xdotool on X11; on a desktop with no text input through the portal it falls back to ydotool. Prefer linux_set_text for a named field when typing is refused.',
         parameters: z.object({
           text: z.string().min(1),
           delayMs: z.number().int().min(0).max(1000).optional().default(10),
@@ -1428,6 +1428,40 @@ A drawing stays until the user clears it or the window changes; your next drawin
           const input = await getInputSimulator();
           await input.type(text, delayMs);
           return `Typed ${text.length} characters`;
+        },
+      },
+      {
+        name: 'linux_set_text',
+        description: 'Replace a text field\'s whole value on Linux through its accessibility interface (no keystrokes), so it works on Wayland where typing into another app needs the desktop portal. Give the field by the words on or beside it; use linux_find_element first when unsure.',
+        parameters: z.object({
+          text: z.string().min(1),
+          name: z.string().min(1).describe('The field\'s accessible name or label (partial match, case-insensitive)'),
+          role: z.string().optional().describe('Narrow to a role, e.g. ROLE_ENTRY or ROLE_TEXT'),
+          applicationName: z.string().optional().describe('Limit the search to this application'),
+          index: z.number().int().optional().describe('Nth match (0-based)'),
+        }),
+        // Writing into a field is the same act as typing into it, which is trusted.
+        permission: { level: 'trusted', requiresApproval: false, description: 'Write text into a field on Linux through accessibility' },
+        execute: async ({ text, name, role, applicationName, index }) => {
+          const driver = await getSharedATSPIDriver();
+          const focused = await driver.getFocusedApplication();
+          if (focused?.name) {
+            const verdict = checkLinuxInputTarget(focused.name);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          }
+          const element = await driver.findElement({
+            name,
+            ...(role ? { role } : {}),
+            ...(applicationName ? { applicationName } : {}),
+            ...(index != null ? { index } : {}),
+          });
+          if (!element) throw new Error(`No text field matching "${name}" was found.`);
+          if (element.applicationName) {
+            const verdict = checkLinuxInputTarget(element.applicationName);
+            if (verdict?.level === BLOCK) throw new Error(verdict.reason);
+          }
+          const done = await driver.setText(element, text);
+          return `Put ${[...text].length} characters into ${element.role} "${element.name}" (${done.how}); the keyboard was not used.`;
         },
       },
       {

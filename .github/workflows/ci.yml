@@ -76,6 +76,7 @@ jobs:
             showcase/tauri/src-tauri -> target
             showcase/tauri/src-tauri/voice-win -> target
             showcase/tauri/src-tauri/hands-win -> target
+            showcase/tauri/src-tauri/input-linux -> target
 
       # Copies the web files into dist/, bundles the sidecar, then `cargo build` (debug). On macOS this also
       # compiles the Swift helpers; on Windows it builds the voice and hands helpers first, on Linux the voice helper
@@ -114,6 +115,11 @@ jobs:
       - name: Test the hands helper's logic
         if: runner.os != 'Windows'
         run: cargo test --locked --manifest-path src-tauri/hands-win/Cargo.toml
+
+      # The Linux input helper (portal + libei). Its command parsing builds anywhere; on Linux the whole crate
+      # compiles, portal session included.
+      - name: Test the Linux input helper
+        run: cargo test --locked --manifest-path src-tauri/input-linux/Cargo.toml
 
       - name: Test the Windows hands helper
         if: runner.os == 'Windows'

@@ -28,7 +28,8 @@ class ComputerControlServiceImpl {
     if (this.initialized) return;
     try { await this.atspi.connect(); } catch (e) { console.error('[ComputerControl] AT-SPI unavailable:', e?.message || e); }
     try { await this.dbus.connect(); } catch (e) { console.error('[ComputerControl] D-Bus unavailable:', e?.message || e); }
-    // Use whichever input backend actually works here (xdotool on X11, ydotool when its socket answers).
+    // Use whichever input backend actually works here (the desktop portal's libei, xdotool on X11, or ydotool
+    // when its socket answers).
     try { this.input = (await selectInputBackend()) || createInputSimulator(); } catch { /* keep the ydotool object; its calls explain why */ }
     try { await this.ocr.initialize('eng'); } catch {}
     this.initialized = true;
@@ -117,6 +118,16 @@ if (process.argv.includes('--doctor')) {
       const d = createATSPIDriver(); await d.connect(); await d.disconnect();
       ok('AT-SPI bus reachable', true, '');
     } catch (e) { ok('AT-SPI bus reachable', false, 'Install at-spi2-core and ensure DBUS_SESSION_BUS_ADDRESS is set; ' + (e?.message || e)); }
+    // Input through the desktop portal (libei): the Wayland path with no root and no daemon.
+    try {
+      const { LibeiBackend, findInputHelper } = await import('./libei-backend.mjs');
+      const helper = findInputHelper();
+      ok('input helper installed (roamies-input)', !!helper, 'Run ./build.sh in showcase/tauri to build it, or set ROAMIES_INPUT to its path');
+      if (helper) {
+        const probe = await new LibeiBackend({ helper }).probe();
+        ok('RemoteDesktop portal (libei input)', probe.ok, probe.ok ? `backend ${probe.backend}, portal v${probe.portalVersion}` : `${probe.reason || ''} ${probe.remediation || ''}`.trim());
+      }
+    } catch (e) { ok('portal input checks', false, e?.message); }
     // ydotool
     try {
       const { execSync } = await import('node:child_process');

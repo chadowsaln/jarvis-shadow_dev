@@ -8,7 +8,7 @@
 ## Implementation status (as of 2026-11-15)
 
 - **Rebranding/config (partial):** Tauri app identity updated to `JARVIS V2` / `0.1.0` / `ai.jarvis.v2` (`tauri.conf.json`, `Cargo.toml` `jarvis_v2`, sidecar `jarvis-v2-sidekick`, tray/autostart naming adjusted in places). Legacy `Roamies`/`Little Boy`/`ROAMIES_*` names remain across many UI strings, paths, env vars, and docs.
-- **V2.1 Linux Computer Control (working, with one host dependency):** the agent core is **on by default at `trusted`**, every tool declares permission metadata, and the full tool surface is offered through the router/executor (see `docs/desktop-operator-batch1.md`). Batch 2 added `sidecar/desktop/` — a typed adapter layer (input, windows, apps, clipboard, real verification) with new tools (`desktop_*`, `window_control`, `app_quit`, `monitors`, `clipboard_*`) and matching hands-helper commands (see `docs/desktop-operator-batch2.md`). Batch 3 made the Linux path real (see `docs/desktop-operator-batch3.md`): the AT-SPI adapter now uses the documented D-Bus API (properties, `GetChildren`, `Application` pid, `Component`, `Action`, `Text`, decoded states), input picks `xdotool` or `ydotool` from a real socket round-trip and reports the exact remediation when neither is usable, `linux_capture_screen` returns the actual picture, `linux_ocr` runs tesseract (binary or `tesseract.js`) instead of a stub, and `verification.mjs` implements real conditions and fails closed. Global input still needs `ydotoold` (or `xdotool` for XWayland) on the host; that is a runtime dependency, not missing code. Acceptance for end-to-end click/type on a real desktop is tracked as Batch 9 in `docs/desktop-operator-audit.md`.
+- **V2.1 Linux Computer Control (working, with one host dependency):** the agent core is **on by default at `trusted`**, every tool declares permission metadata, and the full tool surface is offered through the router/executor (see `docs/desktop-operator-batch1.md`). Batch 2 added `sidecar/desktop/` — a typed adapter layer (input, windows, apps, clipboard, real verification) with new tools (`desktop_*`, `window_control`, `app_quit`, `monitors`, `clipboard_*`) and matching hands-helper commands (see `docs/desktop-operator-batch2.md`). Batch 3 made the Linux path real (see `docs/desktop-operator-batch3.md`): the AT-SPI adapter now uses the documented D-Bus API (properties, `GetChildren`, `Application` pid, `Component`, `Action`, `Text`, decoded states), input picks `xdotool` or `ydotool` from a real socket round-trip and reports the exact remediation when neither is usable, `linux_capture_screen` returns the actual picture, `linux_ocr` runs tesseract (binary or `tesseract.js`) instead of a stub, and `verification.mjs` implements real conditions and fails closed. The portal input rework (see `docs/desktop-operator-portal-input.md`) made Linux input the Wayland path it was designed to be: a helper (`src-tauri/input-linux`, `roamies-input`) opens `org.freedesktop.portal.RemoteDesktop` once (the consent answer is kept as a restore token) and injects pointer, buttons, keys and text through `ConnectToEIS`/libei, with the portal's own `Notify*` calls for a portal older than `ConnectToEIS`. `input-simulation.mjs` now orders the backends portal → `ydotool` → `xdotool` on Wayland (`xdotool` → portal → `ydotool` on X11), and `linux_set_text` writes a field through `org.a11y.atspi.EditableText` so text needs no keyboard at all. `ydotoold` is only the fallback for typing on a compositor without `ei_text`. Acceptance for end-to-end click/type on a real desktop is tracked as Batch 9 in `docs/desktop-operator-audit.md`.
 - **V2.2–V2.6:** not implemented.
 - **Packaging/build:** Linux `.deb`/`.rpm` builds succeeded in this environment (with AppImage packaging failing via `linuxdeploy` in attempts); bundled Node runtime was removed from app external bins to avoid `/usr/bin/node` conflicts (system Node.js >=22 required). Updater artifact signing requires `TAURI_SIGNING_PRIVATE_KEY`. This document remains the target architecture/spec; sections below should be read against the actual implementation state.
 
@@ -313,14 +313,16 @@ interface InputSimulator {
   waitForIdle(timeoutMs?: number): Promise<void>;
 }
 
-// Implementation: ydotool (requires uinput, works on Wayland)
-// Fallback: xdotool (X11 only), xte (X11 only)
+// Implementation: the XDG portal's RemoteDesktop + ConnectToEIS (libei), through the `roamies-input` helper
+// Fallback: the portal's own Notify* calls (portal without ConnectToEIS), then ydotool (uinput), then xdotool (X11)
 ```
 
 **Permission Model**:
-- `ydotool` requires `uinput` kernel module and user in `input` group
-- Alternative: `libei` (Emulated Input) — Wayland protocol, no root, compositors: GNOME (mutter), KDE (kwin), wlroots
-- **Decision**: `libei` preferred where available; `ydotool` fallback. Document setup in README.
+- One desktop consent dialog per user (`org.freedesktop.portal.RemoteDesktop`), remembered through a restore
+  token in the data directory (`roamies-input clear-token` forgets it); no root, no `uinput`, no daemon
+- `ydotool` is the fallback and still requires the `uinput` module, the user in `input` group and `ydotoold`
+- **Decision (implemented, `docs/desktop-operator-portal-input.md`)**: libei through the portal first;
+  `ydotool` fallback; `xdotool` for X11.
 
 #### 5.1.4 Wayland Restrictions & Mitigations
 
@@ -330,7 +332,7 @@ interface InputSimulator {
 | Pointer tracking over other apps | ❌ Blocked | AT-SPI2 tree walk (app must support accessibility) |
 | Window management (move/resize/minimize) | ⚠️ Limited | XDG Foreign Toplevel (partial), D-Bus `org.gnome.Shell` |
 | Screen capture | ✅ Via Portal | XDG Desktop Portal `org.freedesktop.portal.ScreenCast` |
-| Input simulation | ✅ Via libei/ydotool | Requires compositor support / uinput |
+| Input simulation | ✅ Via libei/ydotool | Portal `RemoteDesktop` + `ConnectToEIS` (one consent, no root); `ydotool` where the compositor has no `ei_text` or no `ConnectToEIS` |
 | OCR | ✅ | Tesseract on captured screenshot |
 
 ---
@@ -1140,7 +1142,7 @@ interface MemoryContextAdapter {
 |------|-------------|------------|
 | 2.1.1 | AT-SPI2 adapter: tree walk, element find, actions | Can list apps, find button by name/role, click it |
 | 2.1.2 | D-Bus integration: app list, window list | `hands_locate` equivalent for Linux |
-| 2.1.3 | Input simulation: ydotool/libei mouse/keyboard | Type in gedit, click button in Firefox |
+| 2.1.3 | Input simulation: XDG portal + libei (mouse, keyboard, text); ydotool fallback | Click and type in a real app on Wayland with no root and no `ydotoold` (live: portal session, pointer motion; typing via `ei_text` only where the compositor has it) |
 | 2.1.4 | XDG Portal screenshot capture | Capture screen via Portal, returns PNG |
 | 2.1.5 | OCR integration (Tesseract) | Extract text from screenshot |
 | 2.1.6 | Verification for desktop actions | Click → verify element state changed |
@@ -1306,7 +1308,7 @@ interface MemoryContextAdapter {
 
 | # | Question | Options | Recommendation |
 |---|----------|---------|----------------|
-| 1 | Input simulation: `ydotool` (uinput) vs `libei` (Wayland protocol) | `ydotool` works everywhere but needs `input` group; `libei` needs compositor support | **Both**: `libei` first, `ydotool` fallback. Document setup. |
+| 1 | Input simulation: `ydotool` (uinput) vs `libei` (Wayland protocol) | `ydotool` works everywhere but needs `input` group; `libei` needs compositor support | **Both, decided and shipped** (`docs/desktop-operator-portal-input.md`): libei through the portal's `RemoteDesktop` first, `ydotool` fallback. |
 | 2 | Browser profile isolation: per-task vs persistent default | Per-task = cleaner, no cross-contamination; Persistent = auth survives | **Hybrid**: Persistent "default" profile + ephemeral per-task profiles |
 | 3 | Vector embeddings: local (ONNX) vs remote (OpenRouter) | Local = free, private, needs RAM; Remote = paid, simple, no RAM | **Remote only** (OpenRouter `text-embedding-3-small`), opt-in |
 | 4 | Skill recording: overlay-driven vs sidecar-driven | Overlay captures user clicks; Sidecar captures tool calls | **Both**: Overlay for user actions, Sidecar for tool calls, merge at stop |

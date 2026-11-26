@@ -20,6 +20,7 @@ const APPLICATION_IFACE = 'org.a11y.atspi.Application';
 const COMPONENT_IFACE = 'org.a11y.atspi.Component';
 const ACTION_IFACE = 'org.a11y.atspi.Action';
 const TEXT_IFACE = 'org.a11y.atspi.Text';
+const EDITABLE_TEXT_IFACE = 'org.a11y.atspi.EditableText';
 const PROPERTIES_IFACE = 'org.freedesktop.DBus.Properties';
 const REGISTRY_BUS = 'org.a11y.atspi.Registry';
 const REGISTRY_PATH = '/org/a11y/atspi/accessible/root';
@@ -306,6 +307,35 @@ class ATSPIDriver {
     } catch {
       return 0;
     }
+  }
+
+  /** Replace a text field's value through its accessibility interface: no keystrokes, so it
+   * works on Wayland, where typing into another app needs the desktop portal. Returns how it
+   * did it, or throws when the control is not editable that way. */
+  async setText(element, text) {
+    const busName = element?.busName;
+    const path = element?.path;
+    if (!busName || !path) throw new Error('setText needs an element from findElement');
+    const value = String(text ?? '');
+    try {
+      const editable = await this._iface(busName, path, EDITABLE_TEXT_IFACE);
+      if (typeof editable?.SetTextContents === 'function') {
+        await editable.SetTextContents(value);
+        return { ok: true, how: 'SetTextContents' };
+      }
+    } catch { /* not editable that way; try Text below */ }
+    try {
+      const textIface = await this._iface(busName, path, TEXT_IFACE);
+      const count = Number(unwrap(await this._prop(busName, path, TEXT_IFACE, 'CharacterCount')) ?? 0);
+      if (count > 0 && typeof textIface?.DeleteText === 'function') await textIface.DeleteText(0, count);
+      if (typeof textIface?.InsertText === 'function') {
+        await textIface.InsertText(0, value, [...value].length);
+        return { ok: true, how: 'InsertText' };
+      }
+    } catch (e) {
+      throw new Error(`this control does not accept text through accessibility (${e?.message || e})`);
+    }
+    throw new Error('this control does not accept text through accessibility');
   }
 
   async getApplicationList() {

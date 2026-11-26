@@ -305,18 +305,41 @@ function isWayland() {
   return !!process.env.WAYLAND_DISPLAY || /wayland/i.test(process.env.XDG_SESSION_TYPE || '');
 }
 
-/** Pick the backend that can actually send input here. Ydotool is preferred on Wayland; xdotool on X11. */
+/** The desktop portal's remote-control path (libei), when this machine has it. Wayland's own
+ * answer: no root, no uinput, no daemon, and one consent dialog instead of a system setup.
+ * Imported lazily so X11 sessions without a portal never pay for it. */
+async function portalBackend() {
+  try {
+    const { LibeiBackend } = await import('./libei-backend.mjs');
+    const backend = new LibeiBackend();
+    const probe = await backend.probe();
+    return probe.ok ? backend : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Which backends to try, best first, as a pure function so the choice is testable without a
+ * desktop. Wayland has no XTest, so the portal leads there; on X11 xdotool is cheapest. */
+export function backendOrder({ wayland, portal, ydotool, xdotool }) {
+  const order = wayland ? [portal && 'portal', ydotool && 'ydotool', xdotool && 'xdotool'] : [xdotool && 'xdotool', portal && 'portal', ydotool && 'ydotool'];
+  return order.filter(Boolean);
+}
+
+/** Pick the backend that can actually send input here. */
 export async function selectInputBackend() {
   if (!IS_LINUX) return null;
   const yd = new YdotoolBackend();
   const xd = new XdotoolBackend();
-  if (isWayland()) {
-    if ((await yd.probe()).ok) return yd;
-    if ((await xd.probe()).ok) return xd;
-    return yd;
-  }
-  if ((await xd.probe()).ok) return xd;
-  if ((await yd.probe()).ok) return yd;
+  const portal = await portalBackend();
+  const order = backendOrder({
+    wayland: isWayland(),
+    portal: !!portal,
+    ydotool: (await yd.probe()).ok,
+    xdotool: (await xd.probe()).ok,
+  });
+  if (order[0] === 'portal') return portal;
+  if (order[0] === 'xdotool') return xd;
   return yd;
 }
 

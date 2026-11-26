@@ -14,10 +14,12 @@
 
 إعادة التسمية (rebranding) والتنفيذ تسيران وفق المسودة، والمشروع ليس مكتملاً بعد:
 
-- **V2.1 — Linux Computer Control (مسودة/جزئي):** وحدة `showcase/tauri/sidecar/computer-control/` وأدوات Linux في `showcase/tauri/sidecar/tools.mjs` (`linux_list_apps`, `linux_list_windows`, `linux_find_element`, `linux_click_element`, `linux_type_text`, `linux_press_key`, `linux_move_mouse`, `linux_capture_screen`, `linux_ocr`, `linux_focus_window`). التكامل والتحقق الطرف-إلى-طرف (AT-SPI2، ydotool/libei/uinput، XDG Portal، Tesseract) ما زالا يتطلبان إعداداً واختباراً على النظام.
+- **V2.1 — Linux Computer Control (يعمل؛ إدخال عبر XDG Portal):** وحدة `showcase/tauri/sidecar/computer-control/` وأدوات Linux في `showcase/tauri/sidecar/tools.mjs` (`linux_list_apps`, `linux_list_windows`, `linux_find_element`, `linux_click_element`, `linux_type_text`, `linux_set_text`, `linux_press_key`, `linux_move_mouse`, `linux_capture_screen`, `linux_ocr`, `linux_focus_window`).
+  - **الإدخال على Wayland بلا root وبلا `ydotoold`:** المساعد `showcase/tauri/src-tauri/input-linux` (الملف `roamies-input`) يفتح جلسة `org.freedesktop.portal.RemoteDesktop` مرة واحدة (موافقة المستخدم تُحفظ عبر restore token)، ثم يمرّر النقر/الحركة/التمرير/المفاتيح عبر `ConnectToEIS` وlibei. ترتيب الطبقات في `sidecar/computer-control/input-simulation.mjs`: portal (libei) على Wayland، ثم `ydotool`، ثم `xdotool`؛ وعلى X11 يبدأ بـ `xdotool`. ما لا يوفّره الـ compositor (`ei_text` عند GNOME الحالي) يقع على `ydotool` للكتابة، أو `linux_set_text` الذي يكتب في الحقل عبر `org.a11y.atspi.EditableText` بلا لوحة مفاتيح.
+  - التفاصيل ومعايير القبول في [`docs/desktop-operator-portal-input.md`](docs/desktop-operator-portal-input.md).
 - **V2.2–V2.6 (غير منفّذة):** Browser Intelligence (Playwright)، حلقة Execute→Observe→Verify→Recover المدمجة والتدقيق، نظام المهارات (تسجيل/إعادة تشغيل)، الذاكرة الدلالية (SQLite/FTS/ترحيل)، والمساعدة الاستباقية.
 
-**هوية الحزم/التطبيق (قيد التحديث):** `productName` JARVIS V2، `identifier` `ai.jarvis.v2`، الإصدار `0.1.1` (Tauri)، الحزمة Rust `jarvis_v2`، وsidecar `jarvis-v2-sidekick`. قد تبقى أسماء/مسارات/نصوص قديمة في أجزاء من الواجهة والوثائق الأصلية حتى يكتمل الانتقال.
+**هوية الحزم/التطبيق (قيد التحديث):** `productName` JARVIS V2، `identifier` `ai.jarvis.v2`، الإصدار `0.1.20` (Tauri)، الحزمة Rust `jarvis_v2`، وsidecar `jarvis-v2-sidekick`. قد تبقى أسماء/مسارات/نصوص قديمة في أجزاء من الواجهة والوثائق الأصلية حتى يكتمل الانتقال.
 
 ## البنية
 

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createATSPIDriver } from '../computer-control/atspi-adapter.mjs';
-import { createInputSimulator, selectInputBackend, evdevCode, ydotoolKeyArgs } from '../computer-control/input-simulation.mjs';
+import { createInputSimulator, selectInputBackend, backendOrder, evdevCode, ydotoolKeyArgs } from '../computer-control/input-simulation.mjs';
 import { createOCREngine } from '../computer-control/ocr-adapter.mjs';
 import { createDesktopVerification } from '../computer-control/verification.mjs';
 import { detectCapabilities } from '../computer-control/index.mjs';
@@ -25,6 +25,14 @@ if (!probe.ok) {
   assert.ok(probe.reason, 'an unavailable backend explains why');
   assert.ok(probe.remediation, 'and what to do about it');
 }
+// The order is the policy: on Wayland the portal (libei) leads because XTest does not exist there,
+// then ydotool (needs ydotoold), then XWayland's xdotool. On X11 xdotool is cheapest.
+assert.deepEqual(backendOrder({ wayland: true, portal: true, ydotool: true, xdotool: true }), ['portal', 'ydotool', 'xdotool']);
+assert.deepEqual(backendOrder({ wayland: true, portal: false, ydotool: true, xdotool: true }), ['ydotool', 'xdotool'], 'without a portal, Wayland still prefers ydotool');
+assert.deepEqual(backendOrder({ wayland: false, portal: true, ydotool: true, xdotool: true }), ['xdotool', 'portal', 'ydotool']);
+assert.deepEqual(backendOrder({ wayland: true, portal: true, ydotool: false, xdotool: true }), ['portal', 'xdotool'], 'the portal needs neither a daemon nor XWayland');
+assert.deepEqual(backendOrder({ wayland: true }), [], 'nothing available is an empty order, never a pretend backend');
+
 const selected = await selectInputBackend();
 assert.ok(selected && typeof selected.probe === 'function', 'a backend is selected');
 const selectedProbe = await selected.probe();

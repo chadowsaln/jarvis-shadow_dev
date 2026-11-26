@@ -25,7 +25,10 @@ case "$TRIPLE" in
   *-linux-*)
     mkdir -p src-tauri/binaries
     cargo build --release --locked --manifest-path src-tauri/voice-win/Cargo.toml --target "$TRIPLE"
-    cp "src-tauri/voice-win/target/$TRIPLE/release/roamies-voice" "src-tauri/binaries/roamies-voice-$TRIPLE" ;;
+    cp "src-tauri/voice-win/target/$TRIPLE/release/roamies-voice" "src-tauri/binaries/roamies-voice-$TRIPLE"
+    # Input through the desktop portal (libei): the Wayland path with no root, no uinput and no daemon.
+    cargo build --release --locked --manifest-path src-tauri/input-linux/Cargo.toml --target "$TRIPLE"
+    cp "src-tauri/input-linux/target/$TRIPLE/release/roamies-input" "src-tauri/binaries/roamies-input-$TRIPLE" ;;
 esac
 cd src-tauri
 # macOS signing: APPLE_SIGNING_IDENTITY if set, else the first Developer ID Application certificate in

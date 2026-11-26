@@ -396,6 +396,10 @@ tests; coordinate/monitor math tests; helper `--self-test` additions for the new
 
 > **Done (2026-11-20)** — see [desktop-operator-batch3.md](desktop-operator-batch3.md). The AT-SPI
 > adapter, input probes, capture, OCR and verification are real; capabilities report the truth.
+> **Follow-up (2026-11-26):** item 2's portal path is implemented — `RemoteDesktop` + `ConnectToEIS`
+> (libei) through the `roamies-input` helper, so Wayland input needs no root and no `ydotoold`, and
+> `linux_set_text` writes a field through AT-SPI `EditableText`. See
+> [desktop-operator-portal-input.md](desktop-operator-portal-input.md).
 
 Fix §5.3 properly, on X11 and Wayland:
 

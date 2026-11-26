@@ -388,7 +388,7 @@ const press = (request, decision, now = Date.now()) => answerFor(request, decisi
   const memoryWrites = ['remember_commitment', 'update_commitment', 'forget_fact'];
   const shell = ['run_command', 'run_diagnostic', 'list_commitments'];
   const nativeHands = process.platform === 'darwin' || process.env.ROAMIES_HANDS ? ['act_in_app', 'list_windows', 'read_window'] : [];
-  const linuxNative = process.platform === 'linux' ? ['linux_capture_screen', 'linux_click_element', 'linux_find_element', 'linux_focus_window', 'linux_list_apps', 'linux_list_windows', 'linux_move_mouse', 'linux_ocr', 'linux_press_key', 'linux_type_text'] : [];
+  const linuxNative = process.platform === 'linux' ? ['linux_capture_screen', 'linux_click_element', 'linux_find_element', 'linux_focus_window', 'linux_list_apps', 'linux_list_windows', 'linux_move_mouse', 'linux_ocr', 'linux_press_key', 'linux_set_text', 'linux_type_text'] : [];
   // Batch 2-5: the desktop adapter tools. Reading windows/monitors/clipboard observes; clicking, typing, dragging,
   // scrolling and window control are actions within the default grant; quitting an app, deleting files, killing processes
   // or running skills are sensitive and ask.

@@ -19,7 +19,7 @@ const nodes = new Map();
 const key = (bus, path) => `${bus}|${path}`;
 const calls = [];
 
-function addNode(bus, path, { props = {}, children = [], role = '', states = [], actions = null, extents = null, text = null }) {
+function addNode(bus, path, { props = {}, children = [], role = '', states = [], actions = null, extents = null, text = null, editable = false }) {
   const interfaces = {
     'org.freedesktop.DBus.Properties': {
       Get: async (iface, name) => {
@@ -51,6 +51,11 @@ function addNode(bus, path, { props = {}, children = [], role = '', states = [],
   }
   if (text !== null) {
     interfaces['org.a11y.atspi.Text'] = { GetText: async () => text };
+  }
+  if (editable) {
+    interfaces['org.a11y.atspi.EditableText'] = {
+      SetTextContents: async (value) => { calls.push({ bus, path, method: 'SetTextContents', value }); return true; },
+    };
   }
   nodes.set(key(bus, path), { interfaces });
 }
@@ -84,6 +89,7 @@ addNode(appBus, entryPath, {
   states: [VISIBLE, ENABLED],
   extents: [100, 150, 200, 30],
   text: 'notes.txt',
+  editable: true,
 });
 
 const bus = {
@@ -156,6 +162,13 @@ assert.equal(byAttrArray[0].name, 'Save');
 const action = await d.doAction(button, 'click');
 assert.equal(action.index, 0);
 assert.ok(calls.some((c) => c.method === 'DoAction' && c.path === buttonPath && c.i === 0));
+
+// setText writes through EditableText (no keystrokes, so it works on Wayland) and refuses a control
+// that has no such interface.
+const written = await d.setText(entry, 'renamed.txt');
+assert.deepEqual(written, { ok: true, how: 'SetTextContents' });
+assert.ok(calls.some((c) => c.method === 'SetTextContents' && c.path === entryPath && c.value === 'renamed.txt'));
+await assert.rejects(() => d.setText(button, 'x'), /does not accept text through accessibility/);
 
 // GrabFocus goes through Component.
 const focused = await d.setFocus(winPath, appBus);
