@@ -182,10 +182,12 @@ jobs:
         run: |
           $data = Join-Path $env:RUNNER_TEMP 'roamies-data'
           $env:ROAMIES_DATA_DIR = $data
-          $p = Start-Process -FilePath src-tauri/target/debug/jarvis_v2.exe -PassThru
+          $out = Join-Path $env:RUNNER_TEMP 'app.out.log'
+          $err = Join-Path $env:RUNNER_TEMP 'app.err.log'
+          $p = Start-Process -FilePath src-tauri/target/debug/jarvis_v2.exe -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
           $logs = Join-Path $data 'sidekick/logs'
           $started = $false
-          for ($i = 0; $i -lt 60; $i++) {
+          for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep -Seconds 1
             if ($p.HasExited) { break }
             if (Get-ChildItem $logs -Filter *.log -ErrorAction SilentlyContinue | Select-String -Pattern ' start ' -Quiet) { $started = $true; break }
@@ -193,7 +195,11 @@ jobs:
           $alive = -not $p.HasExited
           if ($alive) { taskkill /PID $p.Id /T /F | Out-Null }
           if (-not ($started -and $alive)) {
-            Get-Content (Join-Path $env:USERPROFILE '.gg/sidekick.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
+            "--- app stdout"; Get-Content $out -ErrorAction SilentlyContinue | Select-Object -Last 40
+            "--- app stderr"; Get-Content $err -ErrorAction SilentlyContinue | Select-Object -Last 40
+            # ROAMIES_DATA_DIR moves the sidecar's structured logs; its stderr (and a failed spawn) go to ~/.gg.
+            "--- sidecar logs"; Get-ChildItem $logs -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_ | Select-Object -Last 40 }
+            "--- sidecar stderr"; Get-Content (Join-Path $env:USERPROFILE '.gg/sidekick.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
             throw "Roamies didn't start its sidecar (started: $started, still running: $alive)"
           }
           "Roamies started its sidecar (pid $($p.Id))"
