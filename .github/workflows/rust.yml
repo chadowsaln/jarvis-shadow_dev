@@ -15,7 +15,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: showcase/tauri/sidecar/package-lock.json
     - name: Install Linux build dependencies
       run: |
         sudo apt-get update
@@ -31,6 +36,12 @@ jobs:
         done
         cp "showcase/tauri/src-tauri/voice-win/target/$TRIPLE/release/roamies-voice" "showcase/tauri/src-tauri/binaries/roamies-voice-$TRIPLE"
         cp "showcase/tauri/src-tauri/input-linux/target/$TRIPLE/release/roamies-input" "showcase/tauri/src-tauri/binaries/roamies-input-$TRIPLE"
+    # tauri.conf.json also lists the bundled sidecar as a resource, so it has to exist as well.
+    - name: Bundle the sidecar
+      run: |
+        npm ci
+        ./bundle.sh
+      working-directory: showcase/tauri/sidecar
     - name: Build
       run: cargo check --verbose --manifest-path showcase/tauri/src-tauri/Cargo.toml
     - name: Run tests
