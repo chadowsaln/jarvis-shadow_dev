@@ -25,7 +25,16 @@ There is no linter configured yet.
 
 **Packaging notes (current):** Linux `.deb`/`.rpm` bundles can be produced (JARVIS V2 0.1.0 naming with current config); AppImage packaging may fail in some environments (`linuxdeploy`/tooling). Bundled Node runtime was removed from Linux/Windows/macOS external bins to avoid `/usr/bin/node` conflicts; a system Node.js (>=22) is required for the sidecar. Creating updater artifacts requires `TAURI_SIGNING_PRIVATE_KEY`.
 
-Releases: Releases and updates are built locally on this machine (`cd showcase/tauri && ./build.sh`) and uploaded directly (AppImage/bundle + `.sig` + `latest.json`) to GitHub Releases / the update feed so the app updates immediately without waiting for GitHub Actions. Pushing a `v*` tag tracks the version in git. Keep `plugins.updater.pubkey` in `tauri.conf.json` matching the signing key.
+Releases: Releases and updates are built locally on this machine (`cd showcase/tauri && ./publish-local.sh` builds and uploads,
+`./build.sh` only builds) and uploaded directly (AppImage/bundle + `.sig` + `latest.json`) to GitHub Releases / the update
+feed so the app updates immediately without waiting for GitHub Actions. Pushing a `v*` tag tracks the version in git. Keep
+`plugins.updater.pubkey` in `tauri.conf.json` matching the signing key.
+The signing key lives in `~/.gg/tauri-signing.key` with its password in `~/.gg/tauri-signing.pass`; it must be an
+**encrypted** minisign key, because `tauri-cli` refuses a plain one ("Key is not encrypted"). `./publish-local.sh`
+base64s that file for `TAURI_SIGNING_PRIVATE_KEY` itself, signs a throwaway file first to fail before a long build, and
+uploads to a **draft** release, publishing it only once `latest.json` is there (the update-feed workflow fires on
+publish). The `minisign.key` in the repo root is the same key without encryption and with a damaged checksum: keep it
+as a backup, never as the key to publish with.
 
 ## Rules
 

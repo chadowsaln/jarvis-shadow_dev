@@ -25,6 +25,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+          # A release is published once its AppImage, signature and latest.json are all on it, but a publish by
+          # hand (or a rerun) can still race this job: wait for latest.json instead of failing on the first look.
+          for _ in $(seq 1 18); do
+            if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx latest.json; then break; fi
+            sleep 10
+          done
           mkdir feed && cd feed
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
           # Only a feed the updater can read goes out.
