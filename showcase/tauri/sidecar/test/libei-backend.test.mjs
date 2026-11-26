@@ -133,7 +133,7 @@ try {
     await assert.rejects(() => backend.move(1, 2), /input helper is not installed/);
   }
 
-  // --- the helper search uses ROAMIES_INPUT first, then PATH.
+  // --- the helper search uses ROAMIES_INPUT first, then PATH, and never a file it cannot run.
   {
     assert.equal(findInputHelper({ ROAMIES_INPUT: helper, PATH: '' }), helper);
     const dir = path.join(tmp, 'bin');
@@ -144,7 +144,11 @@ try {
     const found = findInputHelper({ PATH: dir });
     assert.ok(found, 'a helper is found');
     await fs.access(found, fs.constants.X_OK);
-    assert.ok(found === onPath || found.includes('input-linux/target'), 'only an executable helper is chosen');
+    // A file that cannot be run is never the answer, even when ROAMIES_INPUT names it.
+    const plain = path.join(dir, 'not-executable');
+    await fs.writeFile(plain, '#!/bin/sh\n');
+    await fs.chmod(plain, 0o644);
+    assert.notEqual(findInputHelper({ ROAMIES_INPUT: plain, PATH: dir }), plain);
   }
 } finally {
   process.env = oldEnv;
