@@ -25,24 +25,14 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
-    # tauri.conf.json lists the voice and Linux input helpers as external binaries, so the shell's build
-    # script refuses to run until they exist. Build them here the way build.sh names them.
-    - name: Build the helpers the shell bundles
-      run: |
-        TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
-        mkdir -p showcase/tauri/src-tauri/binaries
-        for crate in voice-win input-linux; do
-          cargo build --release --locked --manifest-path "showcase/tauri/src-tauri/$crate/Cargo.toml" --target "$TRIPLE"
-        done
-        cp "showcase/tauri/src-tauri/voice-win/target/$TRIPLE/release/roamies-voice" "showcase/tauri/src-tauri/binaries/roamies-voice-$TRIPLE"
-        cp "showcase/tauri/src-tauri/input-linux/target/$TRIPLE/release/roamies-input" "showcase/tauri/src-tauri/binaries/roamies-input-$TRIPLE"
-    # tauri.conf.json also lists the bundled sidecar as a resource, so it has to exist as well.
-    - name: Bundle the sidecar
-      run: |
-        npm ci
-        ./bundle.sh
+    - name: Install sidecar dependencies
+      run: npm ci
       working-directory: showcase/tauri/sidecar
+    # One entry point, the same one CI and releases use: build.sh syncs the web files into dist/ (the shell's
+    # frontendDist), bundles the sidecar, builds the voice and Linux input helpers the app bundles and then
+    # compiles the debug shell. Assembling any of those here separately drifts from it.
     - name: Build
-      run: cargo check --verbose --manifest-path showcase/tauri/src-tauri/Cargo.toml
+      run: ./build.sh dev
+      working-directory: showcase/tauri
     - name: Run tests
       run: cargo test --verbose --manifest-path showcase/tauri/src-tauri/voice-win/Cargo.toml
